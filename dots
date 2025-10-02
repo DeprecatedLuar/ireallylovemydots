@@ -15,12 +15,9 @@ TRASH="$HOME/.local/share/Trash/files"
 
 
 
-cmd_snatch() {
+# Snatch a single config (internal helper)
+snatch_single() {
     local raw_config_name="$1"
-    [[ -z "$raw_config_name" ]] && error "Usage: dots snatch <config-name>"
-
-    check_dotfiles_repo
-    ensure_dotfiles_structure
 
     # Find in filesystem
     local result=$(find_in_filesystem "$raw_config_name")
@@ -58,6 +55,18 @@ cmd_snatch() {
     git commit -m "snatch: add $found_name" >/dev/null 2>&1
 
     info "snatched $found_name"
+}
+
+cmd_snatch() {
+    [[ -z "$1" ]] && error "Usage: dots snatch <config-name> [<config-name>...]"
+
+    check_dotfiles_repo
+    ensure_dotfiles_structure
+
+    # Batch mode: snatch multiple configs
+    for name in "$@"; do
+        snatch_single "$name"
+    done
 }
 
 # Link a single config (internal helper)
@@ -436,6 +445,12 @@ cmd_sync() {
             warn "You have $unpushed unpushed commit(s). Run 'dots push' to push them."
         fi
     fi
+
+    # Silent check for dots tool updates
+    if check_for_updates 2>/dev/null; then
+        echo ""
+        info "A new version of dots is available! Run 'dots update' to upgrade."
+    fi
 }
 
 cmd_push() {
@@ -449,6 +464,12 @@ cmd_push() {
     fi
 
     git push
+
+    # Silent check for dots tool updates
+    if check_for_updates 2>/dev/null; then
+        echo ""
+        info "A new version of dots is available! Run 'dots update' to upgrade."
+    fi
 }
 
 cmd_setup() {
@@ -515,6 +536,39 @@ cmd_setup() {
     fi
 }
 
+cmd_update() {
+    local install_command='curl -sSL https://raw.githubusercontent.com/DeprecatedLuar/ireallylovemydots/main/install.sh | bash'
+
+    info "Checking for updates..."
+
+    if check_for_updates; then
+        echo ""
+        info "Updates available!"
+        echo -n "Do you want to download the latest version? (Y/n): "
+        read -r choice
+
+        case "${choice,,}" in
+            n|no)
+                echo ""
+                info "To update manually, run:"
+                echo "  $install_command"
+                ;;
+            *)
+                echo ""
+                info "Downloading and installing latest version..."
+                bash -c "$install_command"
+                ;;
+        esac
+    elif [[ $? -eq 1 ]]; then
+        success "You're already up to date!"
+    else
+        warn "Could not check for updates (network issue?)"
+        echo ""
+        info "To update manually, run:"
+        echo "  $install_command"
+    fi
+}
+
 cmd_status() {
     check_dotfiles_repo
 
@@ -561,21 +615,23 @@ dots - Dotfiles Manager
 
 Usage:
   dots setup <username/repo>       Connect GitHub repo (creates if needed)
-  dots snatch <config>             Adopt existing config into dots
+  dots snatch <config> [configs]   Adopt existing config(s) into dots
   dots link <config> [configs]     Create symlink(s) from dots
   dots link -A|--all               Link all configs from dots
   dots unlink <config> [configs]   Remove symlink(s) to dots (strict)
   dots unlink -A|--all             Remove all symlinks to dots
   dots eject <config> [configs]    Remove config(s) from dots, restore to system
-  dots rm <config>                 Remove config/link (moves to trash)
+  dots rm <config> [configs]       Remove config(s)/link(s) (moves to trash)
   dots sync|pull                   Pull latest and check for unpushed commits
   dots push                        Push commits to remote
+  dots update                      Update dots tool to latest version
   dots status                      Show what's linked and what's not
   dots help                        Show this help
 
 Examples:
   dots setup myuser/dotfiles       Connect to GitHub repo (auto-creates if needed)
   dots snatch nvim                 Move ~/.config/nvim to dots, create symlink
+  dots snatch nvim kitty ranger    Snatch multiple configs at once
   dots snatch .gitconfig           Move ~/.gitconfig to dots, create symlink
   dots link alacritty              Link ~/.config/alacritty from dots
   dots link kitty ranger micro     Link multiple configs at once
@@ -585,6 +641,7 @@ Examples:
   dots eject nvim                  Move config out of dots, untrack from git
   dots eject kitty ranger micro    Eject multiple configs at once
   dots rm nvim                     Remove ~/.config/nvim (move to trash)
+  dots update                      Check for and install updates to dots tool
 
 Repository: $DOTFILES
 EOF
@@ -714,18 +771,61 @@ find_in_dotfiles() {
     echo "none"
 }
 
+# Check if updates are available for dots tool itself
+# Returns: 0 if updates available, 1 if up to date, 2 if check failed
+check_for_updates() {
+    local cache_file="$HOME/.cache/dots_update_check"
+    local cache_duration=86400  # 24 hours
+    local bin_file="$HOME/.local/bin/dots"
+
+    # Create cache dir if needed
+    mkdir -p "$(dirname "$cache_file")" 2>/dev/null
+
+    # Check cache freshness
+    if [[ -f "$cache_file" ]]; then
+        local cache_age=$(($(date +%s) - $(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null || echo 0)))
+        if [[ $cache_age -lt $cache_duration ]]; then
+            # Return cached result
+            [[ "$(cat "$cache_file")" == "updates_available" ]] && return 0 || return 1
+        fi
+    fi
+
+    # Fetch latest commit hash from GitHub (silent, non-blocking)
+    local remote_hash=$(curl -sS --max-time 3 "https://api.github.com/repos/DeprecatedLuar/ireallylovemydots/commits/main" 2>/dev/null | grep -m1 '"sha"' | cut -d'"' -f4 | head -c 7)
+
+    # If fetch failed, return error (silent)
+    [[ -z "$remote_hash" ]] && return 2
+
+    # Get local install timestamp
+    local local_timestamp=$(stat -c %Y "$bin_file" 2>/dev/null || stat -f %m "$bin_file" 2>/dev/null || echo 0)
+
+    # Fetch commit date from GitHub for the latest commit
+    local remote_timestamp=$(curl -sS --max-time 3 "https://api.github.com/repos/DeprecatedLuar/ireallylovemydots/commits/main" 2>/dev/null | grep '"date"' | head -1 | cut -d'"' -f4)
+    local remote_epoch=$(date -d "$remote_timestamp" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$remote_timestamp" +%s 2>/dev/null || echo 0)
+
+    # Compare timestamps
+    if [[ $remote_epoch -gt $local_timestamp ]]; then
+        echo "updates_available" > "$cache_file"
+        return 0
+    else
+        echo "up_to_date" > "$cache_file"
+        return 1
+    fi
+}
+
 
 # ====[ MAIN ]=============================================================
 
 case "$1" in
     setup) cmd_setup "$2" ;;
-    snatch) cmd_snatch "$2" ;;
+    snatch) shift; cmd_snatch "$@" ;;
     link) shift; cmd_link "$@" ;;
     unlink) shift; cmd_unlink "$@" ;;
     eject) shift; cmd_eject "$@" ;;
     rm) shift; cmd_rm "$@" ;;
     sync|pull) cmd_sync ;;
     push) cmd_push ;;
+    update) cmd_update ;;
     status) cmd_status ;;
     help|--help|-h|"") cmd_help ;;
     *) error "Thats not a real command: $1\nTry 'dots help' for usage" ;;
