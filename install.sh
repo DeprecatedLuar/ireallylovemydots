@@ -35,6 +35,10 @@ if [[ -f "$SCRIPT_DIR/dots" ]]; then
     mkdir -p "$BIN_DIR"
     mkdir -p "$COMPLETION_DIR"
 
+    # Remove existing files/symlinks if they exist
+    [[ -e "$BIN_DIR/dots" ]] || [[ -L "$BIN_DIR/dots" ]] && rm -f "$BIN_DIR/dots"
+    [[ -e "$COMPLETION_DIR/dots" ]] || [[ -L "$COMPLETION_DIR/dots" ]] && rm -f "$COMPLETION_DIR/dots"
+
     cp "$SCRIPT_DIR/dots" "$BIN_DIR/dots"
     chmod +x "$BIN_DIR/dots"
 
@@ -56,6 +60,10 @@ else
 
     mkdir -p "$BIN_DIR"
     mkdir -p "$COMPLETION_DIR"
+
+    # Remove existing files/symlinks if they exist
+    [[ -e "$BIN_DIR/dots" ]] || [[ -L "$BIN_DIR/dots" ]] && rm -f "$BIN_DIR/dots"
+    [[ -e "$COMPLETION_DIR/dots" ]] || [[ -L "$COMPLETION_DIR/dots" ]] && rm -f "$COMPLETION_DIR/dots"
 
     # Download dots binary
     info "Downloading dots binary..."
