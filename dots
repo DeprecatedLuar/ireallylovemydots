@@ -586,10 +586,17 @@ cmd_setup() {
 
 cmd_update() {
     local install_command='curl -sSL https://raw.githubusercontent.com/DeprecatedLuar/ireallylovemydots/main/install.sh | bash'
+    local force_flag=""
 
-    info "Checking for updates..."
+    # Check for --force flag
+    if [[ "$1" == "--force" ]] || [[ "$1" == "-f" ]]; then
+        force_flag="force"
+        info "Checking for updates (bypassing cache)..."
+    else
+        info "Checking for updates..."
+    fi
 
-    if check_for_updates; then
+    if check_for_updates "$force_flag"; then
         echo ""
         info "Updates available!"
         echo -n "Do you want to download the latest version? (Y/n): "
@@ -678,7 +685,7 @@ Usage:
   dots rm <config> [configs]       Remove config(s)/link(s) (moves to trash)
   dots sync|pull                   Pull latest and check for unpushed commits
   dots push                        Push commits to remote
-  dots update                      Update dots tool to latest version
+  dots update [--force|-f]         Update dots tool to latest version
   dots status                      Show what's linked and what's not
   dots version                     Show version information
   dots help                        Show this help
@@ -698,6 +705,7 @@ Examples:
   dots eject kitty ranger micro    Eject multiple configs at once
   dots rm nvim                     Remove ~/.config/nvim (move to trash)
   dots update                      Check for and install updates to dots tool
+  dots update --force              Force check for updates (bypass cache)
 
 Repository: $DOTFILES
 EOF
@@ -830,15 +838,16 @@ find_in_dotfiles() {
 # Check if updates are available for dots tool itself
 # Returns: 0 if updates available, 1 if up to date, 2 if check failed
 check_for_updates() {
+    local force_check="$1"
     local cache_file="$HOME/.cache/dots_update_check"
-    local cache_duration=86400  # 24 hours
+    local cache_duration=21600  # 6 hours
     local bin_file="$HOME/.local/bin/dots"
 
     # Create cache dir if needed
     mkdir -p "$(dirname "$cache_file")" 2>/dev/null
 
-    # Check cache freshness
-    if [[ -f "$cache_file" ]]; then
+    # Check cache freshness (skip if force check)
+    if [[ "$force_check" != "force" ]] && [[ -f "$cache_file" ]]; then
         local cache_age=$(($(date +%s) - $(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null || echo 0)))
         if [[ $cache_age -lt $cache_duration ]]; then
             # Return cached result
@@ -890,7 +899,7 @@ case "$1" in
     rm) shift; cmd_rm "$@" ;;
     sync|pull) cmd_sync ;;
     push) cmd_push ;;
-    update) cmd_update ;;
+    update) cmd_update "$2" ;;
     status) cmd_status ;;
     version|--version|-v) cmd_version ;;
     help|--help|-h|"") cmd_help ;;
