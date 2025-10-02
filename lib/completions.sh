@@ -1,0 +1,113 @@
+#!/bin/bash
+# Bash completion for dots command
+
+_dots_completion() {
+    local cur prev words cword
+    _init_completion || return
+
+    local DOTFILES="$HOME/.config/dots"
+
+    # Subcommands
+    local subcommands="setup snatch link unlink eject rm sync push status help"
+
+    # If we're completing the first argument (subcommand)
+    if [[ $cword -eq 1 ]]; then
+        COMPREPLY=($(compgen -W "$subcommands" -- "$cur"))
+        return
+    fi
+
+    local subcommand="${words[1]}"
+
+    case "$subcommand" in
+        snatch)
+            # Complete with configs in ~/.config/ and ~/ that aren't symlinks
+            local configs=()
+
+            # Add from ~/.config/ (without dots)
+            while IFS= read -r -d '' config; do
+                local name=$(basename "$config")
+                [[ -L "$config" ]] && continue  # Skip symlinks
+                configs+=("$name")
+            done < <(find "$HOME/.config" -maxdepth 1 -mindepth 1 -print0 2>/dev/null)
+
+            # Add from ~/ (with original names, starting with dot)
+            while IFS= read -r -d '' config; do
+                local name=$(basename "$config")
+                [[ ! "$name" =~ ^\. ]] && continue  # Only dot files
+                [[ -L "$config" ]] && continue  # Skip symlinks
+                configs+=("$name")
+            done < <(find "$HOME" -maxdepth 1 -mindepth 1 -name ".*" -print0 2>/dev/null)
+
+            COMPREPLY=($(compgen -W "${configs[*]}" -- "$cur"))
+            ;;
+
+        link|eject)
+            # Complete with configs in dots repo
+            local configs=()
+
+            # Add from config/
+            while IFS= read -r -d '' config; do
+                local name=$(basename "$config")
+                configs+=("$name")
+            done < <(find "$DOTFILES/config" -maxdepth 1 -mindepth 1 -print0 2>/dev/null)
+
+            # Add from home/
+            while IFS= read -r -d '' config; do
+                local name=$(basename "$config")
+                configs+=("$name")
+            done < <(find "$DOTFILES/home" -maxdepth 1 -mindepth 1 -print0 2>/dev/null)
+
+            COMPREPLY=($(compgen -W "${configs[*]}" -- "$cur"))
+            ;;
+
+        unlink)
+            # Complete with configs that are currently symlinked to dots
+            local configs=()
+
+            # Check ~/.config/
+            while IFS= read -r -d '' config; do
+                local name=$(basename "$config")
+                [[ ! -L "$config" ]] && continue
+                local target=$(readlink "$config")
+                [[ "$target" == "$DOTFILES/"* ]] && configs+=("$name")
+            done < <(find "$HOME/.config" -maxdepth 1 -mindepth 1 -print0 2>/dev/null)
+
+            # Check ~/
+            while IFS= read -r -d '' config; do
+                local name=$(basename "$config")
+                [[ ! "$name" =~ ^\. ]] && continue
+                [[ ! -L "$config" ]] && continue
+                local target=$(readlink "$config")
+                [[ "$target" == "$DOTFILES/"* ]] && configs+=("$name")
+            done < <(find "$HOME" -maxdepth 1 -mindepth 1 -name ".*" -print0 2>/dev/null)
+
+            COMPREPLY=($(compgen -W "${configs[*]}" -- "$cur"))
+            ;;
+
+        rm)
+            # Complete with any config in ~/.config/ and ~/
+            local configs=()
+
+            # Add from ~/.config/
+            while IFS= read -r -d '' config; do
+                local name=$(basename "$config")
+                configs+=("$name")
+            done < <(find "$HOME/.config" -maxdepth 1 -mindepth 1 -print0 2>/dev/null)
+
+            # Add from ~/ (dot files only)
+            while IFS= read -r -d '' config; do
+                local name=$(basename "$config")
+                [[ ! "$name" =~ ^\. ]] && continue
+                configs+=("$name")
+            done < <(find "$HOME" -maxdepth 1 -mindepth 1 -name ".*" -print0 2>/dev/null)
+
+            COMPREPLY=($(compgen -W "${configs[*]}" -- "$cur"))
+            ;;
+
+        setup|sync|push|status|help)
+            # No completion for these commands
+            ;;
+    esac
+}
+
+complete -F _dots_completion dots

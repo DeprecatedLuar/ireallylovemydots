@@ -1,0 +1,23 @@
+#!/bin/bash
+
+set -e
+source "$(dirname "$0")/../lib/utils.sh"
+source "$(dirname "$0")/../lib/commands.sh"
+
+DOTFILES="$HOME/.config/dots"
+TRASH="$HOME/.local/share/Trash/files"
+
+
+case "$1" in
+    setup) cmd_setup "$2" ;;
+    snatch) cmd_snatch "$2" ;;
+    link) shift; cmd_link "$@" ;;
+    unlink) shift; cmd_unlink "$@" ;;
+    eject) shift; cmd_eject "$@" ;;
+    rm) shift; cmd_rm "$@" ;;
+    sync|pull) cmd_sync ;;
+    push) cmd_push ;;
+    status) cmd_status ;;
+    help|--help|-h|"") cmd_help ;;
+    *) error "Thats not a real command: $1\nTry 'dots help' for usage" ;;
+esac
