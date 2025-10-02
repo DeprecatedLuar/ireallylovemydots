@@ -118,7 +118,7 @@ dots unlink nvim
 - [ ] Add support for machine specific configs                                           
 
 
-# Feel free to check some of my other projects I enjoyed makig:
+### Feel free to check some of my other projects I enjoyed makig:
 https://github.com/DeprecatedLuar/better-curl-saul
 
 
