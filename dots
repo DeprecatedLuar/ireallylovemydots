@@ -467,6 +467,31 @@ cmd_push() {
     notify_if_updates
 }
 
+cmd_detach() {
+    check_dotfiles_repo
+    cd "$DOTFILES"
+
+    # Check if remote exists
+    if ! git remote get-url origin >/dev/null 2>&1; then
+        error "No remote configured. Nothing to detach."
+    fi
+
+    local current_remote=$(git remote get-url origin)
+    warn "This will detach from: $current_remote"
+    echo -n "Continue? (y/N): "
+    read -r choice
+
+    case "${choice,,}" in
+        y|yes)
+            git remote remove origin
+            success "Detached from GitHub. Your local dotfiles remain intact."
+            ;;
+        *)
+            info "Cancelled."
+            ;;
+    esac
+}
+
 cmd_setup() {
     local repo_arg="$1"
     [[ -z "$repo_arg" ]] && error "Usage: dots setup <username/repo>"
@@ -477,11 +502,39 @@ cmd_setup() {
     # Check if remote already exists
     if git remote get-url origin >/dev/null 2>&1; then
         local current_remote=$(git remote get-url origin)
-        error "Remote already configured: $current_remote\nTo change it, run: cd ~/.config/dots && git remote set-url origin <new-url>"
+        warn "Remote already configured: $current_remote"
+        echo -n "Switch to $repo_arg? (y/N): "
+        read -r choice
+
+        case "${choice,,}" in
+            y|yes)
+                git remote remove origin
+                info "Removed old remote"
+                ;;
+            *)
+                info "Cancelled. Use 'dots detach' to remove remote without reconnecting."
+                exit 0
+                ;;
+        esac
     fi
 
-    # Convert shorthand to full URL
-    local git_url="https://github.com/${repo_arg}.git"
+    # Smart URL selection based on authentication method
+    local git_url
+
+    # Priority 1: gh CLI (best UX)
+    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+        git_url="https://github.com/${repo_arg}.git"
+        info "Using HTTPS (gh CLI detected)"
+
+    # Priority 2: SSH keys exist
+    elif [[ -f ~/.ssh/id_rsa ]] || [[ -f ~/.ssh/id_ed25519 ]] || [[ -f ~/.ssh/id_ecdsa ]]; then
+        git_url="git@github.com:${repo_arg}.git"
+        info "Using SSH (keys detected - ensure they're added to GitHub)"
+
+    # Priority 3: Nothing configured - fail with instructions
+    else
+        error "No GitHub authentication configured!\n\nOption 1 (Easiest): Install GitHub CLI\n  https://cli.github.com\n  Then run: gh auth login\n\nOption 2: Set up SSH keys\n  https://docs.github.com/en/authentication/connecting-to-github-with-ssh\n  Generate keys, add to GitHub, then run setup again"
+    fi
 
     # Check if repo exists (requires gh CLI)
     local should_push=false
@@ -615,6 +668,7 @@ dots - Dotfiles Manager
 
 Usage:
   dots setup <username/repo>       Connect GitHub repo (creates if needed)
+  dots detach                      Detach from GitHub (keeps local dotfiles)
   dots snatch <config> [configs]   Adopt existing config(s) into dots
   dots link <config> [configs]     Create symlink(s) from dots
   dots link -A|--all               Link all configs from dots
@@ -631,6 +685,7 @@ Usage:
 
 Examples:
   dots setup myuser/dotfiles       Connect to GitHub repo (auto-creates if needed)
+  dots detach                      Disconnect from GitHub (work locally only)
   dots snatch nvim                 Move ~/.config/nvim to dots, create symlink
   dots snatch nvim kitty ranger    Snatch multiple configs at once
   dots snatch .gitconfig           Move ~/.gitconfig to dots, create symlink
@@ -827,6 +882,7 @@ notify_if_updates() {
 
 case "$1" in
     setup) cmd_setup "$2" ;;
+    detach) cmd_detach ;;
     snatch) shift; cmd_snatch "$@" ;;
     link) shift; cmd_link "$@" ;;
     unlink) shift; cmd_unlink "$@" ;;
