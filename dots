@@ -531,9 +531,42 @@ cmd_setup() {
         git_url="git@github.com:${repo_arg}.git"
         info "Using SSH (keys detected - ensure they're added to GitHub)"
 
-    # Priority 3: Nothing configured - fail with instructions
+    # Priority 3: Nothing configured - offer auto-install
     else
-        error "No GitHub authentication configured!\n\nOption 1 (Easiest): Install GitHub CLI\n  https://cli.github.com\n  Then run: gh auth login\n\nOption 2: Set up SSH keys\n  https://docs.github.com/en/authentication/connecting-to-github-with-ssh\n  Generate keys, add to GitHub, then run setup again"
+        warn "No GitHub authentication configured"
+        echo ""
+        echo "Quick setup: Install gh CLI via webi.sh (cross-platform, no sudo)"
+        echo ""
+        echo -n "Auto-install and authenticate now? (Y/n): "
+        read -r choice
+
+        case "${choice,,}" in
+            n|no)
+                echo ""
+                info "To install manually, run:"
+                echo "  curl -sS https://webi.sh/gh | sh"
+                echo "  gh auth login"
+                echo ""
+                info "Or visit: https://cli.github.com"
+                info "Or set up SSH keys: https://docs.github.com/en/authentication/connecting-to-github-with-ssh"
+                exit 0
+                ;;
+            *)
+                info "Installing gh CLI..."
+                curl -sS https://webi.sh/gh | sh
+
+                # webi installs to ~/.local/bin, update PATH for this session
+                export PATH="$HOME/.local/bin:$PATH"
+
+                echo ""
+                info "Starting authentication..."
+                gh auth login
+
+                # Use HTTPS now that gh is authenticated
+                git_url="https://github.com/${repo_arg}.git"
+                info "Using HTTPS (gh CLI authenticated)"
+                ;;
+        esac
     fi
 
     # Check if repo exists (requires gh CLI)
