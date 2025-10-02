@@ -94,10 +94,22 @@ success "Whohoo, I guess we're finished. Try dots --help and hope it works"
 
 # Check if ~/.local/bin is in PATH
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-    echo ""
-    warn "~/.local/bin is not in your PATH. You may wanna check that"
-    echo "Add this to your ~/.bashrc or ~/.bash_profile:"
-    echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+    # Auto-add to .bashrc if not already there
+    BASHRC="$HOME/.bashrc"
+    if [[ ! -f "$BASHRC" ]]; then
+        touch "$BASHRC"
+    fi
+
+    if ! grep -q '$HOME/.local/bin' "$BASHRC" 2>/dev/null; then
+        echo "" >> "$BASHRC"
+        echo "# Added by dots installer" >> "$BASHRC"
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASHRC"
+        echo ""
+        success "Added ~/.local/bin to PATH in ~/.bashrc"
+    else
+        echo ""
+        info "PATH export already in ~/.bashrc"
+    fi
 fi
 
 # Check if bash-completion is available
