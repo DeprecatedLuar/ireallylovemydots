@@ -8,7 +8,7 @@ _dots_completion() {
     local DOTFILES="$HOME/.config/dots"
 
     # Subcommands
-    local subcommands="setup snatch link unlink eject rm sync push update status help"
+    local subcommands="setup snatch link unlink eject rm sync push update status version help"
 
     # If we're completing the first argument (subcommand)
     if [[ $cword -eq 1 ]]; then
@@ -104,7 +104,7 @@ _dots_completion() {
             COMPREPLY=($(compgen -W "${configs[*]}" -- "$cur"))
             ;;
 
-        setup|sync|push|update|status|help)
+        setup|sync|push|update|status|version|help)
             # No completion for these commands
             ;;
     esac
