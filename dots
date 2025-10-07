@@ -110,6 +110,14 @@ link_single() {
     # Create symlink
     ln -s "$dots_path" "$target_path"
 
+    # Auto-setup profiled configs
+    if [[ -f "$dots_path/.profiled" ]]; then
+        local first_profile=$(ls "$dots_path/profiles" 2>/dev/null | head -1)
+        if [[ -n "$first_profile" ]]; then
+            activate_profile_symlinks "$dots_path" "$first_profile" 2>/dev/null || true
+        fi
+    fi
+
     success "Linked $found_name"
 }
 
