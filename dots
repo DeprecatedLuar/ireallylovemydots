@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="v0.9.0"
+VERSION="v1.0.0"
 DOTFILES="$HOME/.config/dots"
 TRASH="$HOME/.local/share/Trash/files"
 
@@ -469,6 +469,13 @@ cmd_push() {
         error "No remote configured.\nRun: dots setup <username/repo>"
     fi
 
+    # Auto-commit any changes
+    if [[ -n "$(git status --porcelain)" ]]; then
+        git add -A >/dev/null 2>&1
+        git commit -m "dots push" >/dev/null 2>&1
+        info "Committed pending changes"
+    fi
+
     git push
 
     # Silent check for dots tool updates
@@ -627,6 +634,7 @@ cmd_setup() {
 
 cmd_update() {
     local install_command='curl -sSL https://raw.githubusercontent.com/DeprecatedLuar/ireallylovemydots/main/install.sh | bash'
+    local cache_file="$HOME/.cache/dots_update_check"
     local force_flag=""
 
     # Check for --force flag
@@ -637,7 +645,12 @@ cmd_update() {
         info "Checking for updates..."
     fi
 
-    if check_for_updates "$force_flag"; then
+    # Capture exit code properly
+    check_for_updates "$force_flag"
+    local check_result=$?
+
+    if [[ $check_result -eq 0 ]]; then
+        # Updates available
         echo ""
         info "Updates available!"
         echo -n "Do you want to download the latest version? (Y/n): "
@@ -652,16 +665,30 @@ cmd_update() {
             *)
                 echo ""
                 info "Downloading and installing latest version..."
-                bash -c "$install_command"
+                if bash -c "$install_command"; then
+                    # Clear cache after successful update
+                    rm -f "$cache_file"
+                    success "Updated successfully!"
+                fi
                 ;;
         esac
-    elif [[ $? -eq 1 ]]; then
+    elif [[ $check_result -eq 1 ]]; then
+        # Up to date
         success "You're already up to date!"
     else
-        warn "Could not check for updates (network issue?)"
-        echo ""
-        info "To update manually, run:"
-        echo "  $install_command"
+        # Dev mode or network failure - show helpful message
+        local script_dir
+        script_dir="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" || script_dir="$(dirname "$0")"
+
+        if [[ -d "$script_dir/.git" ]]; then
+            info "Running in development mode - update check skipped"
+            info "Push tags to GitHub: git push --tags"
+        else
+            warn "Could not check for updates (network issue or no tags published)"
+            echo ""
+            info "To update manually, run:"
+            echo "  $install_command"
+        fi
     fi
 }
 
@@ -886,53 +913,45 @@ find_in_dotfiles() {
 }
 
 # Check if updates are available for dots tool itself
-# Returns: 0 if updates available, 1 if up to date, 2 if check failed
+# Returns: 0 if updates available, 1 if up to date, 2 if check failed/not applicable
 check_for_updates() {
-    local force_check="$1"
-    local cache_file="$HOME/.cache/dots_update_check"
-    local cache_duration=21600  # 6 hours
-    local bin_file="$HOME/.local/bin/dots"
+    # Skip if running from development directory
+    local script_path
+    script_path="$(readlink -f "$0" 2>/dev/null)" || script_path="$0"
+    local script_dir="$(dirname "$script_path")"
 
-    # Create cache dir if needed
-    mkdir -p "$(dirname "$cache_file")" 2>/dev/null
+    [[ -d "$script_dir/.git" ]] && return 2
 
-    # Check cache freshness (skip if force check)
-    if [[ "$force_check" != "force" ]] && [[ -f "$cache_file" ]]; then
-        local cache_age=$(($(date +%s) - $(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null || echo 0)))
-        if [[ $cache_age -lt $cache_duration ]]; then
-            # Return cached result
-            [[ "$(cat "$cache_file")" == "updates_available" ]] && return 0 || return 1
-        fi
-    fi
+    # Curl the remote checker script
+    local result
+    result=$(curl -sS --max-time 5 \
+        "https://raw.githubusercontent.com/DeprecatedLuar/ireallylovemydots/main/other/scripts/check-update.sh" \
+        2>/dev/null | bash -s "$VERSION" 2>/dev/null)
 
-    # Fetch latest commit hash from GitHub (silent, non-blocking)
-    local remote_hash=$(curl -sS --max-time 3 "https://api.github.com/repos/DeprecatedLuar/ireallylovemydots/commits/main" 2>/dev/null | grep -m1 '"sha"' | cut -d'"' -f4 | head -c 7)
+    local exit_code=$?
 
-    # If fetch failed, return error (silent)
-    [[ -z "$remote_hash" ]] && return 2
-
-    # Get local install timestamp
-    local local_timestamp=$(stat -c %Y "$bin_file" 2>/dev/null || stat -f %m "$bin_file" 2>/dev/null || echo 0)
-
-    # Fetch commit date from GitHub for the latest commit
-    local remote_timestamp=$(curl -sS --max-time 3 "https://api.github.com/repos/DeprecatedLuar/ireallylovemydots/commits/main" 2>/dev/null | grep '"date"' | head -1 | cut -d'"' -f4)
-    local remote_epoch=$(date -d "$remote_timestamp" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$remote_timestamp" +%s 2>/dev/null || echo 0)
-
-    # Compare timestamps
-    if [[ $remote_epoch -gt $local_timestamp ]]; then
-        echo "updates_available" > "$cache_file"
-        return 0
-    else
-        echo "up_to_date" > "$cache_file"
-        return 1
-    fi
+    # Parse result
+    case "$result" in
+        UPDATE_AVAILABLE:*)
+            echo "${result#UPDATE_AVAILABLE:}"  # Return new version
+            return 0
+            ;;
+        UP_TO_DATE)
+            return 1
+            ;;
+        *)
+            return 2  # Error or no output
+            ;;
+    esac
 }
 
 # Helper to notify user if updates are available
 notify_if_updates() {
-    if check_for_updates 2>/dev/null; then
+    local new_version
+    new_version=$(check_for_updates 2>/dev/null)
+    if [[ $? -eq 0 ]]; then
         echo ""
-        info "A new version is available! Run 'dots update' to upgrade."
+        info "Update available: $new_version → Run 'dots update' to upgrade"
     fi
 }
 
