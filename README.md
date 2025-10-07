@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="other/assets/ireallylovemydotslogo.png" width="600"/>
+  <img src="other/assets/ireallylovemydots.logo.webp" width="600"/>
 </p>
 
 <p align=center> A dead-simple CLI dotfile manager in bash</p>
@@ -15,7 +15,7 @@
 ---
 
 <p align="center">
-  <img src="other/assets/dots.gif" width="700"/>
+  <img src="other/assets/ireallylovemydots-profile-switching-demo.gif" width="900"/>
 </p>
 
 ## Cool Features
@@ -25,6 +25,7 @@
 - **Dots are safe** - Files get moved to trash, never deleted
 - **Batch operations** - There's also `-A` flag & argument chaining
 - **Zero dependencies** - Literally just bash and git (and lOvE)
+- **Profile system** - Manage multiple variants of a config
 
 ---
 
@@ -77,6 +78,11 @@ cd ireallylovemydots
 | `<config> untrack`   | Stop profiling files                             |
 
 ## Quick Start
+
+<p align="center">
+  <img src="other/assets/dots.gif" width="700"/>
+</p>
+
 
 ```bash
 # Connect to your GitHub dotfiles repo
