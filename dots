@@ -708,7 +708,8 @@ cmd_status() {
 }
 
 cmd_version() {
-    echo "dots $VERSION"
+    echo "I Really Love my Dots $VERSION"
+    echo -e "\033[2mby Luar${NC}"
     notify_if_updates
 }
 
