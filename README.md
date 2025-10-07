@@ -49,7 +49,7 @@ cd ireallylovemydots
 ---
 
 <p align="center">
-  <img src="other/assets/dots.gif" width="700"/>
+  <img src="other/assets/dots.gif" width="450"/>
 </p>
 
 
