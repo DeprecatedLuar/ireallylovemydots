@@ -65,6 +65,17 @@ cd ireallylovemydots
 | push    |                   | Git push to remote                               |
 | status  |                   | Show link status of all configs                  |
 
+### Profile System (Multi-variant configs)
+
+| Command              | Description                                      |
+|----------------------|--------------------------------------------------|
+| `<config> track`     | Mark files for profiling                         |
+| `<config> init`      | Create new profile (copies from existing)        |
+| `<config> list`      | Show available profiles                          |
+| `<config> <profile>` | Switch to profile                                |
+| `<config> rm`        | Delete profile                                   |
+| `<config> untrack`   | Stop profiling files                             |
+
 ## Quick Start
 
 ```bash
@@ -112,10 +123,6 @@ dots unlink nvim
 </details> 
 
 ---
-
-### Roadmap
-
-- [ ] Add support for machine specific configs                                           
 
 
 ### Feel free to check some of my other projects I enjoyed makig:

@@ -748,6 +748,15 @@ Examples:
   dots update                      Check for and install updates to dots tool
   dots update --force              Force check for updates (bypass cache)
 
+Profile System (Multi-variant configs):
+  dots kitty track kitty.conf      Mark files for profiling
+  dots kitty init work             Create profile 'work' (copies from active)
+  dots kitty init home             Create another profile
+  dots kitty list                  Show available profiles
+  dots kitty work                  Switch to 'work' profile
+  dots kitty rm home               Delete 'home' profile
+  dots kitty untrack kitty.conf    Stop profiling a file
+
 Repository: $DOTFILES
 EOF
 }

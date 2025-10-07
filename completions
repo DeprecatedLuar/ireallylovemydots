@@ -18,6 +18,46 @@ _dots_completion() {
 
     local subcommand="${words[1]}"
 
+    # Check if first argument is a profiled config
+    if [[ -f "$DOTFILES/config/$subcommand/.profiled" ]]; then
+        # Profile system completions
+        if [[ $cword -eq 2 ]]; then
+            # Suggest profile subcommands and existing profiles
+            local profile_cmds="track init list rm untrack"
+            local profiles=()
+
+            if [[ -d "$DOTFILES/config/$subcommand/profiles" ]]; then
+                while IFS= read -r -d '' profile; do
+                    profiles+=("$(basename "$profile")")
+                done < <(find "$DOTFILES/config/$subcommand/profiles" -maxdepth 1 -mindepth 1 -type d -print0 2>/dev/null)
+            fi
+
+            COMPREPLY=($(compgen -W "$profile_cmds ${profiles[*]}" -- "$cur"))
+            return
+        elif [[ $cword -ge 3 ]]; then
+            local profile_cmd="${words[2]}"
+            case "$profile_cmd" in
+                track|untrack)
+                    # Complete with files in config root
+                    local files=()
+                    while IFS= read -r -d '' file; do
+                        [[ -f "$file" ]] && files+=("$(basename "$file")")
+                    done < <(find "$DOTFILES/config/$subcommand" -maxdepth 1 -mindepth 1 -print0 2>/dev/null)
+                    COMPREPLY=($(compgen -W "${files[*]}" -- "$cur"))
+                    ;;
+                rm)
+                    # Complete with profile names
+                    local profiles=()
+                    while IFS= read -r -d '' profile; do
+                        profiles+=("$(basename "$profile")")
+                    done < <(find "$DOTFILES/config/$subcommand/profiles" -maxdepth 1 -mindepth 1 -type d -print0 2>/dev/null)
+                    COMPREPLY=($(compgen -W "${profiles[*]}" -- "$cur"))
+                    ;;
+            esac
+            return
+        fi
+    fi
+
     case "$subcommand" in
         snatch)
             # Complete with configs in ~/.config/ and ~/ that aren't symlinks
