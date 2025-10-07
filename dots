@@ -633,63 +633,38 @@ cmd_setup() {
 }
 
 cmd_update() {
-    local install_command='curl -sSL https://raw.githubusercontent.com/DeprecatedLuar/ireallylovemydots/main/install.sh | bash'
-    local cache_file="$HOME/.cache/dots_update_check"
-    local force_flag=""
+    local install_url='https://raw.githubusercontent.com/DeprecatedLuar/ireallylovemydots/main/install.sh'
 
-    # Check for --force flag
-    if [[ "$1" == "--force" ]] || [[ "$1" == "-f" ]]; then
-        force_flag="force"
-        info "Checking for updates (bypassing cache)..."
-    else
-        info "Checking for updates..."
+    # Skip if running from dev directory
+    local script_path
+    script_path="$(readlink -f "$0" 2>/dev/null)" || script_path="$0"
+    local script_dir="$(dirname "$script_path")"
+
+    if [[ -d "$script_dir/.git" ]]; then
+        info "Running in development mode"
+        info "To install: ./install.sh"
+        info "To update repo: git pull && git push --tags"
+        return
     fi
 
-    # Capture exit code properly
-    check_for_updates "$force_flag"
-    local check_result=$?
+    info "This will download and install the latest version from GitHub"
+    echo -n "Continue? (Y/n): "
+    read -r choice
 
-    if [[ $check_result -eq 0 ]]; then
-        # Updates available
-        echo ""
-        info "Updates available!"
-        echo -n "Do you want to download the latest version? (Y/n): "
-        read -r choice
-
-        case "${choice,,}" in
-            n|no)
-                echo ""
-                info "To update manually, run:"
-                echo "  $install_command"
-                ;;
-            *)
-                echo ""
-                info "Downloading and installing latest version..."
-                if bash -c "$install_command"; then
-                    # Clear cache after successful update
-                    rm -f "$cache_file"
-                    success "Updated successfully!"
-                fi
-                ;;
-        esac
-    elif [[ $check_result -eq 1 ]]; then
-        # Up to date
-        success "You're already up to date!"
-    else
-        # Dev mode or network failure - show helpful message
-        local script_dir
-        script_dir="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" || script_dir="$(dirname "$0")"
-
-        if [[ -d "$script_dir/.git" ]]; then
-            info "Running in development mode - update check skipped"
-            info "Push tags to GitHub: git push --tags"
-        else
-            warn "Could not check for updates (network issue or no tags published)"
+    case "${choice,,}" in
+        n|no)
+            info "Cancelled"
+            ;;
+        *)
             echo ""
-            info "To update manually, run:"
-            echo "  $install_command"
-        fi
-    fi
+            info "Downloading latest version..."
+            if curl -sSL "$install_url" | bash; then
+                success "Update complete!"
+            else
+                error "Update failed"
+            fi
+            ;;
+    esac
 }
 
 cmd_status() {
@@ -753,7 +728,7 @@ Usage:
   dots rm <config> [configs]       Remove config(s)/link(s) (moves to trash)
   dots sync|pull                   Pull latest and check for unpushed commits
   dots push                        Push commits to remote
-  dots update [--force|-f]         Update dots tool to latest version
+  dots update                      Update dots tool to latest version
   dots status                      Show what's linked and what's not
   dots version                     Show version information
   dots help                        Show this help
@@ -772,8 +747,7 @@ Examples:
   dots eject nvim                  Move config out of dots, untrack from git
   dots eject kitty ranger micro    Eject multiple configs at once
   dots rm nvim                     Remove ~/.config/nvim (move to trash)
-  dots update                      Check for and install updates to dots tool
-  dots update --force              Force check for updates (bypass cache)
+  dots update                      Download and install latest version
 
 Profile System (Multi-variant configs):
   dots kitty track kitty.conf      Mark files for profiling
