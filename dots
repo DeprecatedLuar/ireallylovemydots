@@ -1248,6 +1248,17 @@ profile_switch() {
     success "Switched $config_name to '$profile_name'"
 }
 
+# List available profiles
+# Args: $1 = config path
+profile_list() {
+    local config_path="$1"
+    local profiles_dir="$config_path/profiles"
+
+    [[ ! -d "$profiles_dir" ]] && error "No profiles found"
+
+    ls "$profiles_dir"
+}
+
 
 # ====[ MAIN ]=============================================================
 
