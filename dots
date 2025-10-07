@@ -920,6 +920,335 @@ notify_if_updates() {
 }
 
 
+# ====[ PROFILE UTILITIES ]=============================================================
+
+# Check if a config directory has profiles enabled
+# Args: $1 = config name (e.g., "kitty")
+# Returns: 0 if profiled, 1 if not
+is_profiled_config() {
+    local config_name="$1"
+
+    # Use find_in_dotfiles() to locate config
+    local result=$(find_in_dotfiles "$config_name")
+    [[ "$result" == "none" ]] && return 1
+
+    local type found_name
+    read type found_name <<< "$result"
+
+    local config_path="$DOTFILES/$type/$found_name"
+
+    # Profiles only work for directories (not single files)
+    # Future: All items in dots will be directories, enabling universal profiles
+    [[ ! -d "$config_path" ]] && return 1
+
+    [[ -f "$config_path/.profiled" ]]
+}
+
+# Get config path in dotfiles (helper for profile operations)
+# Args: $1 = config name
+# Outputs: full path to config dir in dots
+get_config_path() {
+    local config_name="$1"
+    local result=$(find_in_dotfiles "$config_name")
+    [[ "$result" == "none" ]] && error "'$config_name' not found in dots repo"
+
+    local type found_name
+    read type found_name <<< "$result"
+
+    local config_path="$DOTFILES/$type/$found_name"
+
+    # Profiles only work for directories (not single files)
+    # Future: All items in dots will be directories, enabling universal profiles
+    [[ ! -d "$config_path" ]] && error "'$config_name' is a file, not a directory. Profiles require directories."
+
+    echo "$config_path"
+}
+
+# Read .profiled file
+# Args: $1 = config path
+# Outputs: space-separated list of tracked files
+read_profiled() {
+    local config_path="$1"
+    local profiled="$config_path/.profiled"
+    [[ ! -f "$profiled" ]] && return
+    cat "$profiled" | tr '\n' ' '
+}
+
+# Write .profiled file
+# Args: $1 = config path, $2+ = files to write
+write_profiled() {
+    local config_path="$1"
+    shift
+    local profiled="$config_path/.profiled"
+    printf "%s\n" "$@" > "$profiled"
+}
+
+# Add to .profiled (append files)
+# Args: $1 = config path, $2+ = files to add
+add_to_profiled() {
+    local config_path="$1"
+    shift
+    local profiled="$config_path/.profiled"
+    for file in "$@"; do
+        # Avoid duplicates
+        if ! grep -Fxq "$file" "$profiled" 2>/dev/null; then
+            echo "$file" >> "$profiled"
+        fi
+    done
+}
+
+# Remove from .profiled
+# Args: $1 = config path, $2+ = files to remove
+remove_from_profiled() {
+    local config_path="$1"
+    shift
+    local profiled="$config_path/.profiled"
+    [[ ! -f "$profiled" ]] && return
+
+    local temp=$(mktemp)
+    for file in "$@"; do
+        grep -Fxv "$file" "$profiled" > "$temp" 2>/dev/null || true
+        mv "$temp" "$profiled"
+    done
+}
+
+# Get current active profile by following symlinks
+# Args: $1 = config path
+# Outputs: profile name (or empty if not profiled)
+get_current_profile() {
+    local config_path="$1"
+    local profiled="$config_path/.profiled"
+
+    [[ ! -f "$profiled" ]] && return
+
+    # Read first tracked file and check its symlink
+    local first_file=$(head -1 "$profiled")
+    local link_path="$config_path/$first_file"
+
+    if [[ -L "$link_path" ]]; then
+        local target=$(readlink "$link_path")
+        # Extract profile name from "profiles/NAME/file"
+        echo "$target" | cut -d'/' -f2
+    fi
+}
+
+# Validate profile name (check for reserved words)
+# Args: $1 = profile name
+# Returns: 0 if valid, 1 if invalid
+validate_profile_name() {
+    local name="$1"
+    local reserved=("track" "init" "list" "rm" "untrack" "flatten")
+
+    [[ -z "$name" ]] && return 1
+    [[ "$name" == *"/"* ]] && return 1
+    [[ "$name" == *".."* ]] && return 1
+
+    for word in "${reserved[@]}"; do
+        [[ "$name" == "$word" ]] && return 1
+    done
+
+    return 0
+}
+
+# Activate profile symlinks (remove old, create new from actual files in profile)
+# Args: $1 = config path, $2 = profile name
+# Note: Iterates over actual files in profile directory for robustness
+activate_profile_symlinks() {
+    local config_path="$1"
+    local profile_name="$2"
+    local profile_dir="$config_path/profiles/$profile_name"
+
+    [[ ! -d "$profile_dir" ]] && error "Profile '$profile_name' not found"
+
+    # Remove all existing symlinks that point to profiles/
+    for item in "$config_path"/*; do
+        [[ ! -L "$item" ]] && continue
+        local target=$(readlink "$item")
+        [[ "$target" == profiles/* ]] && rm "$item"
+    done
+
+    # Create symlinks for all files in target profile
+    local linked_count=0
+    for item in "$profile_dir"/*; do
+        [[ ! -e "$item" ]] && continue
+        local filename=$(basename "$item")
+        local link_target="$config_path/$filename"
+
+        # Check if real file exists at target (conflict)
+        if [[ -e "$link_target" ]] && [[ ! -L "$link_target" ]]; then
+            error "Cannot link $filename: real file exists at $link_target\nRemove manually: rm $link_target"
+        fi
+
+        # Create symlink
+        ln -s "profiles/$profile_name/$filename" "$link_target"
+        linked_count=$((linked_count + 1))
+    done
+
+    # Error if NO files were linked (empty profile)
+    [[ $linked_count -eq 0 ]] && error "Profile '$profile_name' has no files"
+
+    return 0
+}
+
+
+# ====[ PROFILE COMMANDS ]=============================================================
+
+# Main dispatcher for profile subcommands
+# Usage: dots <config> <subcommand|profile-name> [args]
+cmd_profile_dispatch() {
+    local config_name="$1"
+    local subcommand="$2"
+    shift 2
+
+    check_dotfiles_repo
+
+    # Get config path early (validates config exists)
+    local config_path=$(get_config_path "$config_name")
+
+    case "$subcommand" in
+        track)
+            profile_track "$config_path" "$@"
+            ;;
+        init)
+            profile_init "$config_path" "$@"
+            ;;
+        list)
+            profile_list "$config_path"
+            ;;
+        rm)
+            profile_rm "$config_path" "$@"
+            ;;
+        untrack)
+            profile_untrack "$config_path" "$@"
+            ;;
+        flatten)
+            profile_flatten "$config_path"
+            ;;
+        "")
+            # No subcommand - show help
+            error "Usage: dots $config_name <subcommand>\n\nSubcommands:\n  track <files>     Mark files for profiling\n  init <name>       Create profile\n  list              List profiles\n  rm <name>         Delete profile\n  untrack <files>   Stop tracking files\n  flatten           Remove profile system"
+            ;;
+        *)
+            # Assume it's a profile name (switch command)
+            profile_switch "$config_path" "$subcommand"
+            ;;
+    esac
+}
+
+# Track files for profiling
+# Args: $1 = config path, $2+ = files to track
+profile_track() {
+    local config_path="$1"
+    shift
+    [[ -z "$1" ]] && error "Usage: dots $(basename "$config_path") track <file> [files...]"
+
+    local config_name=$(basename "$config_path")
+    local profiled="$config_path/.profiled"
+
+    # Validate files exist in config dir
+    for file in "$@"; do
+        [[ ! -e "$config_path/$file" ]] && error "File '$file' not found in $config_name/"
+    done
+
+    # Create or update .profiled
+    add_to_profiled "$config_path" "$@"
+
+    # Git commit
+    cd "$DOTFILES"
+    git add "$profiled" >/dev/null 2>&1
+    git commit -m "profile: track $(echo $@ | tr ' ' ', ') in $config_name" >/dev/null 2>&1
+
+    success "Tracking $(echo $@ | tr ' ' ', ') in $config_name"
+}
+
+# Initialize profile (create first one or copy from active)
+# Args: $1 = config path, $2 = profile name
+profile_init() {
+    local config_path="$1"
+    local profile_name="$2"
+
+    [[ -z "$profile_name" ]] && error "Usage: dots $(basename "$config_path") init <profile-name>"
+
+    local config_name=$(basename "$config_path")
+    local profiled="$config_path/.profiled"
+
+    # Validate .profiled exists
+    [[ ! -f "$profiled" ]] && error "No tracked files in $config_name\nRun: dots $config_name track <files>"
+
+    # Validate profile name
+    validate_profile_name "$profile_name" || error "Invalid profile name '$profile_name'\nReserved words: track, init, list, rm, untrack, flatten\nAvoid: /, .."
+
+    local profiles_dir="$config_path/profiles"
+    local profile_dir="$profiles_dir/$profile_name"
+    local files=$(read_profiled "$config_path")
+
+    # Check if profile already exists
+    [[ -d "$profile_dir" ]] && error "Profile '$profile_name' already exists"
+
+    # Check if this is the first profile (profiles/ doesn't exist or is empty)
+    local is_first_profile=false
+    if [[ ! -d "$profiles_dir" ]] || [[ -z "$(ls -A "$profiles_dir" 2>/dev/null)" ]]; then
+        is_first_profile=true
+    fi
+
+    mkdir -p "$profile_dir"
+
+    if [[ "$is_first_profile" == "true" ]]; then
+        # First profile - move files from root
+        for file in $files; do
+            local source="$config_path/$file"
+            if [[ -L "$source" ]]; then
+                # Symlink - dereference and copy actual content
+                cp -rL "$source" "$profile_dir/"
+                rm "$source"
+            elif [[ -e "$source" ]]; then
+                # Real file/dir - move it
+                mv "$source" "$profile_dir/"
+            fi
+        done
+
+        # Setup .gitignore - ignore symlinks at root (not profiles/)
+        local gitignore="$config_path/.gitignore"
+        {
+            (cd "$profile_dir" && ls -A | sed 's|^|/|')
+            echo "!profiles/"
+        } > "$gitignore"
+
+        # Activate symlinks to new profile
+        activate_profile_symlinks "$config_path" "$profile_name"
+    else
+        # Not first profile - copy from first existing profile
+        local first_existing=$(ls "$profiles_dir" | head -1)
+        for file in $files; do
+            local source="$profiles_dir/$first_existing/$file"
+            [[ -e "$source" ]] && cp -r "$source" "$profile_dir/"
+        done
+        # Don't create symlinks - keep current profile active
+    fi
+
+    # Git commit
+    cd "$DOTFILES"
+    git add "$profile_dir" >/dev/null 2>&1
+    [[ -f "$config_path/.gitignore" ]] && git add "$config_path/.gitignore" >/dev/null 2>&1
+    git commit -m "profile: init $profile_name for $config_name" >/dev/null 2>&1
+
+    success "Created profile '$profile_name' for $config_name"
+}
+
+# Switch to a profile
+# Args: $1 = config path, $2 = profile name
+profile_switch() {
+    local config_path="$1"
+    local profile_name="$2"
+    local config_name=$(basename "$config_path")
+
+    # Activate symlinks to target profile
+    activate_profile_symlinks "$config_path" "$profile_name"
+
+    success "Switched $config_name to '$profile_name'"
+}
+
+
 # ====[ MAIN ]=============================================================
 
 case "$1" in
@@ -936,5 +1265,26 @@ case "$1" in
     status) cmd_status ;;
     version|--version|-v) cmd_version ;;
     help|--help|-h|"") cmd_help ;;
-    *) error "Thats not a real command: $1\nTry 'dots help' for usage" ;;
+    *)
+        # Check if it's a profiled config OR a directory config that could be profiled
+        if is_profiled_config "$1"; then
+            cmd_profile_dispatch "$@"
+        else
+            # Check if it's a directory in dots (allow profile setup commands)
+            _result=$(find_in_dotfiles "$1" 2>/dev/null || echo "none")
+            if [[ "$_result" != "none" ]]; then
+                read _type _found_name <<< "$_result"
+                _config_path="$DOTFILES/$_type/$_found_name"
+
+                # If it's a directory, allow profile commands
+                if [[ -d "$_config_path" ]]; then
+                    cmd_profile_dispatch "$@"
+                else
+                    error "Thats not a real command: $1\nTry 'dots help' for usage"
+                fi
+            else
+                error "Thats not a real command: $1\nTry 'dots help' for usage"
+            fi
+        fi
+        ;;
 esac
