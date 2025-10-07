@@ -48,6 +48,10 @@ cd ireallylovemydots
 
 ---
 
+<p align="center">
+  <img src="other/assets/dots.gif" width="700"/>
+</p>
+
 
 ## Commands
 
@@ -78,11 +82,6 @@ cd ireallylovemydots
 | `<config> untrack`   | Stop profiling files                             |
 
 ## Quick Start
-
-<p align="center">
-  <img src="other/assets/dots.gif" width="700"/>
-</p>
-
 
 ```bash
 # Connect to your GitHub dotfiles repo
