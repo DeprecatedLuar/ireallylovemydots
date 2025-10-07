@@ -1267,6 +1267,72 @@ profile_list() {
     ls "$profiles_dir"
 }
 
+# Delete a profile
+# Args: $1 = config path, $2 = profile name
+profile_rm() {
+    local config_path="$1"
+    local profile_name="$2"
+    local config_name=$(basename "$config_path")
+
+    [[ -z "$profile_name" ]] && error "Usage: dots $config_name rm <profile-name>"
+
+    local profile_dir="$config_path/profiles/$profile_name"
+    [[ ! -d "$profile_dir" ]] && error "Profile '$profile_name' not found"
+
+    # Move to trash
+    mkdir -p "$TRASH"
+    local trash_path="$TRASH/${config_name}_${profile_name}"
+    [[ -e "$trash_path" ]] && trash_path="$TRASH/${config_name}_${profile_name}.$(date +%s)"
+
+    info "Moving $profile_dir → $trash_path"
+    mv "$profile_dir" "$trash_path"
+
+    # Git commit
+    cd "$DOTFILES"
+    git add -A >/dev/null 2>&1
+    git commit -m "profile: remove $profile_name from $config_name" >/dev/null 2>&1
+
+    success "Deleted profile '$profile_name' from $config_name"
+}
+
+# Untrack files from profiling
+# Args: $1 = config path, $2+ = files to untrack
+profile_untrack() {
+    local config_path="$1"
+    shift
+    [[ -z "$1" ]] && error "Usage: dots $(basename "$config_path") untrack <file> [files...]"
+
+    local config_name=$(basename "$config_path")
+
+    # For each file: convert symlink to real file, remove from manifest
+    for file in "$@"; do
+        local link="$config_path/$file"
+
+        # If it's a symlink, resolve it to real file
+        if [[ -L "$link" ]]; then
+            local source=$(readlink -f "$link")
+            rm "$link"
+            [[ -e "$source" ]] && cp -r "$source" "$link"
+        fi
+
+        remove_from_profiled "$config_path" "$file"
+
+        # Remove from .gitignore
+        local gitignore="$config_path/.gitignore"
+        if [[ -f "$gitignore" ]]; then
+            grep -v "^/$file$" "$gitignore" > "$gitignore.tmp"
+            mv "$gitignore.tmp" "$gitignore"
+        fi
+    done
+
+    # Git commit
+    cd "$DOTFILES"
+    git add "$config_path/.profiled" "$config_path/.gitignore" "$config_path" >/dev/null 2>&1
+    git commit -m "profile: untrack $(echo $@ | tr ' ' ', ') from $config_name" >/dev/null 2>&1
+
+    success "Untracked $(echo $@ | tr ' ' ', ') from $config_name"
+}
+
 
 # ====[ MAIN ]=============================================================
 
