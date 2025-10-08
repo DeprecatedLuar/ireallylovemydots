@@ -1201,7 +1201,7 @@ activate_profile_symlinks() {
             echo -n "Overwrite with profile version? [y/N]: "
             read -r response
             if [[ "$response" =~ ^[Yy]$ ]]; then
-                rm "$link_target"
+                rm -rf "$link_target"
             else
                 echo -e "${YELLOW}Skipping $filename${NC}"
                 continue
