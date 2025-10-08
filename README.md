@@ -20,12 +20,13 @@
 
 ## Cool Features
 
-- **Dead-simple symlinks** - Configs link to `~/.config/dots` 
+- **Dead-simple symlinks** - Configs link to `~/.config/dots`
 - **Auto-Git** - Your dotfiles are a git repo, auto-commits on changes
 - **Dots are safe** - Files get moved to trash, never deleted
 - **Batch operations** - There's also `-A` flag & argument chaining
 - **Zero dependencies** - Literally just bash and git (and lOvE)
 - **Profile system** - Manage multiple variants of a config
+- **Hidden configs** - Just add the underscore prefix (`_nvim`) to auto-gitignore sensitive files
 
 ---
 
