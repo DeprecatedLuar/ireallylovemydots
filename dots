@@ -1176,6 +1176,9 @@ activate_profile_symlinks() {
 
     [[ ! -d "$profile_dir" ]] && error "Profile '$profile_name' not found"
 
+    # Enable dotglob to process files starting with .
+    shopt -s dotglob
+
     # Remove all existing symlinks that point to profiles/
     for item in "$config_path"/*; do
         [[ ! -L "$item" ]] && continue
@@ -1185,7 +1188,6 @@ activate_profile_symlinks() {
 
     # Create symlinks for all files in target profile (including dotfiles)
     local linked_count=0
-    shopt -s dotglob
     for item in "$profile_dir"/*; do
         [[ ! -e "$item" ]] && continue
         # Skip . and .. directories
