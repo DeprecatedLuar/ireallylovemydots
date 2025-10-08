@@ -41,8 +41,14 @@ snatch_single() {
     local dots_location=$(find_in_dotfiles "$raw_config_name")
     [[ "$dots_location" != "none" ]] && error "'$raw_config_name' already exists in dots repo"
 
+    # Strip leading dot for home files (store without dot in repo)
+    local stored_name="$found_name"
+    if [[ "$type" == "home" ]]; then
+        stored_name=$(strip_dot "$found_name")
+    fi
+
     # Determine destination in dotfiles
-    local dest_path="$DOTFILES/$type/$found_name"
+    local dest_path="$DOTFILES/$type/$stored_name"
 
     # Move to dotfiles
     mv "$source_path" "$dest_path"
@@ -53,9 +59,9 @@ snatch_single() {
     # Auto-commit
     cd "$DOTFILES"
     git add "$dest_path" >/dev/null 2>&1
-    git commit -m "snatch: add $found_name" >/dev/null 2>&1
+    git commit -m "snatch: add $stored_name" >/dev/null 2>&1
 
-    info "snatched $found_name"
+    info "snatched $stored_name"
 }
 
 cmd_snatch() {
@@ -82,12 +88,23 @@ link_single() {
     read type found_name <<< "$result"
     local dots_path="$DOTFILES/$type/$found_name"
 
+    # Strip underscore prefix for symlink target (transparency)
+    local link_name="$found_name"
+    if [[ "$link_name" == _* ]]; then
+        link_name="${link_name#_}"
+    fi
+
+    # Add leading dot for home files (restore original name)
+    if [[ "$type" == "home" ]] && [[ "$link_name" != .* ]]; then
+        link_name=".$link_name"
+    fi
+
     # Determine target path
     local target_path
     if [[ "$type" == "config" ]]; then
-        target_path="$HOME/.config/$found_name"
+        target_path="$HOME/.config/$link_name"
     else
-        target_path="$HOME/$found_name"
+        target_path="$HOME/$link_name"
     fi
 
     # Check if target exists
@@ -118,7 +135,7 @@ link_single() {
         fi
     fi
 
-    success "Linked $found_name"
+    success "Linked $link_name"
 }
 
 cmd_link() {
@@ -134,7 +151,14 @@ cmd_link() {
         for config_path in "$DOTFILES/config"/*; do
             [[ -e "$config_path" ]] || continue
             local name=$(basename "$config_path")
-            local target="$HOME/.config/$name"
+
+            # Strip underscore prefix for symlink target (transparency)
+            local link_name="$name"
+            if [[ "$link_name" == _* ]]; then
+                link_name="${link_name#_}"
+            fi
+
+            local target="$HOME/.config/$link_name"
 
             # Check if already correctly linked
             if [[ -L "$target" ]] && [[ "$(readlink "$target")" == "$config_path" ]]; then
@@ -149,18 +173,18 @@ cmd_link() {
                     rm "$target"
                     mkdir -p "$(dirname "$target")"
                     ln -s "$config_path" "$target"
-                    echo "  Linked $name"
+                    echo "  Linked $link_name"
                     ((linked++)) || true
                 else
                     # Real file/directory - skip with warning
-                    warn "Skipped $name (real file/directory exists)"
+                    warn "Skipped $link_name (real file/directory exists)"
                     ((skipped++)) || true
                 fi
             else
                 # Doesn't exist - create symlink
                 mkdir -p "$(dirname "$target")"
                 ln -s "$config_path" "$target"
-                echo "  Linked $name"
+                echo "  Linked $link_name"
                 ((linked++)) || true
             fi
         done
@@ -169,7 +193,19 @@ cmd_link() {
         for home_path in "$DOTFILES/home"/*; do
             [[ -e "$home_path" ]] || continue
             local name=$(basename "$home_path")
-            local target="$HOME/$name"
+
+            # Strip underscore prefix for symlink target (transparency)
+            local link_name="$name"
+            if [[ "$link_name" == _* ]]; then
+                link_name="${link_name#_}"
+            fi
+
+            # Add leading dot for home files (restore original name)
+            if [[ "$link_name" != .* ]]; then
+                link_name=".$link_name"
+            fi
+
+            local target="$HOME/$link_name"
 
             # Check if already correctly linked
             if [[ -L "$target" ]] && [[ "$(readlink "$target")" == "$home_path" ]]; then
@@ -184,18 +220,18 @@ cmd_link() {
                     rm "$target"
                     mkdir -p "$(dirname "$target")"
                     ln -s "$home_path" "$target"
-                    echo "  Linked $name"
+                    echo "  Linked $link_name"
                     ((linked++)) || true
                 else
                     # Real file/directory - skip with warning
-                    warn "Skipped $name (real file/directory exists)"
+                    warn "Skipped $link_name (real file/directory exists)"
                     ((skipped++)) || true
                 fi
             else
                 # Doesn't exist - create symlink
                 mkdir -p "$(dirname "$target")"
                 ln -s "$home_path" "$target"
-                echo "  Linked $name"
+                echo "  Linked $link_name"
                 ((linked++)) || true
             fi
         done
@@ -274,12 +310,23 @@ eject_single() {
     read type found_name <<< "$result"
     local dots_path="$DOTFILES/$type/$found_name"
 
+    # Strip underscore prefix for target path (transparency)
+    local link_name="$found_name"
+    if [[ "$link_name" == _* ]]; then
+        link_name="${link_name#_}"
+    fi
+
+    # Add leading dot for home files (restore original name)
+    if [[ "$type" == "home" ]] && [[ "$link_name" != .* ]]; then
+        link_name=".$link_name"
+    fi
+
     # Determine target path
     local target_path
     if [[ "$type" == "config" ]]; then
-        target_path="$HOME/.config/$found_name"
+        target_path="$HOME/.config/$link_name"
     else
-        target_path="$HOME/$found_name"
+        target_path="$HOME/$link_name"
     fi
 
     # If symlink exists pointing to dots, remove it
@@ -310,7 +357,7 @@ eject_single() {
     git rm -r "$type/$found_name" >/dev/null 2>&1
     git commit -m "eject: remove $found_name" >/dev/null 2>&1
 
-    echo -e "${PURPLE}→ ejected $found_name${NC}"
+    echo -e "${PURPLE}→ ejected $link_name${NC}"
 }
 
 cmd_eject() {
@@ -673,36 +720,55 @@ cmd_status() {
     for config_path in "$DOTFILES/config"/*; do
         [[ -e "$config_path" ]] || continue
         local name=$(basename "$config_path")
-        local target="$HOME/.config/$name"
+
+        # Strip underscore prefix for display (transparency)
+        local display_name="$name"
+        if [[ "$display_name" == _* ]]; then
+            display_name="${display_name#_}"
+        fi
+
+        local target="$HOME/.config/$display_name"
 
         if [[ -L "$target" ]] && [[ "$(readlink "$target")" == "$config_path" ]]; then
-            echo -e "${GREEN}✓ $name${NC}"
+            echo -e "${GREEN}✓ $display_name${NC}"
         elif [[ -L "$target" ]]; then
-            echo -e "${YELLOW}! $name${NC}"
+            echo -e "${YELLOW}! $display_name${NC}"
         elif [[ -d "$target" ]]; then
-            echo -e "${YELLOW}! $name ${YELLOW}[DIR]${NC} (directory exists, not linked)"
+            echo -e "${YELLOW}! $display_name ${YELLOW}[DIR]${NC} (directory exists, not linked)"
         elif [[ -f "$target" ]]; then
-            echo -e "${YELLOW}! $name ${YELLOW}[FILE]${NC} (file exists, not linked)"
+            echo -e "${YELLOW}! $display_name ${YELLOW}[FILE]${NC} (file exists, not linked)"
         else
-            echo -e "${PURPLE}✗ $name${NC}"
+            echo -e "${PURPLE}✗ $display_name${NC}"
         fi
     done
 
     for home_path in "$DOTFILES/home"/*; do
         [[ -e "$home_path" ]] || continue
         local name=$(basename "$home_path")
-        local target="$HOME/$name"
+
+        # Strip underscore prefix for display (transparency)
+        local display_name="$name"
+        if [[ "$display_name" == _* ]]; then
+            display_name="${display_name#_}"
+        fi
+
+        # Determine actual filesystem target (with dot)
+        local target_name="$display_name"
+        if [[ "$target_name" != .* ]]; then
+            target_name=".$target_name"
+        fi
+        local target="$HOME/$target_name"
 
         if [[ -L "$target" ]] && [[ "$(readlink "$target")" == "$home_path" ]]; then
-            echo -e "${GREEN}✓ $name${NC}"
+            echo -e "${GREEN}✓ $display_name${NC}"
         elif [[ -L "$target" ]]; then
-            echo -e "${YELLOW}! $name${NC}"
+            echo -e "${YELLOW}! $display_name${NC}"
         elif [[ -d "$target" ]]; then
-            echo -e "${YELLOW}! $name [DIR]${NC} (directory exists, not linked)"
+            echo -e "${YELLOW}! $display_name [DIR]${NC} (directory exists, not linked)"
         elif [[ -f "$target" ]]; then
-            echo -e "${YELLOW}! $name [FILE]${NC} (file exists, not linked)"
+            echo -e "${YELLOW}! $display_name [FILE]${NC} (file exists, not linked)"
         else
-            echo -e "${PURPLE}✗ $name${NC}"
+            echo -e "${PURPLE}✗ $display_name${NC}"
         fi
     done
 }
@@ -791,17 +857,35 @@ check_dotfiles_repo() {
         cd "$DOTFILES"
         git init >/dev/null 2>&1
         mkdir -p config home
+        ensure_gitignore
     elif [[ ! -d "$DOTFILES/.git" ]]; then
         # Directory exists but not a git repo
         cd "$DOTFILES"
         git init >/dev/null 2>&1
         mkdir -p config home
+        ensure_gitignore
     fi
 }
 
 ensure_dotfiles_structure() {
     mkdir -p "$DOTFILES/config"
     mkdir -p "$DOTFILES/home"
+    ensure_gitignore
+}
+
+ensure_gitignore() {
+    local gitignore="$DOTFILES/.gitignore"
+
+    # Create if doesn't exist
+    if [[ ! -f "$gitignore" ]]; then
+        echo "_*" > "$gitignore"
+        return
+    fi
+
+    # Append if pattern missing
+    if ! grep -q "^_\*$" "$gitignore"; then
+        echo "_*" >> "$gitignore"
+    fi
 }
 
 # (.nvim -> nvim)
@@ -863,17 +947,28 @@ find_in_dotfiles() {
     local name="$1"
     local stripped=$(strip_dot "$name")
 
-    # Check both with and without dots
-    if [[ -e "$DOTFILES/config/$stripped" ]]; then
-        echo "config $stripped"
-        return
-    fi
-
+    # Check config/ - try: name, stripped, _name, _stripped
     if [[ -e "$DOTFILES/config/$name" ]]; then
         echo "config $name"
         return
     fi
 
+    if [[ -e "$DOTFILES/config/$stripped" ]]; then
+        echo "config $stripped"
+        return
+    fi
+
+    if [[ -e "$DOTFILES/config/_$name" ]]; then
+        echo "config _$name"
+        return
+    fi
+
+    if [[ -e "$DOTFILES/config/_$stripped" ]]; then
+        echo "config _$stripped"
+        return
+    fi
+
+    # Check home/ - try: name, stripped, _name, _stripped
     if [[ -e "$DOTFILES/home/$name" ]]; then
         echo "home $name"
         return
@@ -881,6 +976,16 @@ find_in_dotfiles() {
 
     if [[ -e "$DOTFILES/home/$stripped" ]]; then
         echo "home $stripped"
+        return
+    fi
+
+    if [[ -e "$DOTFILES/home/_$name" ]]; then
+        echo "home _$name"
+        return
+    fi
+
+    if [[ -e "$DOTFILES/home/_$stripped" ]]; then
+        echo "home _$stripped"
         return
     fi
 
@@ -1078,16 +1183,27 @@ activate_profile_symlinks() {
         [[ "$target" == profiles/* ]] && rm "$item"
     done
 
-    # Create symlinks for all files in target profile
+    # Create symlinks for all files in target profile (including dotfiles)
     local linked_count=0
+    shopt -s dotglob
     for item in "$profile_dir"/*; do
         [[ ! -e "$item" ]] && continue
+        # Skip . and .. directories
         local filename=$(basename "$item")
+        [[ "$filename" == "." ]] || [[ "$filename" == ".." ]] && continue
         local link_target="$config_path/$filename"
 
         # Check if real file exists at target (conflict)
         if [[ -e "$link_target" ]] && [[ ! -L "$link_target" ]]; then
-            error "Cannot link $filename: real file exists at $link_target\nRemove manually: rm $link_target"
+            echo -e "${YELLOW}Warning: Real file exists at $link_target${NC}"
+            echo -n "Overwrite with profile version? [y/N]: "
+            read -r response
+            if [[ "$response" =~ ^[Yy]$ ]]; then
+                rm "$link_target"
+            else
+                echo -e "${YELLOW}Skipping $filename${NC}"
+                continue
+            fi
         fi
 
         # Create symlink
@@ -1098,6 +1214,7 @@ activate_profile_symlinks() {
     # Error if NO files were linked (empty profile)
     [[ $linked_count -eq 0 ]] && error "Profile '$profile_name' has no files"
 
+    shopt -u dotglob
     return 0
 }
 
@@ -1252,6 +1369,8 @@ profile_switch() {
     local config_path="$1"
     local profile_name="$2"
     local config_name=$(basename "$config_path")
+
+    ensure_gitignore
 
     # Activate symlinks to target profile
     activate_profile_symlinks "$config_path" "$profile_name"
