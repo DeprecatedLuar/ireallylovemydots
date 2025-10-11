@@ -15,8 +15,7 @@ COMPLETION_DIR="$HOME/.local/share/bash-completion/completions"
 
 # Custom messages override
 MSG_REMOTE_INSTALL="Downloading from GitHub..."
-MSG_INSTALL_COMPLETE="Whohoo, I guess we're finished. Try dots --help and hope it works"
-MSG_TRY_COMMAND="Try running: ${SCRIPT_FILES[0]} --help. Or not, you do you buddy"
+MSG_INSTALL_COMPLETE="Yippie!! I guess we're finished. Try dots --help and hope it works"
 NEXT_STEPS=(
     "Run: dots setup <username/repo> to connect your GitHub"
     "Or:  dots snatch <config> to start tracking configs locally"
