@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Quick update checker - executed via curl, no dependencies on main script
 
 REPO="DeprecatedLuar/ireallylovemydots"

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # ===== CONFIGURATION =====
 PROJECT_NAME="I Really Love My Dots"
