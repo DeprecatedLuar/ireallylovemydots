@@ -15,40 +15,40 @@ COMPLETION_DIR="$HOME/.local/share/bash-completion/completions"
 
 # Custom messages override
 MSG_REMOTE_INSTALL="Downloading from GitHub..."
-MSG_INSTALL_COMPLETE="Yippie!! I guess we're finished. Try dots --help and hope it works"
+MSG_INSTALL_COMPLETE="Yippie!! I guess we're finished."
+MSG_TRY_COMMAND="Try running: ${SCRIPT_FILES[0]} --help"
+MSG_NO_CURL_WGET="Neither curl nor wget found. Please install one of them first."
 NEXT_STEPS=(
-    "Run: dots setup <username/repo> to connect your GitHub"
+    " Try dots --help and hope it works"
+    "Then: dots setup <username/repo> to connect your GitHub"
     "Or:  dots snatch <config> to start tracking configs locally"
 )
-MSG_NO_CURL_WGET="Neither curl nor wget found. Please install one of them first."
 
-
-ASCII_ART='⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-                .     .  . ..                    
-                @@@@@@@@@@@@@@=  ..              
-            @@@@@@@@@@@@@@@@@@@@@@.              
-         @@@@@@@@@@@@@@@@@@@@@@@@@@@..           
-       @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@           
-      @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
-     @@@@@@@@@@@@@@@@@@@@@@@*...@@@@@@@@         
-     @@@@@@-     ..:@@@@@@:      . @@@@@         
-     @@@@@@  @@     -@@@@:  @@*    @@@@@*        
-     @@@@@@   .      @@@@* . .  .  @@@@@@        
-    +@@@@@@@ .      @@@@@@:      *@@@@@@@        
-   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@         
-      @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@          
-       +@@@@@@@@@@@@. . . #@@@@@@@@@@            
-        .:@@@@@@@@@@@@@@@@@@@@@@@@+.             
-            @@@@@@@@@@@@@@@@:.    . .            
-              .  .      ..   @@@@@@@@@@@@.       
-                 @@@@@@@@@@@@@@@@@@@@@@@@@       
-                +@@@@@@@@@@@@@@@@@@@@@@@@@.      
-                 @@@@@@@@@@@@@@@@@@@@@@@@@       
-               . @@@@@@: *@@@@%. .   @@@@@.      
-                 @@@@@@* -@@@@.@@@*  @@@@@.      
-                 .@@@@@@ +@@@@. @@=  @@@@+       
-                 .@@@@@@  @@@@.  -    @@%        
-                 . @@@@    @@@         .         
+ASCII_ART='                .     .  . ..
+                @@@@@@@@@@@@@@=  ..
+            @@@@@@@@@@@@@@@@@@@@@@.
+         @@@@@@@@@@@@@@@@@@@@@@@@@@@..
+       @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+      @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+     @@@@@@@@@@@@@@@@@@@@@@@*...@@@@@@@@
+     @@@@@@-     ..:@@@@@@:      . @@@@@
+     @@@@@@  @@     -@@@@:  @@*    @@@@@*
+     @@@@@@   .      @@@@* . .  .  @@@@@@
+    +@@@@@@@ .      @@@@@@:      *@@@@@@@
+   .@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+      @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+       +@@@@@@@@@@@@. . . #@@@@@@@@@@
+        .:@@@@@@@@@@@@@@@@@@@@@@@@+.
+            @@@@@@@@@@@@@@@@:.    . .
+              .  .      ..   @@@@@@@@@@@@.
+                 @@@@@@@@@@@@@@@@@@@@@@@@@
+                +@@@@@@@@@@@@@@@@@@@@@@@@@.
+                 @@@@@@@@@@@@@@@@@@@@@@@@@
+               . @@@@@@: *@@@@%. .   @@@@@.
+                 @@@@@@* -@@@@.@@@*  @@@@@.
+                 .@@@@@@ +@@@@. @@=  @@@@+
+                 .@@@@@@  @@@@.  -    @@%
+                 . @@@@    @@@         .
                   .          .                   ' # ASCII art (leave empty to disable)
 
 # ===== END CONFIGURATION =====
@@ -208,19 +208,142 @@ detect_distro() {
     fi
 }
 
+detect_distro_family() {
+    local distro="$1"
+
+    case "$distro" in
+        nixos)
+            echo "nixos"
+            ;;
+        ubuntu | debian | pop | linuxmint | raspbian)
+            echo "debian"
+            ;;
+        arch | manjaro | endeavouros)
+            echo "arch"
+            ;;
+        fedora | rhel | centos | rocky | alma)
+            echo "rhel"
+            ;;
+        alpine)
+            echo "alpine"
+            ;;
+        gentoo)
+            echo "gentoo"
+            ;;
+        opensuse* | sles)
+            echo "suse"
+            ;;
+        *)
+            echo "unknown"
+            ;;
+    esac
+}
+
+detect_distro_version() {
+    local os="$1"
+
+    if [[ "$os" != "linux" ]]; then
+        echo ""
+        return
+    fi
+
+    parse_os_release "VERSION_ID"
+}
+
+detect_kernel() {
+    uname -r
+}
+
 get_system_info() {
-    local os arch distro
+    local os arch distro distro_family distro_version kernel
+
     os=$(detect_os)
     arch=$(detect_arch)
     distro=$(detect_distro "$os")
+    distro_family=$(detect_distro_family "$distro")
+    distro_version=$(detect_distro_version "$os")
+    kernel=$(detect_kernel)
 
-    # Return as space-separated values
-    echo "$os $arch $distro"
+    cat <<EOF
+{
+  "os": "$os",
+  "arch": "$arch",
+  "distro": "$distro",
+  "distro_family": "$distro_family",
+  "distro_version": "$distro_version",
+  "kernel": "$kernel"
+}
+EOF
 }
 
 # ===========================================
 # PATH MANAGEMENT LIBRARY
 # ===========================================
+
+ensure_in_path() {
+    local install_dir="$1"
+
+    # Check if already in PATH
+    if [[ ":$PATH:" == *":$install_dir:"* ]]; then
+        return 0
+    fi
+
+    echo ""
+    warn "$install_dir is not in your PATH"
+    echo ""
+
+    # Detect OS
+    local system_info=$(get_system_info)
+    local distro=$(echo "$system_info" | grep -o '"distro":"[^"]*"' | cut -d'"' -f4)
+
+    # NixOS special handling
+    if [[ "$distro" == "nixos" ]]; then
+        handle_nixos_path "$install_dir"
+        return 0
+    fi
+
+    # Detect shell
+    local user_shell=$(basename "$SHELL")
+    local rc_file=""
+
+    case "$user_shell" in
+        bash)
+            rc_file="$HOME/.bashrc"
+            ;;
+        zsh)
+            rc_file="$HOME/.zshrc"
+            ;;
+        fish)
+            rc_file="$HOME/.config/fish/config.fish"
+            ;;
+        *)
+            warn "Unknown shell: $user_shell"
+            info "Add this to your shell config manually:"
+            echo "  export PATH=\"$install_dir:\$PATH\""
+            return 1
+            ;;
+    esac
+
+    # Create rc file if it doesn't exist
+    if [[ ! -f "$rc_file" ]]; then
+        touch "$rc_file"
+    fi
+
+    # Check if PATH export already exists
+    if grep -q "$install_dir" "$rc_file" 2>/dev/null; then
+        info "PATH export already in $rc_file"
+        info "Reload your shell: source $rc_file"
+        return 0
+    fi
+
+    # Add to rc file
+    echo "" >> "$rc_file"
+    echo "# Added by installer" >> "$rc_file"
+    echo "export PATH=\"$install_dir:\$PATH\"" >> "$rc_file"
+
+    success "Added $install_dir to PATH in $rc_file"
+    info "Reload your shell: source $rc_file"
+}
 
 handle_nixos_path() {
     local install_dir="$1"
@@ -272,79 +395,14 @@ handle_nixos_path() {
     esac
 }
 
-ensure_in_path() {
-    local install_dir="$1"
-
-    # Check if already in PATH
-    if [[ ":$PATH:" == *":$install_dir:"* ]]; then
-        return 0
-    fi
-
-    echo ""
-    warn "$install_dir is not in your PATH"
-    echo ""
-
-    # Get system info
-    local system_info=$(get_system_info)
-    local distro=$(echo "$system_info" | awk '{print $3}')
-
-    # NixOS special handling
-    if [[ "$distro" == "nixos" ]]; then
-        handle_nixos_path "$install_dir"
-        return 0
-    fi
-
-    # Detect shell
-    local user_shell=$(basename "$SHELL")
-    local rc_file=""
-
-    case "$user_shell" in
-        bash)
-            rc_file="$HOME/.bashrc"
-            ;;
-        zsh)
-            rc_file="$HOME/.zshrc"
-            ;;
-        fish)
-            rc_file="$HOME/.config/fish/config.fish"
-            ;;
-        *)
-            warn "Unknown shell: $user_shell"
-            info "Add this to your shell config manually:"
-            echo "  export PATH=\"$install_dir:\$PATH\""
-            return 1
-            ;;
-    esac
-
-    # Create rc file if it doesn't exist
-    if [[ ! -f "$rc_file" ]]; then
-        touch "$rc_file"
-    fi
-
-    # Check if PATH export already exists
-    if grep -q "$install_dir" "$rc_file" 2>/dev/null; then
-        info "PATH export already in $rc_file"
-        info "Reload your shell: source $rc_file"
-        return 0
-    fi
-
-    # Add to rc file
-    echo "" >> "$rc_file"
-    echo "# Added by installer" >> "$rc_file"
-    echo "export PATH=\"$install_dir:\$PATH\"" >> "$rc_file"
-
-    success "Added $install_dir to PATH in $rc_file"
-    info "Reload your shell: source $rc_file"
-}
-
 # ===========================================
-# INSTALLATION LOGIC
+# MAIN INSTALLATION LOGIC
 # ===========================================
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || dirname "$0")"
 
-separator "Installing $PROJECT_NAME"
+# separator "Installing $PROJECT_NAME"
 
 # Detect if running from cloned repo or remote install
 LOCAL_INSTALL=false
@@ -414,23 +472,13 @@ ensure_in_path "$INSTALL_DIR"
 echo ""
 success "$MSG_INSTALL_COMPLETE"
 
-# Show next steps
-if [ ${#COMPLETION_FILES[@]} -gt 0 ]; then
-    info "Bash completions installed at $COMPLETION_DIR"
-    info "Reload your shell to activate: source ~/.bashrc"
-fi
-
-# Show custom next steps or default message
-if [ ${#NEXT_STEPS[@]} -gt 0 ]; then
-    for step in "${NEXT_STEPS[@]}"; do
-        info "$step"
-    done
-else
-    info "$MSG_TRY_COMMAND"
-fi
-
 # Show ASCII art if configured
 if [ -n "$ASCII_ART" ]; then
     echo ""
     echo "$ASCII_ART"
 fi
+
+# Show next steps
+for step in "${NEXT_STEPS[@]}"; do
+    echo "$step"
+done
