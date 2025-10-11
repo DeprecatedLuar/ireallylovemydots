@@ -19,9 +19,9 @@ MSG_INSTALL_COMPLETE="Yippie!! I guess we're finished."
 MSG_TRY_COMMAND="Try running: ${SCRIPT_FILES[0]} --help"
 MSG_NO_CURL_WGET="Neither curl nor wget found. Please install one of them first."
 NEXT_STEPS=(
-    " Try dots --help and hope it works"
-    "Then: dots setup <username/repo> to connect your GitHub"
-    "Or:  dots snatch <config> to start tracking configs locally"
+    " - Try dots --help and hope it works"
+    " - Then: dots setup <username/repo> to connect your GitHub"
+    " - Or:  dots snatch <config> to start tracking configs locally"
 )
 
 ASCII_ART='                .     .  . ..

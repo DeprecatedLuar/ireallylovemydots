@@ -513,7 +513,11 @@ cmd_push() {
         info "Committed pending changes"
     fi
 
-    git push
+    # Get current branch name
+    local current_branch=$(git branch --show-current)
+
+    # Push with upstream tracking (idempotent - safe even if already set)
+    git push -u origin "$current_branch"
 
     # Silent check for dots tool updates
     notify_if_updates
