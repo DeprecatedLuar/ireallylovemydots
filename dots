@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="v1.1.0"
+VERSION="v1.4.0"
 DOTFILES="$HOME/.config/dots"
 TRASH="$HOME/.local/share/Trash/files"
 
@@ -55,11 +55,6 @@ snatch_single() {
 
     # Create symlink
     ln -s "$dest_path" "$source_path"
-
-    # Auto-commit
-    cd "$DOTFILES"
-    git add "$dest_path" >/dev/null 2>&1
-    git commit -m "snatch: add $stored_name" >/dev/null 2>&1
 
     info "snatched $stored_name"
 }
@@ -351,11 +346,6 @@ eject_single() {
 
     # Move from dots to target location
     mv "$dots_path" "$target_path"
-
-    # Remove from git and commit
-    cd "$DOTFILES"
-    git rm -r "$type/$found_name" >/dev/null 2>&1
-    git commit -m "eject: remove $found_name" >/dev/null 2>&1
 
     echo -e "${PURPLE}→ ejected $link_name${NC}"
 }
@@ -1283,11 +1273,6 @@ profile_track() {
     # Create or update .profiled
     add_to_profiled "$config_path" "$@"
 
-    # Git commit
-    cd "$DOTFILES"
-    git add "$profiled" >/dev/null 2>&1
-    git commit -m "profile: track $(echo $@ | tr ' ' ', ') in $config_name" >/dev/null 2>&1
-
     success "Tracking $(echo $@ | tr ' ' ', ') in $config_name"
 }
 
@@ -1356,12 +1341,6 @@ profile_init() {
         # Don't create symlinks - keep current profile active
     fi
 
-    # Git commit
-    cd "$DOTFILES"
-    git add "$profile_dir" >/dev/null 2>&1
-    [[ -f "$config_path/.gitignore" ]] && git add "$config_path/.gitignore" >/dev/null 2>&1
-    git commit -m "profile: init $profile_name for $config_name" >/dev/null 2>&1
-
     success "Created profile '$profile_name' for $config_name"
 }
 
@@ -1408,15 +1387,9 @@ profile_rm() {
     local trash_path="$TRASH/${config_name}_${profile_name}"
     [[ -e "$trash_path" ]] && trash_path="$TRASH/${config_name}_${profile_name}.$(date +%s)"
 
-    info "Moving $profile_dir → $trash_path"
     mv "$profile_dir" "$trash_path"
 
-    # Git commit
-    cd "$DOTFILES"
-    git add -A >/dev/null 2>&1
-    git commit -m "profile: remove $profile_name from $config_name" >/dev/null 2>&1
-
-    success "Deleted profile '$profile_name' from $config_name"
+    echo -e "${PURPLE}→ Deleted profile '$profile_name' from $config_name${NC}"
 }
 
 # Untrack files from profiling
@@ -1448,11 +1421,6 @@ profile_untrack() {
             mv "$gitignore.tmp" "$gitignore"
         fi
     done
-
-    # Git commit
-    cd "$DOTFILES"
-    git add "$config_path/.profiled" "$config_path/.gitignore" "$config_path" >/dev/null 2>&1
-    git commit -m "profile: untrack $(echo $@ | tr ' ' ', ') from $config_name" >/dev/null 2>&1
 
     success "Untracked $(echo $@ | tr ' ' ', ') from $config_name"
 }
