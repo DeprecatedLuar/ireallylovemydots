@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="v1.5.1"
+VERSION="v1.5.2"
 DOTFILES="$HOME/.config/dots"
 TRASH="$HOME/.local/share/Trash/files"
 
@@ -679,20 +679,24 @@ cmd_setup() {
             if [[ -n "$remote_branch" ]]; then
                 info "Syncing to remote branch '$remote_branch'..."
 
-                # Rename local branch to match (if different)
-                local current_branch=$(git branch --show-current)
-                if [[ -n "$current_branch" ]] && [[ "$current_branch" != "$remote_branch" ]]; then
-                    git branch -M "$remote_branch" 2>/dev/null || true
-                elif [[ -z "$current_branch" ]]; then
-                    # No local branch yet (no commits)
-                    git checkout -b "$remote_branch" 2>/dev/null || true
+                # Check if local repo has any commits
+                if ! git rev-parse HEAD >/dev/null 2>&1; then
+                    # No local commits - checkout remote branch directly with tracking
+                    git checkout -b "$remote_branch" --track "origin/$remote_branch" 2>/dev/null
+                else
+                    # Local commits exist - rename branch if needed
+                    local current_branch=$(git branch --show-current)
+                    if [[ -n "$current_branch" ]] && [[ "$current_branch" != "$remote_branch" ]]; then
+                        git branch -M "$remote_branch" 2>/dev/null || true
+                    fi
+
+                    # Set up tracking
+                    git branch --set-upstream-to=origin/$remote_branch "$remote_branch" 2>/dev/null || true
+
+                    # Pull the content
+                    git pull
                 fi
 
-                # Set up tracking
-                git branch --set-upstream-to=origin/$remote_branch "$remote_branch" 2>/dev/null || true
-
-                # Pull the content
-                git pull
                 success "Synced dotfiles from remote"
             else
                 info "Remote configured. Run 'dots push' to push your dotfiles."
