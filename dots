@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="v1.4.0"
+VERSION="v1.5.0"
 DOTFILES="$HOME/.config/dots"
 TRASH="$HOME/.local/share/Trash/files"
 
@@ -812,6 +812,7 @@ Examples:
 
 Profile System (Multi-variant configs):
   dots kitty track kitty.conf      Mark files for profiling
+  dots kitty snatch kitty.conf     Track and copy to all existing profiles
   dots kitty init work             Create profile 'work' (copies from active)
   dots kitty init home             Create another profile
   dots kitty list                  Show available profiles
@@ -1147,7 +1148,7 @@ get_current_profile() {
 # Returns: 0 if valid, 1 if invalid
 validate_profile_name() {
     local name="$1"
-    local reserved=("track" "init" "list" "rm" "untrack" "flatten")
+    local reserved=("track" "snatch" "init" "list" "rm" "untrack" "flatten")
 
     [[ -z "$name" ]] && return 1
     [[ "$name" == *"/"* ]] && return 1
@@ -1245,12 +1246,15 @@ cmd_profile_dispatch() {
         untrack)
             profile_untrack "$config_path" "$@"
             ;;
+        snatch)
+            profile_snatch "$config_path" "$@"
+            ;;
         flatten)
             profile_flatten "$config_path"
             ;;
         "")
             # No subcommand - show help
-            error "Usage: dots $config_name <subcommand>\n\nSubcommands:\n  track <files>     Mark files for profiling\n  init <name>       Create profile\n  list              List profiles\n  rm <name>         Delete profile\n  untrack <files>   Stop tracking files\n  flatten           Remove profile system"
+            error "Usage: dots $config_name <subcommand>\n\nSubcommands:\n  track <files>     Mark files for profiling\n  snatch <files>    Track files and copy to all profiles\n  init <name>       Create profile\n  list              List profiles\n  rm <name>         Delete profile\n  untrack <files>   Stop tracking files\n  flatten           Remove profile system"
             ;;
         *)
             # Assume it's a profile name (switch command)
@@ -1280,6 +1284,51 @@ profile_track() {
     success "Tracking $(echo $@ | tr ' ' ', ') in $config_name"
 }
 
+# Snatch files to all profiles (track + copy to all existing profiles)
+# Args: $1 = config path, $2+ = files to snatch
+profile_snatch() {
+    local config_path="$1"
+    shift
+    [[ -z "$1" ]] && error "Usage: dots $(basename "$config_path") snatch <file> [files...]"
+
+    local config_name=$(basename "$config_path")
+    local profiles_dir="$config_path/profiles"
+
+    # Validate files exist in config dir
+    for file in "$@"; do
+        [[ ! -e "$config_path/$file" ]] && error "File '$file' not found in $config_name/"
+    done
+
+    # Track files first
+    add_to_profiled "$config_path" "$@"
+
+    # Check if profiles exist
+    if [[ ! -d "$profiles_dir" ]] || [[ -z "$(ls -A "$profiles_dir" 2>/dev/null)" ]]; then
+        warn "No profiles exist yet. Files tracked but not copied."
+        info "Create a profile with: dots $config_name init <profile-name>"
+        return 0
+    fi
+
+    # Copy to all existing profiles
+    local profile_count=0
+    for profile_path in "$profiles_dir"/*; do
+        [[ ! -d "$profile_path" ]] && continue
+        local profile_name=$(basename "$profile_path")
+
+        for file in "$@"; do
+            # Skip if already exists in profile
+            [[ -e "$profile_path/$file" ]] && continue
+
+            # Copy to profile
+            cp -r "$config_path/$file" "$profile_path/"
+        done
+
+        ((profile_count++)) || true
+    done
+
+    success "Snatched $(echo $@ | tr ' ' ', ') to $profile_count profile(s)"
+}
+
 # Initialize profile (create first one or copy from active)
 # Args: $1 = config path, $2 = profile name
 profile_init() {
@@ -1301,8 +1350,29 @@ profile_init() {
     local profile_dir="$profiles_dir/$profile_name"
     local files=$(read_profiled "$config_path")
 
-    # Check if profile already exists
-    [[ -d "$profile_dir" ]] && error "Profile '$profile_name' already exists"
+    # Check if profile already exists - SMART SYNC MODE
+    if [[ -d "$profile_dir" ]]; then
+        # Profile exists - sync missing files from root
+        local added=0
+        while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+
+            # Skip if already in profile
+            [[ -e "$profile_dir/$file" ]] && continue
+
+            # Check if exists in root as real file (not symlink)
+            local source="$config_path/$file"
+            if [[ -e "$source" ]] && [[ ! -L "$source" ]]; then
+                # Copy to profile
+                cp -r "$source" "$profile_dir/"
+                info "Adding $file to profile '$profile_name'"
+                ((added++)) || true
+            fi
+        done < "$profiled"
+
+        # Silent exit if nothing added
+        return 0
+    fi
 
     # Check if this is the first profile (profiles/ doesn't exist or is empty)
     local is_first_profile=false
@@ -1314,7 +1384,8 @@ profile_init() {
 
     if [[ "$is_first_profile" == "true" ]]; then
         # First profile - move files from root
-        for file in $files; do
+        while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
             local source="$config_path/$file"
             if [[ -L "$source" ]]; then
                 # Symlink - dereference and copy actual content
@@ -1324,7 +1395,7 @@ profile_init() {
                 # Real file/dir - move it
                 mv "$source" "$profile_dir/"
             fi
-        done
+        done < "$profiled"
 
         # Setup .gitignore - ignore symlinks at root (not profiles/)
         local gitignore="$config_path/.gitignore"
@@ -1338,10 +1409,11 @@ profile_init() {
     else
         # Not first profile - copy from first existing profile
         local first_existing=$(ls "$profiles_dir" | head -1)
-        for file in $files; do
+        while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
             local source="$profiles_dir/$first_existing/$file"
             [[ -e "$source" ]] && cp -r "$source" "$profile_dir/"
-        done
+        done < "$profiled"
         # Don't create symlinks - keep current profile active
     fi
 
