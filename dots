@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="v1.5.0"
+VERSION="v1.5.1"
 DOTFILES="$HOME/.config/dots"
 TRASH="$HOME/.local/share/Trash/files"
 
@@ -669,7 +669,37 @@ cmd_setup() {
         git push -u origin main
         success "Pushed to remote"
     else
-        info "Remote configured. Run 'dots push' to push your dotfiles."
+        # Remote exists - sync with it
+        info "Fetching from remote..."
+        if git fetch origin >/dev/null 2>&1; then
+            # Detect remote default branch
+            local remote_branch=$(git ls-remote --symref origin HEAD 2>/dev/null | head -1 | awk '{print $2}' | sed 's|refs/heads/||')
+
+            # If remote has a default branch, sync to it
+            if [[ -n "$remote_branch" ]]; then
+                info "Syncing to remote branch '$remote_branch'..."
+
+                # Rename local branch to match (if different)
+                local current_branch=$(git branch --show-current)
+                if [[ -n "$current_branch" ]] && [[ "$current_branch" != "$remote_branch" ]]; then
+                    git branch -M "$remote_branch" 2>/dev/null || true
+                elif [[ -z "$current_branch" ]]; then
+                    # No local branch yet (no commits)
+                    git checkout -b "$remote_branch" 2>/dev/null || true
+                fi
+
+                # Set up tracking
+                git branch --set-upstream-to=origin/$remote_branch "$remote_branch" 2>/dev/null || true
+
+                # Pull the content
+                git pull
+                success "Synced dotfiles from remote"
+            else
+                info "Remote configured. Run 'dots push' to push your dotfiles."
+            fi
+        else
+            info "Remote configured. Run 'dots push' to push your dotfiles."
+        fi
     fi
 }
 
