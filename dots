@@ -1379,6 +1379,20 @@ profile_snatch() {
         ((profile_count++)) || true
     done
 
+    # Get active profile and convert real files to symlinks
+    local active_profile=$(get_current_profile "$config_path")
+    if [[ -n "$active_profile" ]]; then
+        for file in "$@"; do
+            local file_at_root="$config_path/$file"
+
+            # If it's a real file (not already a symlink), convert to symlink
+            if [[ -e "$file_at_root" ]] && [[ ! -L "$file_at_root" ]]; then
+                rm -rf "$file_at_root"
+                ln -s "profiles/$active_profile/$file" "$file_at_root"
+            fi
+        done
+    fi
+
     success "Snatched $(echo $@ | tr ' ' ', ') to $profile_count profile(s)"
 }
 
