@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="v1.7.0"
+VERSION="v1.7.1"
 DOTFILES="$HOME/.config/dots"
 TRASH="$HOME/.local/share/Trash/files"
 
