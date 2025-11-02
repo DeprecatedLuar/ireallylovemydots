@@ -2,7 +2,7 @@
 
 set -e
 
-VERSION="v1.6.0"
+VERSION="v1.7.0"
 DOTFILES="$HOME/.config/dots"
 TRASH="$HOME/.local/share/Trash/files"
 
@@ -857,8 +857,10 @@ Examples:
 Profile System (Multi-variant configs):
   dots kitty track kitty.conf      Mark files for profiling
   dots kitty snatch kitty.conf     Track and copy to all existing profiles
-  dots kitty init work             Create profile 'work' (copies from active)
-  dots kitty init home             Create another profile
+  dots kitty init work             Create empty profile 'work'
+  dots kitty init work             Update 'work' with real files from root
+  dots kitty cp work home          Copy profile 'work' to 'home'
+  dots kitty eject work            Move 'work' contents to root, delete profile
   dots kitty list                  Show available profiles
   dots kitty work                  Switch to 'work' profile
   dots kitty rm home               Delete 'home' profile
@@ -1193,7 +1195,7 @@ get_current_profile() {
 # Returns: 0 if valid, 1 if invalid
 validate_profile_name() {
     local name="$1"
-    local reserved=("track" "snatch" "init" "list" "rm" "untrack" "flatten")
+    local reserved=("track" "snatch" "init" "list" "rm" "cp" "untrack" "flatten" "eject")
 
     [[ -z "$name" ]] && return 1
     [[ "$name" == *"/"* ]] && return 1
@@ -1288,18 +1290,24 @@ cmd_profile_dispatch() {
         rm)
             profile_rm "$config_path" "$@"
             ;;
+        cp)
+            profile_cp "$config_path" "$@"
+            ;;
         untrack)
             profile_untrack "$config_path" "$@"
             ;;
         snatch)
             profile_snatch "$config_path" "$@"
             ;;
+        eject)
+            profile_eject "$config_path" "$@"
+            ;;
         flatten)
             profile_flatten "$config_path"
             ;;
         "")
             # No subcommand - show help
-            error "Usage: dots $config_name <subcommand>\n\nSubcommands:\n  track <files>     Mark files for profiling\n  snatch <files>    Track files and copy to all profiles\n  init <name>       Create profile\n  list              List profiles\n  rm <name>         Delete profile\n  untrack <files>   Stop tracking files\n  flatten           Remove profile system"
+            error "Usage: dots $config_name <subcommand>\n\nSubcommands:\n  track <files>     Mark files for profiling\n  snatch <files>    Track files and copy to all profiles\n  init <name>       Create empty profile (or update existing from root)\n  eject <name>      Move profile contents to root and delete profile\n  list              List profiles\n  rm <name>         Delete profile\n  cp <src> <dest>   Copy profile\n  untrack <files>   Stop tracking files\n  flatten           Remove profile system"
             ;;
         *)
             # Assume it's a profile name (switch command)
@@ -1374,8 +1382,7 @@ profile_snatch() {
     success "Snatched $(echo $@ | tr ' ' ', ') to $profile_count profile(s)"
 }
 
-# Initialize profile (create first one or copy from active)
-# Args: $1 = config path, $2 = profile name
+# NEW SMARTER profile_init - overwrites existing profiles with root files
 profile_init() {
     local config_path="$1"
     local profile_name="$2"
@@ -1389,80 +1396,51 @@ profile_init() {
     [[ ! -f "$profiled" ]] && error "No tracked files in $config_name\nRun: dots $config_name track <files>"
 
     # Validate profile name
-    validate_profile_name "$profile_name" || error "Invalid profile name '$profile_name'\nReserved words: track, init, list, rm, untrack, flatten\nAvoid: /, .."
+    validate_profile_name "$profile_name" || error "Invalid profile name '$profile_name'\nReserved words: track, init, list, rm, untrack, flatten, eject\nAvoid: /, .."
 
     local profiles_dir="$config_path/profiles"
     local profile_dir="$profiles_dir/$profile_name"
-    local files=$(read_profiled "$config_path")
 
-    # Check if profile already exists - SMART SYNC MODE
+    # CASE 1: Profile already exists - OVERWRITE with real files from root
     if [[ -d "$profile_dir" ]]; then
-        # Profile exists - sync missing files from root
-        local added=0
+        local updated=0
         while IFS= read -r file; do
             [[ -z "$file" ]] && continue
 
-            # Skip if already in profile
-            [[ -e "$profile_dir/$file" ]] && continue
-
-            # Check if exists in root as real file (not symlink)
             local source="$config_path/$file"
+            # Only copy if it's a real file at root (not symlink)
             if [[ -e "$source" ]] && [[ ! -L "$source" ]]; then
-                # Copy to profile
-                cp -r "$source" "$profile_dir/"
-                info "Adding $file to profile '$profile_name'"
-                ((added++)) || true
+                # Copy and overwrite
+                cp -rf "$source" "$profile_dir/"
+                info "Updated $file in profile '$profile_name'"
+                ((updated++)) || true
             fi
         done < "$profiled"
 
-        # Silent exit if nothing added
+        if [[ $updated -eq 0 ]]; then
+            info "No real files at root to update profile '$profile_name'"
+        else
+            success "Updated $updated file(s) in profile '$profile_name'"
+        fi
         return 0
     fi
 
-    # Check if this is the first profile (profiles/ doesn't exist or is empty)
-    local is_first_profile=false
-    if [[ ! -d "$profiles_dir" ]] || [[ -z "$(ls -A "$profiles_dir" 2>/dev/null)" ]]; then
-        is_first_profile=true
-    fi
-
+    # CASE 2: Profile doesn't exist - CREATE EMPTY
     mkdir -p "$profile_dir"
 
-    if [[ "$is_first_profile" == "true" ]]; then
-        # First profile - move files from root
-        while IFS= read -r file; do
-            [[ -z "$file" ]] && continue
-            local source="$config_path/$file"
-            if [[ -L "$source" ]]; then
-                # Symlink - dereference and copy actual content
-                cp -rL "$source" "$profile_dir/"
-                rm "$source"
-            elif [[ -e "$source" ]]; then
-                # Real file/dir - move it
-                mv "$source" "$profile_dir/"
-            fi
-        done < "$profiled"
-
-        # Setup .gitignore - ignore symlinks at root (not profiles/)
+    # Setup .gitignore if it's the first profile
+    if [[ ! -f "$config_path/.gitignore" ]]; then
         local gitignore="$config_path/.gitignore"
         {
-            (cd "$profile_dir" && ls -A | sed 's|^|/|')
+            while IFS= read -r file; do
+                [[ -z "$file" ]] && continue
+                echo "/$file"
+            done < "$profiled"
             echo "!profiles/"
         } > "$gitignore"
-
-        # Activate symlinks to new profile
-        activate_profile_symlinks "$config_path" "$profile_name"
-    else
-        # Not first profile - copy from first existing profile
-        local first_existing=$(ls "$profiles_dir" | head -1)
-        while IFS= read -r file; do
-            [[ -z "$file" ]] && continue
-            local source="$profiles_dir/$first_existing/$file"
-            [[ -e "$source" ]] && cp -r "$source" "$profile_dir/"
-        done < "$profiled"
-        # Don't create symlinks - keep current profile active
     fi
 
-    success "Created profile '$profile_name' for $config_name"
+    success "Created empty profile '$profile_name' for $config_name"
 }
 
 # Switch to a profile
@@ -1511,6 +1489,100 @@ profile_rm() {
     mv "$profile_dir" "$trash_path"
 
     echo -e "${PURPLE}→ Deleted profile '$profile_name' from $config_name${NC}"
+}
+
+# Copy one profile to another
+# Args: $1 = config path, $2 = source profile, $3 = dest profile
+profile_cp() {
+    local config_path="$1"
+    local source_profile="$2"
+    local dest_profile="$3"
+    local config_name=$(basename "$config_path")
+
+    [[ -z "$source_profile" ]] || [[ -z "$dest_profile" ]] && \
+        error "Usage: dots $config_name cp <source> <dest>"
+
+    local source_dir="$config_path/profiles/$source_profile"
+    local dest_dir="$config_path/profiles/$dest_profile"
+
+    # Validate source exists
+    [[ ! -d "$source_dir" ]] && error "Source profile '$source_profile' not found"
+
+    # Prevent copying to self
+    [[ "$source_profile" == "$dest_profile" ]] && error "Cannot copy profile to itself"
+
+    # Validate dest name
+    validate_profile_name "$dest_profile" || \
+        error "Invalid profile name '$dest_profile'\nReserved words: track, init, list, rm, cp, untrack, flatten, eject\nAvoid: /, .."
+
+    # If dest exists, prompt for overwrite
+    if [[ -d "$dest_dir" ]]; then
+        warn "Profile '$dest_profile' already exists"
+        echo -n "Overwrite? (y/N): "
+        read -r response
+        [[ ! "$response" =~ ^[Yy]$ ]] && info "Cancelled" && return 0
+
+        # Remove existing dest
+        rm -rf "$dest_dir"
+    fi
+
+    # Copy everything
+    cp -r "$source_dir" "$dest_dir"
+
+    success "Copied profile '$source_profile' → '$dest_profile'"
+}
+
+# NEW profile_eject - move profile contents to root, delete profile
+profile_eject() {
+    local config_path="$1"
+    local profile_name="$2"
+    local config_name=$(basename "$config_path")
+
+    [[ -z "$profile_name" ]] && error "Usage: dots $config_name eject <profile-name>"
+
+    local profile_dir="$config_path/profiles/$profile_name"
+    [[ ! -d "$profile_dir" ]] && error "Profile '$profile_name' not found"
+
+    local profiled="$config_path/.profiled"
+    [[ ! -f "$profiled" ]] && error "No tracked files for $config_name"
+
+    # Move tracked files from profile to root
+    local moved=0
+    while IFS= read -r file; do
+        [[ -z "$file" ]] && continue
+
+        local source="$profile_dir/$file"
+        [[ ! -e "$source" ]] && continue
+
+        local target="$config_path/$file"
+
+        # Handle existing items at target
+        if [[ -L "$target" ]]; then
+            # Remove symlink
+            rm "$target"
+        elif [[ -e "$target" ]]; then
+            # Real file/dir exists - conflict
+            warn "Target '$file' already exists at root"
+            echo -n "Overwrite with profile version? [y/N]: "
+            read -r response
+            if [[ "$response" =~ ^[Yy]$ ]]; then
+                rm -rf "$target"
+            else
+                info "Skipping $file"
+                continue
+            fi
+        fi
+
+        # Move from profile to root
+        cp -rf "$source" "$target"
+        info "Moved $file to root"
+        ((moved++)) || true
+    done < "$profiled"
+
+    # Delete the profile directory
+    rm -rf "$profile_dir"
+
+    success "Ejected profile '$profile_name' ($moved file(s) moved to root)"
 }
 
 # Untrack files from profiling

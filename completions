@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 # Bash completion for dots command
 
+# Helper: Check if a config has .profiled (support both config/ and home/, plus _ prefix)
+_is_profiled() {
+    local name="$1"
+    local DOTFILES="$2"
+    local stripped="${name#.}"
+
+    # Try all 8 variations (same as find_in_dotfiles in main script)
+    for dir in config home; do
+        for variant in "$name" "$stripped" "_$name" "_$stripped"; do
+            if [[ -f "$DOTFILES/$dir/$variant/.profiled" ]]; then
+                echo "$DOTFILES/$dir/$variant"
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+
 _dots_completion() {
     local cur prev words cword
     _init_completion || return
@@ -19,17 +37,18 @@ _dots_completion() {
     local subcommand="${words[1]}"
 
     # Check if first argument is a profiled config
-    if [[ -f "$DOTFILES/config/$subcommand/.profiled" ]]; then
+    local config_path=$(_is_profiled "$subcommand" "$DOTFILES")
+    if [[ -n "$config_path" ]]; then
         # Profile system completions
         if [[ $cword -eq 2 ]]; then
             # Suggest profile subcommands and existing profiles
-            local profile_cmds="track init list rm untrack"
+            local profile_cmds="track snatch init list rm cp untrack eject"
             local profiles=()
 
-            if [[ -d "$DOTFILES/config/$subcommand/profiles" ]]; then
+            if [[ -d "$config_path/profiles" ]]; then
                 while IFS= read -r -d '' profile; do
                     profiles+=("$(basename "$profile")")
-                done < <(find "$DOTFILES/config/$subcommand/profiles" -maxdepth 1 -mindepth 1 -type d -print0 2>/dev/null)
+                done < <(find "$config_path/profiles" -maxdepth 1 -mindepth 1 -type d -print0 2>/dev/null)
             fi
 
             COMPREPLY=($(compgen -W "$profile_cmds ${profiles[*]}" -- "$cur"))
@@ -42,15 +61,23 @@ _dots_completion() {
                     local files=()
                     while IFS= read -r -d '' file; do
                         [[ -f "$file" ]] && files+=("$(basename "$file")")
-                    done < <(find "$DOTFILES/config/$subcommand" -maxdepth 1 -mindepth 1 -print0 2>/dev/null)
+                    done < <(find "$config_path" -maxdepth 1 -mindepth 1 -print0 2>/dev/null)
                     COMPREPLY=($(compgen -W "${files[*]}" -- "$cur"))
                     ;;
-                rm)
+                rm|eject)
                     # Complete with profile names
                     local profiles=()
                     while IFS= read -r -d '' profile; do
                         profiles+=("$(basename "$profile")")
-                    done < <(find "$DOTFILES/config/$subcommand/profiles" -maxdepth 1 -mindepth 1 -type d -print0 2>/dev/null)
+                    done < <(find "$config_path/profiles" -maxdepth 1 -mindepth 1 -type d -print0 2>/dev/null)
+                    COMPREPLY=($(compgen -W "${profiles[*]}" -- "$cur"))
+                    ;;
+                cp)
+                    # Complete with profile names (both source and dest)
+                    local profiles=()
+                    while IFS= read -r -d '' profile; do
+                        profiles+=("$(basename "$profile")")
+                    done < <(find "$config_path/profiles" -maxdepth 1 -mindepth 1 -type d -print0 2>/dev/null)
                     COMPREPLY=($(compgen -W "${profiles[*]}" -- "$cur"))
                     ;;
             esac
