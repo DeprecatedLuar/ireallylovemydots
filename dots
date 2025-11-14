@@ -1372,8 +1372,8 @@ profile_snatch() {
             # Skip if already exists in profile
             [[ -e "$profile_path/$file" ]] && continue
 
-            # Copy to profile
-            cp -r "$config_path/$file" "$profile_path/"
+            # Copy to profile (follow symlinks with -L)
+            cp -rL "$config_path/$file" "$profile_path/"
         done
 
         ((profile_count++)) || true
@@ -1424,8 +1424,8 @@ profile_init() {
             local source="$config_path/$file"
             # Only copy if it's a real file at root (not symlink)
             if [[ -e "$source" ]] && [[ ! -L "$source" ]]; then
-                # Copy and overwrite
-                cp -rf "$source" "$profile_dir/"
+                # Copy and overwrite (follow symlinks with -L for nested content)
+                cp -rfL "$source" "$profile_dir/"
                 info "Updated $file in profile '$profile_name'"
                 ((updated++)) || true
             fi
@@ -1443,7 +1443,9 @@ profile_init() {
     mkdir -p "$profile_dir"
 
     # Setup .gitignore if it's the first profile
+    local is_first_profile=false
     if [[ ! -f "$config_path/.gitignore" ]]; then
+        is_first_profile=true
         local gitignore="$config_path/.gitignore"
         {
             while IFS= read -r file; do
@@ -1454,7 +1456,24 @@ profile_init() {
         } > "$gitignore"
     fi
 
-    success "Created empty profile '$profile_name' for $config_name"
+    # If this is the first profile, auto-activate it
+    if [[ "$is_first_profile" == "true" ]]; then
+        # Move any existing real files from root to profile
+        while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            local source="$config_path/$file"
+            if [[ -e "$source" ]] && [[ ! -L "$source" ]]; then
+                mv "$source" "$profile_dir/"
+                info "Moved $file to profile '$profile_name'"
+            fi
+        done < "$profiled"
+
+        # Activate the profile (create symlinks)
+        activate_profile_symlinks "$config_path" "$profile_name"
+        success "Created and activated first profile '$profile_name' for $config_name"
+    else
+        success "Created empty profile '$profile_name' for $config_name"
+    fi
 }
 
 # Switch to a profile
@@ -1540,8 +1559,8 @@ profile_cp() {
         rm -rf "$dest_dir"
     fi
 
-    # Copy everything
-    cp -r "$source_dir" "$dest_dir"
+    # Copy everything (follow symlinks with -L)
+    cp -rL "$source_dir" "$dest_dir"
 
     success "Copied profile '$source_profile' → '$dest_profile'"
 }
