@@ -1,0 +1,42 @@
+package state
+
+import "testing"
+
+func TestRoundTrip(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	s, err := Read()
+	if err != nil {
+		t.Fatalf("Read error: %v", err)
+	}
+	key := Key{Repo: "dotfiles", Namespace: "nvim"}
+	s.Entries[key] = Entry{Enabled: true, ActiveProfile: "work", LinkedDests: []string{"/home/u/.config/nvim"}}
+
+	if err := Write(s); err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+
+	got, err := Read()
+	if err != nil {
+		t.Fatalf("Read error: %v", err)
+	}
+	entry, ok := got.Entries[key]
+	if !ok {
+		t.Fatalf("expected entry for %+v", key)
+	}
+	if !entry.Enabled || entry.ActiveProfile != "work" || len(entry.LinkedDests) != 1 {
+		t.Fatalf("got %+v, mismatch", entry)
+	}
+}
+
+func TestRead_MissingFileIsEmpty(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	s, err := Read()
+	if err != nil {
+		t.Fatalf("Read error: %v", err)
+	}
+	if len(s.Entries) != 0 {
+		t.Fatalf("got %d entries, want 0", len(s.Entries))
+	}
+}
