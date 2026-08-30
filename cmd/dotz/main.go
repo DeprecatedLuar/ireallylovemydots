@@ -200,12 +200,10 @@ func ambiguityChooser(name string) (string, error) {
 	}
 }
 
-// namespaceNames returns every namespace name known across every
-// registered repository. No catalogue exists yet (phase 3 clones
-// repositories, phase 4 creates namespaces), so this is always empty for
-// now; the router is already wired for when it is not.
+// namespaceNames returns every namespace name materialized locally across
+// every registered repository, for router ambiguity resolution.
 func namespaceNames() ([]string, error) {
-	return nil, nil
+	return commands.NamespaceNames()
 }
 
 func die(err error) {

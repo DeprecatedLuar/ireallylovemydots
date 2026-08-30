@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	appDirName = "dots"
+	appDirName = "ireallylovemydots"
 
 	dataHomeEnv   = "XDG_DATA_HOME"
 	configHomeEnv = "XDG_CONFIG_HOME"

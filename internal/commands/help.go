@@ -46,8 +46,7 @@ func HandleHelp(args []string) error {
 			gohelp.Item("--purge", "Trash instead of restore on removal"),
 			gohelp.Item("--yes", "Skip confirmation prompts"),
 			gohelp.Item("--debug", "Verbose diagnostic output"),
-		).
-		Text("Nothing is printed on success. A command that worked says nothing.")
+		)
 
 	gohelp.Run(append([]string{"help"}, args...), root)
 	return nil
