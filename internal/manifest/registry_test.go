@@ -1,6 +1,41 @@
 package manifest
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/BurntSushi/toml"
+)
+
+func TestWriteRegistry_IsValidTOML(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configDir)
+
+	r := Registry{Repos: []Repo{
+		{Name: "dotfiles", Owner: "someone", URL: "https://example.com/someone/dotfiles"},
+	}}
+	if err := WriteRegistry(r); err != nil {
+		t.Fatalf("WriteRegistry error: %v", err)
+	}
+
+	path, err := RegistryPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(path, ".toml") {
+		t.Fatalf("registry path %q does not carry a .toml suffix", path)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Registry
+	if _, err := toml.Decode(string(raw), &decoded); err != nil {
+		t.Fatalf("on-disk registry is not valid TOML: %v", err)
+	}
+}
 
 func TestRegistryRoundTrip_SortedByName(t *testing.T) {
 	configDir := t.TempDir()

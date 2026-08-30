@@ -79,6 +79,108 @@ func TestAdd_Directory(t *testing.T) {
 	}
 }
 
+func TestAdd_AdoptsUntrackedPayload(t *testing.T) {
+	repoDir := t.TempDir()
+	nsDir, err := Create(repoDir, "editors")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	dest := filepath.Join(home, ".config", "nvim")
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// The payload already sits in the namespace, unmanifested — e.g. from
+	// sync or a half-finished bootstrap. dest itself does not exist yet.
+	payload := filepath.Join(nsDir, "nvim")
+	if err := os.MkdirAll(payload, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Add(nsDir, dest); err != nil {
+		t.Fatalf("Add (adopt): %v", err)
+	}
+
+	info, err := os.Lstat(dest)
+	if err != nil {
+		t.Fatalf("expected a symlink created at %s: %v", dest, err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected %s to be a symlink", dest)
+	}
+	target, err := os.Readlink(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != payload {
+		t.Fatalf("symlink target = %s, want %s", target, payload)
+	}
+
+	m, err := manifest.Read(nsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Entries) != 1 || m.Entries[0].Name != "nvim" || m.Entries[0].Dest != dest {
+		t.Fatalf("manifest entries = %+v, want one entry for %s", m.Entries, dest)
+	}
+}
+
+func TestAdd_AlreadyTrackedReportsAndStops(t *testing.T) {
+	repoDir := t.TempDir()
+	nsDir, err := Create(repoDir, "editors")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	target := filepath.Join(home, ".config", "nvim")
+	if err := os.MkdirAll(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Add(nsDir, target); err != nil {
+		t.Fatalf("Add (first): %v", err)
+	}
+	if err := Add(nsDir, target); err != nil {
+		t.Fatalf("Add (second, already tracked) should not error: %v", err)
+	}
+
+	m, err := manifest.Read(nsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Entries) != 1 {
+		t.Fatalf("expected exactly one manifest entry after tracking twice, got %+v", m.Entries)
+	}
+}
+
+func TestAdd_RefusesProtectedRoot(t *testing.T) {
+	repoDir := t.TempDir()
+	nsDir, err := Create(repoDir, "editors")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := Add(nsDir, home); err == nil {
+		t.Fatal("expected error tracking the home directory itself")
+	}
+
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	configRoot := filepath.Join(configHome, "ireallylovemydots")
+	if err := os.MkdirAll(configRoot, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(nsDir, configRoot); err == nil {
+		t.Fatal("expected error tracking the XDG config root itself")
+	}
+}
+
 func TestAdd_BasenameCollision(t *testing.T) {
 	repoDir := t.TempDir()
 	nsDir, err := Create(repoDir, "shells")

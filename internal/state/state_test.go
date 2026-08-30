@@ -1,6 +1,34 @@
 package state
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"testing"
+)
+
+func TestWrite_StaysJSON(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	s := State{Entries: map[Key]Entry{
+		{Repo: "dotfiles", Namespace: "nvim"}: {Enabled: true},
+	}}
+	if err := Write(s); err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+
+	path, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded []record
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("on-disk state is not valid JSON: %v", err)
+	}
+}
 
 func TestRoundTrip(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())

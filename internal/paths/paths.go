@@ -82,6 +82,43 @@ func hasParentPrefix(rel string) bool {
 	return len(rel) >= 3 && rel[:3] == ".."+string(filepath.Separator)
 }
 
+// IsProtectedRoot reports whether path is one of the roots dots refuses as a
+// destination outright, per concept.md "Destinations dots will not link":
+// ~, /, and the XDG config, data, and state roots themselves. A destination
+// beneath one of them is ordinary and unrestricted; the roots themselves are
+// not, because linking one replaces the directory tree every other entry —
+// and dots itself — resolves through. No flag overrides this.
+func IsProtectedRoot(path string) (bool, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false, fmt.Errorf("resolve absolute path for %s: %w", path, err)
+	}
+	clean := filepath.Clean(abs)
+
+	if clean == string(filepath.Separator) {
+		return true, nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false, fmt.Errorf("resolve home directory: %w", err)
+	}
+	if clean == filepath.Clean(home) {
+		return true, nil
+	}
+
+	for _, resolver := range []func() (string, error){Data, Config, State} {
+		root, err := resolver()
+		if err != nil {
+			return false, err
+		}
+		if clean == filepath.Clean(root) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // resolveExisting evaluates symlinks on the longest existing prefix of path,
 // then rejoins the remaining (not-yet-created) components verbatim.
 func resolveExisting(path string) (string, error) {

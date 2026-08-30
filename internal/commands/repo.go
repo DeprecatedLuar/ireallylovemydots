@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -16,15 +17,13 @@ import (
 // HandleRepo implements the repo subtree: bare listing, the noun-level
 // verbs that operate on a repository by name in an argument (add, rm), and
 // the per-repository verb reached by naming the repository first (list).
-//
-// `rm` is deferred to phase 6, where removal semantics land.
 func HandleRepo(args []string, flags shared.Flags) error {
 	if len(args) == 0 {
 		return renderRepoList()
 	}
 
-	if grammar.IsVerb(args[0]) {
-		return handleRepoNounVerb(grammar.Canonical(args[0]), args[1:])
+	if grammar.IsRepoVerb(args[0]) {
+		return handleRepoNounVerb(grammar.Canonical(args[0]), args[1:], flags)
 	}
 
 	name := args[0]
@@ -38,18 +37,27 @@ func HandleRepo(args []string, flags shared.Flags) error {
 	return renderRepoNamespaces(name)
 }
 
-func handleRepoNounVerb(verb string, args []string) error {
+func handleRepoNounVerb(verb string, args []string, flags shared.Flags) error {
 	switch verb {
 	case "add":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: repo add <url>")
 		}
-		return addRepo(args[0])
+		return addRepo(args[0], flags)
 	case "rm":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: repo rm <repo>")
 		}
-		return errNotImplemented("repo rm")
+		return rmRepo(args[0], flags)
+	case "init":
+		if len(args) > 1 {
+			return fmt.Errorf("usage: repo init [path]")
+		}
+		var path string
+		if len(args) == 1 {
+			path = args[0]
+		}
+		return initRepo(path, flags)
 	case "list":
 		return renderRepoList()
 	default:
@@ -59,9 +67,11 @@ func handleRepoNounVerb(verb string, args []string) error {
 
 // addRepo implements `repo add <url>`: derive the local name and owner from
 // the URL, resolve any collision with a reserved word or an already
-// registered name, clone blobless with no checkout, and register the
-// result. Nothing is written to the registry unless the clone succeeds.
-func addRepo(url string) error {
+// registered name, clone blobless with no checkout, check compatibility,
+// then register — per concept.md "Compatibility", the order is clone,
+// check, register. An incompatible result removes the clone and writes
+// nothing to the registry, unless --bootstrap converts it first.
+func addRepo(url string, flags shared.Flags) error {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
 		return err
@@ -77,18 +87,242 @@ func addRepo(url string) error {
 	if err != nil {
 		return err
 	}
-	_, resolvedURL, err := repo.Clone(dataDir, url, name)
+	dest, resolvedURL, err := repo.Clone(dataDir, url, name)
 	if err != nil {
 		return err
 	}
 
+	entries, err := repo.RootEntries(dest)
+	if err != nil {
+		os.RemoveAll(dest)
+		return err
+	}
+	state := repo.Inspect(entries)
+	if state == repo.StateIncompatible {
+		if !flags.Bootstrap {
+			os.RemoveAll(dest)
+			return fmt.Errorf("%s is not a dots repository: no top-level folder holds a .dots manifest; use --bootstrap to convert it", url)
+		}
+
+		converted, newState, err := bootstrapAdd(dest, url, entries)
+		if err != nil {
+			os.RemoveAll(dest)
+			return err
+		}
+		if !converted {
+			// Declined: the blobless clone made purely to inspect it is
+			// discarded, leaving no trace, per concept.md "Bootstrap".
+			os.RemoveAll(dest)
+			return nil
+		}
+		state = newState
+	}
+
 	reg.Repos = append(reg.Repos, manifest.Repo{Name: name, Owner: owner, URL: resolvedURL})
+	if err := manifest.WriteRegistry(reg); err != nil {
+		os.RemoveAll(dest)
+		return err
+	}
+
+	if state == repo.StateNamespaces {
+		fmt.Print(ui.Render([]ui.Entry{{Marker: ui.MarkerMaterialized, Name: name}}))
+	}
+	return nil
+}
+
+// bootstrapAdd runs `repo add --bootstrap`'s conversion at an already-cloned,
+// blobless destination: plan, preview, prompt, and only on confirmation
+// check out every blob and apply the conversion. Per concept.md "Bootstrap",
+// every step up to the prompt is name-level, so declining costs nothing
+// beyond the blobless clone repo add performs anyway. converted is false
+// only when the user declined; a plan that converts to anything other than
+// StateNamespaces is an error, since a conversion producing nothing usable
+// must never register.
+func bootstrapAdd(dest, url string, entries []repo.RootEntry) (converted bool, state repo.State, err error) {
+	plan, proceed, err := planBootstrap(dest, entries)
+	if err != nil {
+		return false, repo.StateIncompatible, err
+	}
+	if !proceed {
+		return false, repo.StateIncompatible, nil
+	}
+
+	if err := repo.CheckoutAll(dest); err != nil {
+		return false, repo.StateIncompatible, err
+	}
+	if err := repo.Apply(dest, plan); err != nil {
+		return false, repo.StateIncompatible, err
+	}
+
+	// Apply never commits, so the post-conversion state must be read
+	// straight off disk rather than via RootEntries, which reads git's HEAD
+	// tree and would still see the pre-conversion layout.
+	postEntries, err := repo.DiskEntries(dest)
+	if err != nil {
+		return false, repo.StateIncompatible, err
+	}
+	state = repo.Inspect(postEntries)
+	if state != repo.StateNamespaces {
+		return false, repo.StateIncompatible, fmt.Errorf("--bootstrap conversion of %s produced no usable namespaces", url)
+	}
+	return true, state, nil
+}
+
+// planBootstrap builds and previews a --bootstrap conversion of entries
+// (already gathered from repoPath by the caller's compatibility check — via
+// RootEntries for a git tree, DiskEntries for a plain folder not yet a
+// repository) and prompts y/N, defaulting to no. An empty plan is a hard
+// error, since --bootstrap has nothing to offer a repository with no
+// convertible top-level entries. Declining is reported through the bool
+// return, not an error. Not being able to prompt (no terminal) is itself a
+// hard error, per concept.md "Bootstrap": "Not being able to prompt is a
+// hard error, never a silent conversion."
+func planBootstrap(repoPath string, entries []repo.RootEntry) ([]repo.PlannedNamespace, bool, error) {
+	plan, err := repo.PlanEntries(entries)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(plan) == 0 {
+		return nil, false, fmt.Errorf("%s has no top-level entries for --bootstrap to convert", repoPath)
+	}
+
+	fmt.Print(ui.Render(bootstrapPreviewEntries(plan)))
+	choice, err := ui.Prompt(
+		fmt.Sprintf("--bootstrap will create %d namespace(s) as shown above. Proceed?", len(plan)),
+		[]string{"y", "N"},
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	return plan, strings.EqualFold(choice, "y") || strings.EqualFold(choice, "yes"), nil
+}
+
+func bootstrapPreviewEntries(plan []repo.PlannedNamespace) []ui.Entry {
+	entries := make([]ui.Entry, 0, len(plan))
+	for _, p := range plan {
+		entries = append(entries, ui.Entry{Marker: ui.MarkerMaterialized, Name: fmt.Sprintf("%s -> %s", p.Namespace, p.Dest)})
+	}
+	return entries
+}
+
+// initRepo implements `repo init [path]`: take a local folder and register
+// it, with no remote. Per concept.md "Initializing a local folder", the
+// order is check, take, register — inspection runs at the source path
+// before anything is written, so a refused command leaves the folder
+// exactly as it was found: not moved, and with no .git created in it.
+func initRepo(pathArg string, flags shared.Flags) error {
+	srcPath, err := resolveInitPath(pathArg)
+	if err != nil {
+		return err
+	}
+
+	inside, err := paths.InsideDataDir(srcPath)
+	if err != nil {
+		return err
+	}
+	if inside {
+		return fmt.Errorf("%s is already inside the data directory", srcPath)
+	}
+
+	isRepo, err := repo.IsGitRepo(srcPath)
+	if err != nil {
+		return err
+	}
+	var entries []repo.RootEntry
+	if isRepo {
+		entries, err = repo.RootEntries(srcPath)
+	} else {
+		entries, err = repo.DiskEntries(srcPath)
+	}
+	if err != nil {
+		return err
+	}
+
+	state := repo.Inspect(entries)
+	var plan []repo.PlannedNamespace
+	if state == repo.StateIncompatible {
+		if !flags.Bootstrap {
+			return fmt.Errorf("%s is not a dots repository: no top-level folder holds a .dots manifest; use --bootstrap to convert it", srcPath)
+		}
+
+		p, proceed, err := planBootstrap(srcPath, entries)
+		if err != nil {
+			return err
+		}
+		if !proceed {
+			// Declining leaves the folder at its original path, per
+			// concept.md "Bootstrap".
+			return nil
+		}
+		plan = p
+	}
+
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		return err
+	}
+	name, err := resolveNewRepoName(reg, filepath.Base(srcPath))
+	if err != nil {
+		return err
+	}
+
+	if err := repo.EnsureGit(srcPath); err != nil {
+		return err
+	}
+
+	dataDir, err := paths.Data()
+	if err != nil {
+		return err
+	}
+	dest, err := repo.Take(dataDir, srcPath, name)
+	if err != nil {
+		return err
+	}
+
+	if plan != nil {
+		if err := repo.Apply(dest, plan); err != nil {
+			return err
+		}
+		// Nothing Apply writes is committed, so the post-conversion state
+		// must be read straight off disk rather than via RootEntries, which
+		// reads git's HEAD tree.
+		postEntries, err := repo.DiskEntries(dest)
+		if err != nil {
+			return err
+		}
+		state = repo.Inspect(postEntries)
+		if state != repo.StateNamespaces {
+			return fmt.Errorf("--bootstrap conversion of %s produced no usable namespaces", srcPath)
+		}
+	}
+
+	reg.Repos = append(reg.Repos, manifest.Repo{Name: name})
 	if err := manifest.WriteRegistry(reg); err != nil {
 		return err
 	}
 
-	fmt.Print(ui.Render([]ui.Entry{{Marker: ui.MarkerMaterialized, Name: name}}))
+	if state == repo.StateNamespaces {
+		fmt.Print(ui.Render([]ui.Entry{{Marker: ui.MarkerMaterialized, Name: name}}))
+	}
 	return nil
+}
+
+// resolveInitPath resolves repo init's optional path argument: the working
+// directory with no argument, otherwise the argument itself, absolute —
+// acting on the argument regardless of the process's current directory.
+func resolveInitPath(pathArg string) (string, error) {
+	if pathArg == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve working directory: %w", err)
+		}
+		return cwd, nil
+	}
+	abs, err := filepath.Abs(pathArg)
+	if err != nil {
+		return "", fmt.Errorf("resolve path %s: %w", pathArg, err)
+	}
+	return abs, nil
 }
 
 // resolveNewRepoName returns a name safe to register: not a reserved word,
@@ -134,6 +368,10 @@ func renderRepoList() error {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
 		return err
+	}
+	if len(reg.Repos) == 0 {
+		printEmptyRegistryHint()
+		return nil
 	}
 	entries := make([]ui.Entry, 0, len(reg.Repos))
 	for _, r := range reg.Repos {

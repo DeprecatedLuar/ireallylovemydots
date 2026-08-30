@@ -105,6 +105,25 @@ func TestResolveRoute_AmbiguousNonInteractiveErrors(t *testing.T) {
 	}
 }
 
+func TestResolveRoute_InitAlias(t *testing.T) {
+	got, err := resolveRoute([]string{"init", "/some/path"}, nil, nil, noAmbiguity)
+	if err != nil {
+		t.Fatalf("resolveRoute(init) error: %v", err)
+	}
+	if got.target != targetRepo {
+		t.Fatalf("expected targetRepo, got %v", got.target)
+	}
+	want := []string{"init", "/some/path"}
+	if len(got.args) != len(want) {
+		t.Fatalf("args = %v, want %v", got.args, want)
+	}
+	for i := range want {
+		if got.args[i] != want[i] {
+			t.Fatalf("args = %v, want %v", got.args, want)
+		}
+	}
+}
+
 func TestResolveRoute_UnknownToken(t *testing.T) {
 	_, err := resolveRoute([]string{"bogus", "enable"}, nil, nil, noAmbiguity)
 	if err == nil {
@@ -122,6 +141,7 @@ func TestResolveRoute_TopLevel(t *testing.T) {
 		{[]string{"status"}, targetList},
 		{[]string{"sync"}, targetSync},
 		{[]string{"repo"}, targetRepo},
+		{[]string{"init"}, targetRepo},
 		{[]string{"namespace"}, targetNamespace},
 		{[]string{"help"}, targetHelp},
 	}

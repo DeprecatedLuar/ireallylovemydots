@@ -41,6 +41,7 @@ func HandleHelp(args []string) error {
 			gohelp.Item("list", "Every namespace, with state"),
 		).
 		Section("Flags",
+			gohelp.Item("-A, --all", "Enable every disabled namespace"),
 			gohelp.Item("--repo", "Disambiguate a namespace name shared by several repositories"),
 			gohelp.Item("--force", "Skip confirmation for a destructive default"),
 			gohelp.Item("--purge", "Trash instead of restore on removal"),

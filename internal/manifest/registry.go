@@ -1,27 +1,28 @@
 package manifest
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 
+	"github.com/BurntSushi/toml"
+
 	"github.com/DeprecatedLuar/dotz/internal/paths"
 )
 
-const registryFileName = "repositories.json"
+const registryFileName = "repositories.toml"
 
 // Repo is one registered repository.
 type Repo struct {
-	Name  string `json:"name"`
-	Owner string `json:"owner"`
-	URL   string `json:"url"`
+	Name  string `toml:"name"`
+	Owner string `toml:"owner"`
+	URL   string `toml:"url"`
 }
 
 // Registry is the full set of registered repositories.
 type Registry struct {
-	Repos []Repo `json:"repos"`
+	Repos []Repo `toml:"repos"`
 }
 
 // RegistryPath returns the repository manifest's path in the config directory.
@@ -50,7 +51,7 @@ func ReadRegistry() (Registry, error) {
 	}
 
 	var r Registry
-	if err := json.Unmarshal(data, &r); err != nil {
+	if err := toml.Unmarshal(data, &r); err != nil {
 		return Registry{}, fmt.Errorf("parse registry %s: %w", path, err)
 	}
 	return r, nil
@@ -67,11 +68,10 @@ func WriteRegistry(r Registry) error {
 	copy(sorted, r.Repos)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 
-	data, err := json.MarshalIndent(Registry{Repos: sorted}, "", "  ")
+	data, err := toml.Marshal(Registry{Repos: sorted})
 	if err != nil {
 		return fmt.Errorf("encode registry: %w", err)
 	}
-	data = append(data, '\n')
 
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("write registry %s: %w", path, err)

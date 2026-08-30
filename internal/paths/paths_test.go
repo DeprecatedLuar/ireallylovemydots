@@ -48,6 +48,64 @@ func TestInsideDataDir_Outside(t *testing.T) {
 	}
 }
 
+func TestIsProtectedRoot_Home(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	protected, err := IsProtectedRoot(home)
+	if err != nil {
+		t.Fatalf("IsProtectedRoot error: %v", err)
+	}
+	if !protected {
+		t.Fatalf("expected home directory %s to be a protected root", home)
+	}
+}
+
+func TestIsProtectedRoot_Slash(t *testing.T) {
+	protected, err := IsProtectedRoot("/")
+	if err != nil {
+		t.Fatalf("IsProtectedRoot error: %v", err)
+	}
+	if !protected {
+		t.Fatal("expected / to be a protected root")
+	}
+}
+
+func TestIsProtectedRoot_XDGConfigRoot(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	root, err := Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	protected, err := IsProtectedRoot(root)
+	if err != nil {
+		t.Fatalf("IsProtectedRoot error: %v", err)
+	}
+	if !protected {
+		t.Fatalf("expected XDG config root %s to be protected", root)
+	}
+}
+
+func TestIsProtectedRoot_BeneathRootIsOrdinary(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	root, err := Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beneath := filepath.Join(root, "nvim")
+	protected, err := IsProtectedRoot(beneath)
+	if err != nil {
+		t.Fatalf("IsProtectedRoot error: %v", err)
+	}
+	if protected {
+		t.Fatalf("expected %s (beneath the root, not the root itself) to be unrestricted", beneath)
+	}
+}
+
 func TestInsideDataDir_ThroughIntermediateSymlink(t *testing.T) {
 	base := t.TempDir()
 	withXDGData(t, base)

@@ -68,8 +68,8 @@ func main() {
 	}
 }
 
-// extractGlobalFlags pulls --repo, --force, --purge, --yes, and --debug
-// from anywhere in args and returns the remaining positional tokens.
+// extractGlobalFlags pulls the command-wide flags from anywhere in args and
+// returns the remaining positional tokens.
 func extractGlobalFlags(args []string) ([]string, shared.Flags) {
 	var remaining []string
 	var flags shared.Flags
@@ -82,6 +82,8 @@ func extractGlobalFlags(args []string) ([]string, shared.Flags) {
 		}
 
 		switch {
+		case arg == "-A" || arg == "--all":
+			flags.All = true
 		case arg == "--force":
 			flags.Force = true
 		case arg == "--purge":
@@ -90,6 +92,8 @@ func extractGlobalFlags(args []string) ([]string, shared.Flags) {
 			flags.Yes = true
 		case arg == "--debug":
 			flags.Debug = true
+		case arg == "--bootstrap":
+			flags.Bootstrap = true
 		case arg == "--repo":
 			if i+1 < len(args) {
 				flags.Repo = args[i+1]
@@ -122,6 +126,11 @@ func resolveRoute(args []string, namespaces, repos []string, ambiguous func(name
 		return route{target: targetNamespace, args: args[1:]}, nil
 	case "repo":
 		return route{target: targetRepo, args: args[1:]}, nil
+	case "init":
+		// `dots init [path]` -> `dots repo init [path]`. Safe as a bare
+		// top-level alias because "init" is reserved (grammar.RepoOnlyVerbs),
+		// so no namespace or repository can ever be named "init".
+		return route{target: targetRepo, args: append([]string{"init"}, args[1:]...)}, nil
 	case "sync":
 		return route{target: targetSync, args: args[1:]}, nil
 	case "list", "ls", "status":
@@ -134,6 +143,9 @@ func resolveRoute(args []string, namespaces, repos []string, ambiguous func(name
 	// This alias only ever targets the namespace subtree — repo has its
 	// own explicit `repo add`/`repo rm`, never a bare verb form.
 	if grammar.IsVerb(tok0) {
+		if grammar.Canonical(tok0) == "enable" && len(args) == 1 {
+			return route{target: targetNamespace, args: []string{"enable"}}, nil
+		}
 		if len(args) < 2 {
 			return route{}, fmt.Errorf("usage: %s <namespace> [args]", tok0)
 		}

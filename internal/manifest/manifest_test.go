@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 )
 
 func TestRoundTrip_SortedRegardlessOfInsertionOrder(t *testing.T) {
@@ -54,6 +56,62 @@ func TestWrite_ContractsHomeOnDisk(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "~/.config/nvim") {
 		t.Fatalf("expected on-disk manifest to contract home, got: %s", raw)
+	}
+}
+
+func TestWrite_IsValidTOML(t *testing.T) {
+	dir := t.TempDir()
+	m := Manifest{Entries: []Entry{
+		{Name: "nvim", Dest: "~/.config/nvim"},
+		{Name: "kitty", Dest: "~/.config/kitty"},
+	}}
+	if err := Write(dir, m); err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+
+	raw, err := os.ReadFile(Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "[[entries]]") {
+		t.Fatalf("expected TOML array-of-tables syntax, got: %s", raw)
+	}
+
+	var decoded Manifest
+	if _, err := toml.Decode(string(raw), &decoded); err != nil {
+		t.Fatalf("on-disk manifest is not valid TOML: %v", err)
+	}
+}
+
+func TestRoundTrip_ByteIdentical(t *testing.T) {
+	dir := t.TempDir()
+	m := Manifest{Entries: []Entry{
+		{Name: "zsh", Dest: "~/.zshrc"},
+		{Name: "kitty", Dest: "~/.config/kitty"},
+		{Name: "nvim", Dest: "~/.config/nvim"},
+	}}
+	if err := Write(dir, m); err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+	first, err := os.ReadFile(Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Read(dir)
+	if err != nil {
+		t.Fatalf("Read error: %v", err)
+	}
+	if err := Write(dir, got); err != nil {
+		t.Fatalf("Write (second) error: %v", err)
+	}
+	second, err := os.ReadFile(Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(first) != string(second) {
+		t.Fatalf("manifest did not round-trip byte-identically:\nfirst:  %s\nsecond: %s", first, second)
 	}
 }
 

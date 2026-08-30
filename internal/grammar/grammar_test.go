@@ -38,3 +38,24 @@ func TestReservedIncludesAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestIsRepoVerbRecognizesInitButNotIsVerb(t *testing.T) {
+	if IsVerb("init") {
+		t.Error(`IsVerb("init") = true, want false: init is repo-only`)
+	}
+	if !IsRepoVerb("init") {
+		t.Error(`IsRepoVerb("init") = false, want true`)
+	}
+	if !IsRepoVerb("add") {
+		t.Error(`IsRepoVerb("add") = false, want true: shared verbs still count`)
+	}
+}
+
+func TestInitIsReserved(t *testing.T) {
+	if !IsReserved("init") {
+		t.Error(`IsReserved("init") = false, want true`)
+	}
+	if !slices.Contains(Reserved(), "init") {
+		t.Error(`Reserved() missing "init"`)
+	}
+}
