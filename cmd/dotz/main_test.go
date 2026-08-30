@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -128,6 +129,73 @@ func TestResolveRoute_UnknownToken(t *testing.T) {
 	_, err := resolveRoute([]string{"bogus", "enable"}, nil, nil, noAmbiguity)
 	if err == nil {
 		t.Fatal("expected error for unknown token")
+	}
+}
+
+func TestExtractGlobalFlags_ShortFormsAndClustering(t *testing.T) {
+	remaining, flags, err := extractGlobalFlags([]string{"enable", "-Af", "kitty"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !flags.All || !flags.Force {
+		t.Fatalf("expected -Af to parse as --all --force, got %+v", flags)
+	}
+	if !reflect.DeepEqual(remaining, []string{"enable", "kitty"}) {
+		t.Fatalf("remaining = %v, want [enable kitty]", remaining)
+	}
+}
+
+func TestExtractGlobalFlags_UnknownClusterLetterErrorsNamingIt(t *testing.T) {
+	_, _, err := extractGlobalFlags([]string{"enable", "-Aq"})
+	if err == nil {
+		t.Fatal("expected -Aq to error naming the unknown letter q")
+	}
+	if !strings.Contains(err.Error(), "q") {
+		t.Fatalf("expected the error to name the offending letter, got: %v", err)
+	}
+}
+
+func TestExtractGlobalFlags_ShortRepo(t *testing.T) {
+	_, flags, err := extractGlobalFlags([]string{"enable", "-r", "dotfiles", "nvim"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if flags.Repo != "dotfiles" {
+		t.Fatalf("flags.Repo = %q, want dotfiles", flags.Repo)
+	}
+}
+
+func TestResolveRoute_EnableMultipleNames(t *testing.T) {
+	got, err := resolveRoute([]string{"enable", "krita", "rofi"}, nil, nil, noAmbiguity)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.target != targetNamespace {
+		t.Fatalf("expected targetNamespace, got %v", got.target)
+	}
+	want := []string{"enable", "krita", "rofi"}
+	if !reflect.DeepEqual(got.args, want) {
+		t.Fatalf("args = %v, want %v", got.args, want)
+	}
+}
+
+func TestResolveRoute_LinkUnlinkAliases(t *testing.T) {
+	got, err := resolveRoute([]string{"link", "neovim"}, nil, nil, noAmbiguity)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := route{target: targetNamespace, args: []string{"neovim", "enable"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveRoute(link) = %+v, want %+v", got, want)
+	}
+
+	got2, err := resolveRoute([]string{"unlink", "neovim"}, nil, nil, noAmbiguity)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want2 := route{target: targetNamespace, args: []string{"neovim", "disable"}}
+	if !reflect.DeepEqual(got2, want2) {
+		t.Fatalf("resolveRoute(unlink) = %+v, want %+v", got2, want2)
 	}
 }
 

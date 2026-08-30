@@ -55,6 +55,7 @@ func gitRepoWithNamespaces(t *testing.T, home string) (repoDir string, nsAEntrie
 }
 
 func TestEnable_MaterializesOnlyTargetNamespace(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	home := t.TempDir()
 	repoDir, entriesA, _ := gitRepoWithNamespaces(t, home)
 
@@ -91,6 +92,7 @@ func TestEnable_MaterializesOnlyTargetNamespace(t *testing.T) {
 }
 
 func TestEnable_DirectoryEntry_OneSymlinkAndPayloadWritesVisible(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	home := t.TempDir()
 	nsDir := t.TempDir()
 	payload := filepath.Join(nsDir, "nvim")
@@ -120,6 +122,7 @@ func TestEnable_DirectoryEntry_OneSymlinkAndPayloadWritesVisible(t *testing.T) {
 }
 
 func TestEnable_InjectedFailureOnSeventhLink_RollsBackEverythingAndWritesNoState(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	if runtime.GOOS == "windows" {
 		t.Skip("permission bits behave differently on windows")
 	}
@@ -180,6 +183,7 @@ func TestEnable_InjectedFailureOnSeventhLink_RollsBackEverythingAndWritesNoState
 }
 
 func TestEnable_MaterializeReusesExistingFolderWithNoGitOperation(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	home := t.TempDir()
 	nsDir := t.TempDir()
 	payload := filepath.Join(nsDir, "nvim")

@@ -105,6 +105,7 @@ func TestResolve_RepoFlagDisambiguates(t *testing.T) {
 }
 
 func TestRename(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	repoDir := t.TempDir()
 	if _, err := Create(repoDir, "editors"); err != nil {
 		t.Fatal(err)
@@ -122,6 +123,7 @@ func TestRename(t *testing.T) {
 }
 
 func TestRename_TargetAlreadyExists(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	repoDir := t.TempDir()
 	if _, err := Create(repoDir, "editors"); err != nil {
 		t.Fatal(err)

@@ -186,7 +186,7 @@ func planBootstrap(repoPath string, entries []repo.RootEntry) ([]repo.PlannedNam
 		return nil, false, fmt.Errorf("%s has no top-level entries for --bootstrap to convert", repoPath)
 	}
 
-	fmt.Print(ui.Render(bootstrapPreviewEntries(plan)))
+	fmt.Print(ui.RenderAligned(bootstrapPreviewEntries(plan)))
 	choice, err := ui.Prompt(
 		fmt.Sprintf("--bootstrap will create %d namespace(s) as shown above. Proceed?", len(plan)),
 		[]string{"y", "N"},
@@ -197,12 +197,15 @@ func planBootstrap(repoPath string, entries []repo.RootEntry) ([]repo.PlannedNam
 	return plan, strings.EqualFold(choice, "y") || strings.EqualFold(choice, "yes"), nil
 }
 
-func bootstrapPreviewEntries(plan []repo.PlannedNamespace) []ui.Entry {
-	entries := make([]ui.Entry, 0, len(plan))
+// bootstrapPreviewEntries renders the proposed conversion as aligned pairs,
+// per concept.md "Bootstrap": "The preview is a proposed mapping, not a
+// state listing", so it carries no listing marker.
+func bootstrapPreviewEntries(plan []repo.PlannedNamespace) []ui.Pair {
+	pairs := make([]ui.Pair, 0, len(plan))
 	for _, p := range plan {
-		entries = append(entries, ui.Entry{Marker: ui.MarkerMaterialized, Name: fmt.Sprintf("%s -> %s", p.Namespace, p.Dest)})
+		pairs = append(pairs, ui.Pair{Name: p.Namespace, Value: p.Dest})
 	}
-	return entries
+	return pairs
 }
 
 // initRepo implements `repo init [path]`: take a local folder and register
@@ -296,7 +299,10 @@ func initRepo(pathArg string, flags shared.Flags) error {
 		}
 	}
 
-	reg.Repos = append(reg.Repos, manifest.Repo{Name: name})
+	// repo init has no remote, so this entry is never written to the shared
+	// config registry — concept.md "Repository manifest": a local folder
+	// path means nothing on another machine.
+	reg.Repos = append(reg.Repos, manifest.Repo{Name: name, Origin: manifest.OriginLocal})
 	if err := manifest.WriteRegistry(reg); err != nil {
 		return err
 	}
@@ -364,6 +370,10 @@ func repoNameTaken(reg manifest.Registry, name string) bool {
 	return false
 }
 
+// renderRepoList lists every registered repository, marking one whose clone
+// is missing from the data directory "!" rather than silently deregistering
+// it — concept.md "Repository manifest": absence is ambiguous, and a
+// mis-set XDG_DATA_HOME must not be able to erase the registry.
 func renderRepoList() error {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
@@ -373,9 +383,17 @@ func renderRepoList() error {
 		printEmptyRegistryHint()
 		return nil
 	}
+	dataDir, err := paths.Data()
+	if err != nil {
+		return err
+	}
 	entries := make([]ui.Entry, 0, len(reg.Repos))
 	for _, r := range reg.Repos {
-		entries = append(entries, ui.Entry{Marker: ui.MarkerMaterialized, Name: r.Name})
+		marker := ui.MarkerMaterialized
+		if _, err := os.Stat(filepath.Join(dataDir, r.Name)); os.IsNotExist(err) {
+			marker = ui.MarkerProblem
+		}
+		entries = append(entries, ui.Entry{Marker: marker, Name: r.Name})
 	}
 	fmt.Print(ui.Render(entries))
 	return nil

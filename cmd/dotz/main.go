@@ -6,6 +6,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -35,7 +36,10 @@ type route struct {
 }
 
 func main() {
-	rawArgs, flags := extractGlobalFlags(os.Args[1:])
+	rawArgs, flags, err := extractGlobalFlags(os.Args[1:])
+	if err != nil {
+		die(err)
+	}
 
 	namespaces, err := namespaceNames()
 	if err != nil {
@@ -64,13 +68,30 @@ func main() {
 		err = commands.HandleHelp(r.args)
 	}
 	if err != nil {
+		if errors.Is(err, commands.ErrSomeSkipped) {
+			os.Exit(1)
+		}
 		die(err)
 	}
 }
 
+// shortFlags maps every valueless long flag's single-letter short form to
+// the field it sets, per concept.md "Flags". -r/--repo takes a value and is
+// handled separately — it never joins a cluster.
+var shortFlags = map[byte]func(*shared.Flags){
+	'A': func(f *shared.Flags) { f.All = true },
+	'f': func(f *shared.Flags) { f.Force = true },
+	'p': func(f *shared.Flags) { f.Purge = true },
+	'y': func(f *shared.Flags) { f.Yes = true },
+	'd': func(f *shared.Flags) { f.Debug = true },
+}
+
 // extractGlobalFlags pulls the command-wide flags from anywhere in args and
-// returns the remaining positional tokens.
-func extractGlobalFlags(args []string) ([]string, shared.Flags) {
+// returns the remaining positional tokens. Every valueless long flag has a
+// short form, and short forms cluster: -Af is --all --force. An unknown
+// letter in a cluster is an error naming it — never reinterpreted as a
+// positional name, per concept.md "Flags".
+func extractGlobalFlags(args []string) ([]string, shared.Flags, error) {
 	var remaining []string
 	var flags shared.Flags
 	skipNext := false
@@ -82,7 +103,7 @@ func extractGlobalFlags(args []string) ([]string, shared.Flags) {
 		}
 
 		switch {
-		case arg == "-A" || arg == "--all":
+		case arg == "--all":
 			flags.All = true
 		case arg == "--force":
 			flags.Force = true
@@ -94,19 +115,39 @@ func extractGlobalFlags(args []string) ([]string, shared.Flags) {
 			flags.Debug = true
 		case arg == "--bootstrap":
 			flags.Bootstrap = true
-		case arg == "--repo":
-			if i+1 < len(args) {
-				flags.Repo = args[i+1]
-				skipNext = true
+		case arg == "--repo" || arg == "-r":
+			if i+1 >= len(args) {
+				return nil, shared.Flags{}, fmt.Errorf("%s requires a value", arg)
 			}
+			flags.Repo = args[i+1]
+			skipNext = true
 		case strings.HasPrefix(arg, "--repo="):
 			flags.Repo = strings.TrimPrefix(arg, "--repo=")
+		case len(arg) > 1 && arg[0] == '-' && arg[1] != '-':
+			if err := applyShortCluster(arg[1:], &flags); err != nil {
+				return nil, shared.Flags{}, err
+			}
 		default:
 			remaining = append(remaining, arg)
 		}
 	}
 
-	return remaining, flags
+	return remaining, flags, nil
+}
+
+// applyShortCluster applies every letter of a short-flag cluster (the
+// characters of "-Af" after the leading dash) to flags. Clustering stops at
+// the first letter that is not a known valueless short flag, and the whole
+// token is an error naming that letter.
+func applyShortCluster(letters string, flags *shared.Flags) error {
+	for i := 0; i < len(letters); i++ {
+		set, ok := shortFlags[letters[i]]
+		if !ok {
+			return fmt.Errorf("unknown flag letter %q in -%s", letters[i], letters)
+		}
+		set(flags)
+	}
+	return nil
 }
 
 // resolveRoute implements concept.md "Name resolution" and "Aliases":
@@ -143,14 +184,21 @@ func resolveRoute(args []string, namespaces, repos []string, ambiguous func(name
 	// This alias only ever targets the namespace subtree — repo has its
 	// own explicit `repo add`/`repo rm`, never a bare verb form.
 	if grammar.IsVerb(tok0) {
-		if grammar.Canonical(tok0) == "enable" && len(args) == 1 {
+		canon := grammar.Canonical(tok0)
+		if canon == "enable" && len(args) == 1 {
 			return route{target: targetNamespace, args: []string{"enable"}}, nil
+		}
+		// `enable` alone accepts more than one namespace name (concept.md
+		// "Enabling more than one"); every other verb stays single-name, so
+		// only enable is routed to the noun-level batch form here.
+		if canon == "enable" && len(args) > 2 {
+			return route{target: targetNamespace, args: append([]string{"enable"}, args[1:]...)}, nil
 		}
 		if len(args) < 2 {
 			return route{}, fmt.Errorf("usage: %s <namespace> [args]", tok0)
 		}
 		name := args[1]
-		rewritten := append([]string{name, grammar.Canonical(tok0)}, args[2:]...)
+		rewritten := append([]string{name, canon}, args[2:]...)
 		return route{target: targetNamespace, args: rewritten}, nil
 	}
 
@@ -219,6 +267,6 @@ func namespaceNames() ([]string, error) {
 }
 
 func die(err error) {
-	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	fmt.Fprintln(os.Stderr, ui.ErrorTone(fmt.Sprintf("Error: %v", err)))
 	os.Exit(1)
 }

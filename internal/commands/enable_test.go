@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
+	"github.com/DeprecatedLuar/dotz/internal/state"
 )
 
 // registerRepoWithNamespace registers one repository holding one namespace
@@ -137,6 +139,118 @@ func TestEnableNamespace_Force_TrashesOccupiedDestinationAndLinks(t *testing.T) 
 	target, err := os.Readlink(dest)
 	if err != nil || target != filepath.Join(nsDir, "existing") {
 		t.Fatalf("expected the symlink to point at the namespace payload, got %s (err=%v)", target, err)
+	}
+}
+
+// registerRepoWithNamespaces registers one repository holding several
+// namespaces, each with one entry bound to home/<name>, optionally
+// pre-occupied by a real file, for batch-enable tests.
+func registerRepoWithNamespaces(t *testing.T, occupied, clean []string) (home string) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	reg := manifest.Registry{Repos: []manifest.Repo{
+		{Name: "dotfiles", Owner: "someone", URL: "https://example.com/someone/dotfiles"},
+	}}
+	if err := manifest.WriteRegistry(reg); err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Join(dataHome, "ireallylovemydots", "dotfiles")
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// allNamespaceNames also consults the repository's git catalogue
+	// (repo.Namespaces), which shells out to git; a plain, uninitialized
+	// directory makes that a hard error rather than reading as empty.
+	if out, err := exec.Command("git", "-C", repoDir, "init", "-b", "main").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	home = t.TempDir()
+
+	makeNamespace := func(name string, isOccupied bool) {
+		nsDir := filepath.Join(repoDir, name)
+		if err := os.MkdirAll(filepath.Join(nsDir, name), 0755); err != nil {
+			t.Fatal(err)
+		}
+		dest := filepath.Join(home, name)
+		if isOccupied {
+			if err := os.WriteFile(dest, []byte("x"), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := manifest.Write(nsDir, manifest.Manifest{Entries: []manifest.Entry{{Name: name, Dest: dest}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range occupied {
+		makeNamespace(name, true)
+	}
+	for _, name := range clean {
+		makeNamespace(name, false)
+	}
+	return home
+}
+
+func TestEnableNamespaces_All_SkipsOccupiedLinksRestReportsAndExitsNonZero(t *testing.T) {
+	registerRepoWithNamespaces(t, []string{"occA", "occB"}, []string{"clean1", "clean2", "clean3"})
+
+	err := enableNamespaces(nil, shared.Flags{All: true})
+	if !errors.Is(err, ErrSomeSkipped) {
+		t.Fatalf("expected ErrSomeSkipped, got %v", err)
+	}
+
+	s, err := state.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"clean1", "clean2", "clean3"} {
+		if !s.Entries[state.Key{Repo: "dotfiles", Namespace: name}].Enabled {
+			t.Fatalf("expected %s enabled", name)
+		}
+	}
+	for _, name := range []string{"occA", "occB"} {
+		if s.Entries[state.Key{Repo: "dotfiles", Namespace: name}].Enabled {
+			t.Fatalf("expected %s skipped rather than enabled", name)
+		}
+	}
+}
+
+func TestEnableNamespaces_All_ForceEnablesEverythingIncludingOccupied(t *testing.T) {
+	registerRepoWithNamespaces(t, []string{"occA"}, []string{"clean1"})
+
+	if err := enableNamespaces(nil, shared.Flags{All: true, Force: true}); err != nil {
+		t.Fatalf("expected --force to enable everything, got %v", err)
+	}
+
+	s, err := state.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"occA", "clean1"} {
+		if !s.Entries[state.Key{Repo: "dotfiles", Namespace: name}].Enabled {
+			t.Fatalf("expected %s enabled under --force", name)
+		}
+	}
+}
+
+func TestEnableNamespaces_MultipleExplicitNames_BothEnabled(t *testing.T) {
+	registerRepoWithNamespaces(t, nil, []string{"krita", "rofi"})
+
+	if err := enableNamespaces([]string{"krita", "rofi"}, shared.Flags{}); err != nil {
+		t.Fatalf("expected both namespaces to enable, got %v", err)
+	}
+
+	s, err := state.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"krita", "rofi"} {
+		if !s.Entries[state.Key{Repo: "dotfiles", Namespace: name}].Enabled {
+			t.Fatalf("expected %s enabled", name)
+		}
 	}
 }
 

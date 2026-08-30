@@ -12,14 +12,17 @@ import (
 // profile. A name in verb position descends a level instead.
 var Verbs = []string{"add", "rm", "mv", "list", "edit", "enable", "disable"}
 
-// VerbAliases maps a short or alternate spelling to its canonical verb.
-// enable and disable have no alias. See concept.md "Verb aliases".
+// VerbAliases maps a short or alternate spelling to its canonical verb. See
+// concept.md "Verb aliases": link names the mechanism instead of the intent
+// and pairs with unlink, the one alias disable has.
 var VerbAliases = map[string]string{
 	"a":      "add",
 	"remove": "rm",
 	"move":   "mv",
 	"ls":     "list",
 	"e":      "edit",
+	"link":   "enable",
+	"unlink": "disable",
 }
 
 // Nouns introduce a subtree explicitly.

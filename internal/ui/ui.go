@@ -92,6 +92,40 @@ func Render(entries []Entry) string {
 	return b.String()
 }
 
+// Pair is one name/value line for RenderAligned.
+type Pair struct {
+	Name  string
+	Value string
+}
+
+// arrow separates the two columns RenderAligned produces — a real arrow
+// character, never a listing marker: this output is a proposed mapping, not
+// a state report, so it must not borrow "+"/"-"/"!"/"=" and imply state that
+// does not exist yet (concept.md "Bootstrap").
+const arrow = "→"
+
+// RenderAligned formats pairs as two aligned columns, name then value,
+// joined by a real arrow: the one reusable column formatter for anything
+// pairing a name with a value outside a listing (concept.md's bootstrap
+// preview is the first case). The column width is computed from the widest
+// name in a single pass; callers never compute it themselves. Listings do
+// not use this — the marker is the message there, so alignment would imply
+// a state that is not being reported.
+func RenderAligned(pairs []Pair) string {
+	width := 0
+	for _, p := range pairs {
+		if len(p.Name) > width {
+			width = len(p.Name)
+		}
+	}
+
+	var b strings.Builder
+	for _, p := range pairs {
+		fmt.Fprintf(&b, "%-*s %s %s\n", width, p.Name, arrow, p.Value)
+	}
+	return b.String()
+}
+
 // ErrorTone wraps msg in the error tone used for "!" markers, for message
 // output that should read as the same kind of problem, per concept.md
 // "Listing output". Coloured only when stderr is a terminal and NO_COLOR is

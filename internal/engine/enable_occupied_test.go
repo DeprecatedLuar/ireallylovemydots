@@ -10,6 +10,7 @@ import (
 )
 
 func TestEnable_OccupiedDestinationTrashedThenLinked(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	// Trash lives under $XDG_DATA_HOME, which must share a filesystem with
 	// the temp-dir destination being trashed, or the rename it uses fails
 	// with "invalid cross-device link".

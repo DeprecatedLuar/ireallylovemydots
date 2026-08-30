@@ -174,6 +174,7 @@ func TestAddRepo_RejectsReservedDerivedName(t *testing.T) {
 }
 
 func TestInitRepo_IncompatibleLeavesSourceAndRegistryUntouched(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
@@ -218,6 +219,7 @@ func TestInitRepo_IncompatibleLeavesSourceAndRegistryUntouched(t *testing.T) {
 }
 
 func TestInitRepo_BootstrapNonInteractiveErrorsAndConvertsNothing(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
@@ -315,6 +317,7 @@ func TestBootstrap_ConvertedNamespaceEnablesThroughRealPath(t *testing.T) {
 }
 
 func TestInitRepo_EmptyFolderRegistersSilentlyAndMoves(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	dataHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)
@@ -352,6 +355,7 @@ func TestInitRepo_EmptyFolderRegistersSilentlyAndMoves(t *testing.T) {
 }
 
 func TestInitRepo_AlreadyGitRepoWithOriginPreservesRemote(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	dataHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)
@@ -396,6 +400,7 @@ func TestInitRepo_AlreadyGitRepoWithOriginPreservesRemote(t *testing.T) {
 }
 
 func TestInitRepo_ActsOnPathArgumentRegardlessOfCwd(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	dataHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)
@@ -426,6 +431,7 @@ func TestInitRepo_ActsOnPathArgumentRegardlessOfCwd(t *testing.T) {
 }
 
 func TestInitRepo_RefusesPathInsideDataDirectory(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	dataHome := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dataHome)
@@ -450,6 +456,7 @@ func TestInitRepo_RefusesPathInsideDataDirectory(t *testing.T) {
 }
 
 func TestInitRepo_CollisionWithReservedWordErrorsNonInteractive(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
@@ -476,6 +483,7 @@ func TestInitRepo_CollisionWithReservedWordErrorsNonInteractive(t *testing.T) {
 }
 
 func TestInitRepo_CollisionWithExistingRepoNameErrorsNonInteractive(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
@@ -505,6 +513,39 @@ func TestInitRepo_CollisionWithExistingRepoNameErrorsNonInteractive(t *testing.T
 	}
 	if len(reg.Repos) != 1 {
 		t.Fatalf("registry should be untouched, got %+v", reg.Repos)
+	}
+}
+
+func TestRenderRepoList_MissingCloneMarkedProblemRegistryUnchanged(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+
+	reg := manifest.Registry{Repos: []manifest.Repo{
+		{Name: "dotfiles", Owner: "someone", URL: "https://example.com/someone/dotfiles"},
+	}}
+	if err := manifest.WriteRegistry(reg); err != nil {
+		t.Fatal(err)
+	}
+	// The clone is never created: this is the "deleted the repository's
+	// folder from the data directory" case from concept.md "Repository
+	// manifest" — a missing clone must never silently deregister.
+
+	out := captureStdout(t, func() {
+		if err := renderRepoList(); err != nil {
+			t.Fatalf("renderRepoList: %v", err)
+		}
+	})
+	if !strings.Contains(out, "! dotfiles") {
+		t.Fatalf("expected the missing clone marked \"!\", got %q", out)
+	}
+
+	after, err := manifest.ReadRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Repos) != 1 {
+		t.Fatalf("expected the registry left unchanged, got %+v", after.Repos)
 	}
 }
 

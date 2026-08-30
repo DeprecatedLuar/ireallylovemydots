@@ -87,13 +87,7 @@ func handleNamespaceNounVerb(verb string, args []string, flags shared.Flags) err
 		}
 		return editNamespace(args[0], flags)
 	case "enable":
-		if flags.All && len(args) == 0 {
-			return enableNamespace("", flags)
-		}
-		if len(args) != 1 {
-			return fmt.Errorf("usage: namespace enable <name>")
-		}
-		return enableNamespace(args[0], flags)
+		return enableNamespaces(args, flags)
 	case "disable":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: namespace disable <name>")
@@ -218,6 +212,13 @@ func renameNamespace(oldName, newName string, flags shared.Flags) error {
 // untracked payload (concept.md "Manual edits"), and persist only what the
 // editor actually leaves behind — quitting without saving must leave the
 // real manifest byte-identical.
+//
+// The edit is guarded on the way back in, following visudo rather than a
+// plain $EDITOR call (concept.md "Manual edits"): the result must parse
+// before it replaces anything, and a parse error holds the terminal to ask
+// whether to reopen the buffer at the error or discard the edit — the
+// original file is untouched until answered. Not being able to prompt is a
+// hard error, and the edit is discarded either way.
 func editNamespace(name string, flags shared.Flags) error {
 	loc, err := resolveNamespace(name, flags)
 	if err != nil {
@@ -229,7 +230,7 @@ func editNamespace(name string, flags shared.Flags) error {
 		return fmt.Errorf("$EDITOR is not set")
 	}
 
-	buf, err := prepareEditBuffer(loc.Dir)
+	original, err := prepareEditBuffer(loc.Dir)
 	if err != nil {
 		return err
 	}
@@ -240,7 +241,7 @@ func editNamespace(name string, flags shared.Flags) error {
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-	if _, err := tmp.Write(buf); err != nil {
+	if _, err := tmp.Write(original); err != nil {
 		tmp.Close()
 		return fmt.Errorf("write edit buffer: %w", err)
 	}
@@ -248,17 +249,41 @@ func editNamespace(name string, flags shared.Flags) error {
 		return fmt.Errorf("close edit buffer: %w", err)
 	}
 
-	cmd := exec.Command(editor, tmpPath)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("run %s: %w", editor, err)
-	}
+	for {
+		cmd := exec.Command(editor, tmpPath)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("run %s: %w", editor, err)
+		}
 
-	edited, err := os.ReadFile(tmpPath)
-	if err != nil {
-		return fmt.Errorf("read edit buffer: %w", err)
+		edited, err := os.ReadFile(tmpPath)
+		if err != nil {
+			return fmt.Errorf("read edit buffer: %w", err)
+		}
+
+		if bytes.Equal(original, edited) {
+			return nil
+		}
+
+		if _, decodeErr := manifest.Decode(edited); decodeErr != nil {
+			if !ui.Interactive() {
+				return fmt.Errorf("%s does not parse: %w (edit discarded)", manifest.Path(loc.Dir), decodeErr)
+			}
+			choice, promptErr := ui.Prompt(
+				fmt.Sprintf("%s does not parse: %v\n  [r] reopen at the error\n  [d] discard the edit", manifest.Path(loc.Dir), decodeErr),
+				[]string{"r", "d"},
+			)
+			if promptErr != nil {
+				return promptErr
+			}
+			if strings.EqualFold(strings.TrimSpace(choice), "r") {
+				continue
+			}
+			return nil
+		}
+
+		return applyEditedBuffer(loc.Dir, original, edited)
 	}
-	return applyEditedBuffer(loc.Dir, buf, edited)
 }
 
 // prepareEditBuffer returns the bytes to seed namespace <ns> edit's buffer

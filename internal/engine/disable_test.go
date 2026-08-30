@@ -10,6 +10,7 @@ import (
 )
 
 func TestDisable_RemovesLinksKeepsFilesFlipsState(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	home := t.TempDir()
 	nsDir := t.TempDir()
 	payload := filepath.Join(nsDir, "nvim")
@@ -45,6 +46,7 @@ func TestDisable_RemovesLinksKeepsFilesFlipsState(t *testing.T) {
 }
 
 func TestDisable_UnenabledNamespaceIsNoOp(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
 	s := state.State{Entries: map[state.Key]state.Entry{}}
 	if err := Disable(key, s); err != nil {
@@ -53,6 +55,7 @@ func TestDisable_UnenabledNamespaceIsNoOp(t *testing.T) {
 }
 
 func TestEnable_CollisionDisablesWholeConflictingNamespace(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	home := t.TempDir()
 	nsDir := t.TempDir()
 
