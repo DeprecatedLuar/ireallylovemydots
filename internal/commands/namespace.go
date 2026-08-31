@@ -188,7 +188,7 @@ func resolveTargetRepo(reg manifest.Registry, flags shared.Flags) (manifest.Repo
 	for _, r := range reg.Repos {
 		names = append(names, r.Name)
 	}
-	choice, err := ui.Prompt("Multiple repositories registered. Choose one to hold the new namespace:", names)
+	choice, err := ui.Prompt("", "Multiple repositories registered. Choose one to hold the new namespace:", names)
 	if err != nil {
 		return manifest.Repo{}, err
 	}
@@ -284,6 +284,7 @@ func editNamespace(name string, flags shared.Flags) error {
 				return fmt.Errorf("%s does not parse: %w (edit discarded)", manifest.Path(loc.Dir), decodeErr)
 			}
 			choice, promptErr := ui.Prompt(
+				"",
 				fmt.Sprintf("%s does not parse: %v\n  [r] reopen at the error\n  [d] discard the edit", manifest.Path(loc.Dir), decodeErr),
 				[]string{"r", "d"},
 			)

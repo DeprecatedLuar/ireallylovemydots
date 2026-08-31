@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -51,8 +52,10 @@ func rmEntry(name, path string, flags shared.Flags) error {
 		return fmt.Errorf("%s is not tracked in namespace %q", dest, name)
 	}
 
-	if err := confirmRemoval([]string{name}, 0, 1, flags); err != nil {
+	if proceed, err := confirmRemoval("file", []removalTarget{{Name: entry.Name}}, flags); err != nil {
 		return err
+	} else if !proceed {
+		return nil
 	}
 	if err := removeEntries(loc, name, []manifest.Entry{entry}, flags); err != nil {
 		return err
@@ -64,15 +67,14 @@ func rmEntry(name, path string, flags shared.Flags) error {
 // rmNamespaces implements `namespace rm <ns>...`: every named namespace is
 // disabled, its entries removed per the flags below, and its folder
 // trashed. Per concept.md "Confirmation", the whole batch is confirmed once,
-// naming the namespace count, the file count, and whether --restore is in
-// effect.
+// listing every namespace with its entry count.
 func rmNamespaces(names []string, flags shared.Flags) error {
 	type resolved struct {
 		loc     namespace.Located
 		entries []manifest.Entry
 	}
 	targets := make([]resolved, 0, len(names))
-	fileCount := 0
+	removalTargets := make([]removalTarget, 0, len(names))
 	for _, name := range names {
 		loc, err := resolveNamespace(name, flags)
 		if err != nil {
@@ -83,11 +85,13 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 			return err
 		}
 		targets = append(targets, resolved{loc: loc, entries: m.Entries})
-		fileCount += len(m.Entries)
+		removalTargets = append(removalTargets, removalTarget{Name: name, Items: len(m.Entries)})
 	}
 
-	if err := confirmRemoval(names, len(names), fileCount, flags); err != nil {
+	if proceed, err := confirmRemoval("namespace", removalTargets, flags); err != nil {
 		return err
+	} else if !proceed {
+		return nil
 	}
 
 	// Git safety is checked once per affected repository, before anything is
@@ -145,19 +149,19 @@ func rmRepo(name string, flags shared.Flags) error {
 		return err
 	}
 
-	fileCount := 0
-	entriesByName := make(map[string][]manifest.Entry, len(names))
+	removalTargets := make([]removalTarget, 0, len(names))
 	for _, nsName := range names {
 		m, err := manifest.Read(filepath.Join(repoDir, nsName))
 		if err != nil {
 			return err
 		}
-		entriesByName[nsName] = m.Entries
-		fileCount += len(m.Entries)
+		removalTargets = append(removalTargets, removalTarget{Name: nsName, Items: len(m.Entries)})
 	}
 
-	if err := confirmRemoval([]string{r.Name}, len(names), fileCount, flags); err != nil {
+	if proceed, err := confirmRemoval("namespace", removalTargets, flags); err != nil {
 		return err
+	} else if !proceed {
+		return nil
 	}
 
 	if err := checkGitSafety(r.Name, repoDir, flags); err != nil {
@@ -284,56 +288,72 @@ func checkGitSafety(repoName, repoDir string, flags shared.Flags) error {
 	return nil
 }
 
-// confirmRemoval implements concept.md "Confirmation": rm always confirms,
-// naming the scale (namespace count and file count) and whether --restore
-// is in effect, with --purge's line naming that nothing will be
-// recoverable. -y (or --force, which implies it) skips the prompt.
-// Non-interactively without either, rm is a hard error that changes
-// nothing — checked here, before any side effect runs. namespaceCount is 0
-// for a single-entry removal, which names files only.
-func confirmRemoval(names []string, namespaceCount, fileCount int, flags shared.Flags) error {
+// removalTarget is one thing confirmRemoval lists: a namespace with its
+// entry count, or a single file with Items left at 0 so no count is shown
+// next to it (it already is the item).
+type removalTarget struct {
+	Name  string
+	Items int
+}
+
+// confirmRemoval implements concept.md "Confirmation": rm always lists what
+// it's about to touch and how, before touching it. noun names what targets
+// holds ("namespace" or "file"), pluralized in the header. -y (or --force,
+// which implies it) skips the prompt. Non-interactively without either, rm
+// is a hard error that changes nothing — checked here, before any side
+// effect runs. proceed is false only when the user declined at the
+// prompt — not an error, since answering "no" is not a failure; err is
+// reserved for an actual problem (can't prompt, can't read input).
+func confirmRemoval(noun string, targets []removalTarget, flags shared.Flags) (proceed bool, err error) {
 	if flags.Yes {
-		return nil
+		return true, nil
 	}
 
-	quoted := make([]string, len(names))
-	for i, n := range names {
-		quoted[i] = fmt.Sprintf("%q", n)
+	names := make([]string, len(targets))
+	pairs := make([]ui.Pair, len(targets))
+	for i, t := range targets {
+		names[i] = t.Name
+		pairs[i] = ui.Pair{Name: t.Name}
+		if t.Items > 0 {
+			pairs[i].Value = ui.Plural(t.Items, "item")
+		}
 	}
-	subjects := strings.Join(quoted, ", ")
-
-	var scale string
-	if namespaceCount > 0 {
-		scale = fmt.Sprintf("%d namespace(s), %d file(s)", namespaceCount, fileCount)
-	} else {
-		scale = fmt.Sprintf("%d file(s)", fileCount)
-	}
+	lines := ui.CountedItems(pairs)
 
 	if !ui.Interactive() {
-		return fmt.Errorf("cannot remove %s (%s) non-interactively without -y", subjects, scale)
+		return false, fmt.Errorf("cannot remove %s non-interactively without -y", strings.Join(names, ", "))
 	}
 
-	var tip string
+	var verb, tip, warning string
 	switch {
 	case flags.Purge:
-		scale += " -> ERASED FROM DISK. Not recoverable."
+		verb = "purged"
+		warning = "not recoverable"
 	case flags.Restore:
-		scale += " -> restored to destination"
-		tip = "--restore is in effect: files are written back to their destinations first."
+		verb = "restored"
+		tip = "Files are written back to their destinations first."
 	default:
-		scale += " -> trash"
-		tip = "Nothing is written to your home directory.\nTip: --restore puts the files back at their destinations first."
+		verb = "trashed"
+		tip = "If you want to restore real files before deleting, try using --restore first."
 	}
 
-	msg := ui.Confirm(fmt.Sprintf("Remove %s?", subjects), []string{scale}, tip)
-	choice, err := ui.Prompt(msg, []string{"y", "N"})
+	headerText := fmt.Sprintf("The following %s will be %s:", ui.Plural(len(targets), noun), verb)
+	if warning != "" {
+		headerText = fmt.Sprintf("The following %s will be %s (%s):", ui.Plural(len(targets), noun), verb, warning)
+	}
+	// Every removal header carries the warning tone, since rm is always a
+	// destructive confirmation regardless of which flag chose the outcome.
+	header := ui.WarningTone(headerText)
+	block := ui.List(header, lines, tip)
+	choice, err := ui.Prompt(block, "Do you want to proceed?", []string{"y", "N"})
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !strings.EqualFold(choice, "y") && !strings.EqualFold(choice, "yes") {
-		return fmt.Errorf("removal cancelled")
+		fmt.Fprintln(os.Stderr, "\ncancelled")
+		return false, nil
 	}
-	return nil
+	return true, nil
 }
 
 // removeEntries removes entries from loc per the flags: --restore writes
@@ -401,7 +421,8 @@ func restoreEntries(loc namespace.Located, nsName string, entries []manifest.Ent
 				nsName, renderRestoreProblems(problems))
 		} else {
 			choice, err := ui.Prompt(
-				fmt.Sprintf("restoring %q has %d occupied destination(s):\n%s\nchoose one", nsName, len(problems), renderRestoreProblems(problems)),
+				fmt.Sprintf("restoring %q has %d occupied destination(s):\n%s", nsName, len(problems), renderRestoreProblems(problems)),
+				"choose one",
 				[]string{choiceTrash, choiceSkip, choiceCancel},
 			)
 			if err != nil {

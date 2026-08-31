@@ -219,6 +219,7 @@ func planBootstrap(repoPath string, entries []repo.RootEntry) ([]repo.PlannedNam
 	}
 
 	choice, err := ui.Prompt(
+		"",
 		fmt.Sprintf("--bootstrap will create %d namespace(s) as shown above. Proceed?", len(plan)),
 		[]string{"y", "N"},
 	)
@@ -423,7 +424,7 @@ func resolveNewRepoName(reg manifest.Registry, name string) (string, error) {
 		if !ui.Interactive() {
 			return "", fmt.Errorf("%s rerun with an explicit distinct name (non-interactive session)", reason)
 		}
-		resp, err := ui.Prompt(reason+" Choose a different local name:", nil)
+		resp, err := ui.Prompt("", reason+" Choose a different local name:", nil)
 		if err != nil {
 			return "", err
 		}

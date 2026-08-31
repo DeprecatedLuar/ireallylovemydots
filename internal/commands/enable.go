@@ -343,7 +343,7 @@ func locateNamespaceForEnable(dataDir string, reg manifest.Registry, name string
 	if !ui.Interactive() {
 		return manifest.Repo{}, "", "", fmt.Errorf("namespace %q exists in multiple repositories (%s); disambiguate with --repo", name, strings.Join(repoNames, ", "))
 	}
-	choice, err := ui.Prompt(fmt.Sprintf("namespace %q exists in multiple repositories. Choose one:", name), repoNames)
+	choice, err := ui.Prompt("", fmt.Sprintf("namespace %q exists in multiple repositories. Choose one:", name), repoNames)
 	if err != nil {
 		return manifest.Repo{}, "", "", err
 	}

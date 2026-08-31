@@ -83,19 +83,19 @@ func TestReport_NoFooterOmitsBlankLine(t *testing.T) {
 	}
 }
 
-func TestConfirm_AssemblesPromptLinesAndTip(t *testing.T) {
-	got := Confirm("Remove \"nvim\"?", []string{"1 file(s) -> trash"}, "Tip: --restore puts the files back first.")
-	want := "Remove \"nvim\"?\n  1 file(s) -> trash\n\n  Tip: --restore puts the files back first."
+func TestList_AssemblesHeaderItemsAndTip(t *testing.T) {
+	got := List("The following file(s) will be trashed:", []string{"nvim"}, "--restore puts the files back first.")
+	want := "The following file(s) will be trashed:\n\n  nvim\n\n--restore puts the files back first."
 	if got != want {
-		t.Fatalf("Confirm = %q, want %q", got, want)
+		t.Fatalf("List = %q, want %q", got, want)
 	}
 }
 
-func TestConfirm_NoTipOmitsTrailingBlock(t *testing.T) {
-	got := Confirm("Remove \"nvim\"?", []string{"1 file(s) -> trash"}, "")
-	want := "Remove \"nvim\"?\n  1 file(s) -> trash"
+func TestList_NoTipOmitsTrailingBlock(t *testing.T) {
+	got := List("The following file(s) will be trashed:", []string{"nvim"}, "")
+	want := "The following file(s) will be trashed:\n\n  nvim"
 	if got != want {
-		t.Fatalf("Confirm (no tip) = %q, want %q", got, want)
+		t.Fatalf("List (no tip) = %q, want %q", got, want)
 	}
 }
 

@@ -123,7 +123,7 @@ func confirmUninstallEnabled(name string, flags shared.Flags) (bool, error) {
 	if !ui.Interactive() {
 		return false, nil
 	}
-	choice, err := ui.Prompt(fmt.Sprintf("%q is enabled; disable and uninstall it?", name), []string{"y", "N"})
+	choice, err := ui.Prompt("", fmt.Sprintf("%q is enabled; disable and uninstall it?", name), []string{"y", "N"})
 	if err != nil {
 		return false, err
 	}

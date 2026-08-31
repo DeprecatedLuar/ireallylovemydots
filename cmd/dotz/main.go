@@ -274,6 +274,7 @@ func ambiguityChooser(name string) (string, error) {
 		return "", fmt.Errorf("%q matches both a namespace and a repository; use --repo to disambiguate or rename one", name)
 	}
 	resp, err := ui.Prompt(
+		"",
 		fmt.Sprintf("%q matches both a namespace and a repository. Which did you mean?", name),
 		[]string{"[n] namespace", "[r] repository"},
 	)

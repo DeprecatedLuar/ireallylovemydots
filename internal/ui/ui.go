@@ -104,6 +104,16 @@ func tipTone(tip string, f *os.File) string {
 	return bold + cyanTone + tip + reset
 }
 
+// dimTone wraps s in the dim tone already used for MarkerAbsent, for
+// secondary detail that should read as quieter than the line it's on.
+// Coloured only when f is a colour-enabled destination.
+func dimTone(s string, f *os.File) string {
+	if s == "" || !colorEnabled(f) {
+		return s
+	}
+	return dim + s + reset
+}
+
 // Render formats entries for the listing output. Success prints nothing —
 // callers simply skip printing when entries is empty. Each marker carries
 // its own tone from concept.md's palette, applied to the whole line, only
@@ -173,25 +183,6 @@ func Report(lines []string, footer string) string {
 		b.WriteString("\n")
 		b.WriteString(footer)
 		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-// Confirm formats a confirmation/preview block: a prompt line, indented
-// detail lines under it, and an optional closing tip — the shape every
-// multi-fact confirmation in dots is built from (concept.md's removal and
-// occupied-destination prompts). The result is meant to be passed straight
-// to Prompt as its message.
-func Confirm(prompt string, lines []string, tip string) string {
-	var b strings.Builder
-	b.WriteString(prompt)
-	for _, l := range lines {
-		b.WriteString("\n  ")
-		b.WriteString(l)
-	}
-	if tip != "" {
-		b.WriteString("\n\n  ")
-		b.WriteString(tipTone(tip, os.Stderr))
 	}
 	return b.String()
 }
@@ -266,6 +257,33 @@ func RenderAligned(pairs []Pair) string {
 	return b.String()
 }
 
+// CountedItems formats pairs as name, then a parenthesized count in the dim
+// tone, with every "(" aligned to the same column — for List callers that
+// need to show each named item's size (confirmRemoval's namespace/item
+// counts is the first case). Value is the text inside the parens (e.g.
+// "6 items"); a pair with an empty Value is rendered as its bare Name, not
+// padded, since it has nothing to align against. The column width is
+// computed from the widest Name among pairs that do carry a Value.
+func CountedItems(pairs []Pair) []string {
+	width := 0
+	for _, p := range pairs {
+		if p.Value != "" && len(p.Name) > width {
+			width = len(p.Name)
+		}
+	}
+
+	lines := make([]string, len(pairs))
+	for i, p := range pairs {
+		if p.Value == "" {
+			lines[i] = p.Name
+			continue
+		}
+		paren := dimTone(fmt.Sprintf("(%s)", p.Value), os.Stderr)
+		lines[i] = fmt.Sprintf("%-*s %s", width, p.Name, paren)
+	}
+	return lines
+}
+
 // ErrorTone wraps msg in the error tone used for "!" markers, for message
 // output that should read as the same kind of problem, per concept.md
 // "Listing output". Coloured only when stderr is a terminal and NO_COLOR is
@@ -288,22 +306,27 @@ func WarningTone(msg string) string {
 	return warningTone + msg + reset
 }
 
-// Prompt asks the user to choose among options, returning their raw
-// response. Options are rendered inline in the conventional "(y/N)" form,
-// with the capitalized one signalling the default, and a blank line ahead
-// of the question separates it from whatever listing preceded it. Passing
-// no options asks for free-text instead. Callers are responsible for
-// validating the choice. It is an error to call this when Interactive() is
-// false.
-func Prompt(message string, options []string) (string, error) {
+// Prompt asks question, with options rendered inline in the conventional
+// "(y/N)" form (the capitalized one signalling the default), and returns
+// the raw response. context is optional leading material — a List or
+// RenderAligned block, say — printed above question, blank-line separated,
+// so options always attach to the actual question and never run into
+// whatever the block's last line happened to be; pass "" when there is no
+// such block. Passing no options asks for free-text instead. Callers are
+// responsible for validating the choice. It is an error to call this when
+// Interactive() is false.
+func Prompt(context, question string, options []string) (string, error) {
 	if !Interactive() {
 		return "", fmt.Errorf("cannot prompt: not an interactive session")
 	}
-	question := message
 	if len(options) > 0 {
-		question = fmt.Sprintf("%s (%s)", message, strings.Join(options, "/"))
+		question = fmt.Sprintf("%s (%s)", question, strings.Join(options, "/"))
 	}
-	fmt.Fprintf(os.Stderr, "\n%s ", question)
+	msg := question
+	if context != "" {
+		msg = context + "\n\n" + question
+	}
+	fmt.Fprintf(os.Stderr, "\n%s ", msg)
 
 	reader := bufio.NewReader(os.Stdin)
 	line, err := reader.ReadString('\n')
