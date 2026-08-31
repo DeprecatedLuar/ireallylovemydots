@@ -313,6 +313,12 @@ func WarningTone(msg string) string {
 	return warningTone + msg + reset
 }
 
+// Tip wraps msg in the dim tone used for closing tips elsewhere (List's
+// "Tip: " line), for a follow-up line printed under a fatal error.
+func Tip(msg string) string {
+	return dimTone(msg, os.Stderr)
+}
+
 // Prompt asks question, with options rendered inline in the conventional
 // "(y/N)" form (the capitalized one signalling the default), and returns
 // the raw response. context is optional leading material — a List or

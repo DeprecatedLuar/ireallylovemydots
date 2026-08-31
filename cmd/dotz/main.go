@@ -254,9 +254,23 @@ func resolveRoute(args []string, namespaces, repos []string, ambiguous func(name
 	case inRepo:
 		return route{target: targetRepo, args: args}, nil
 	default:
-		return route{}, fmt.Errorf("unknown command or name %q", tok0)
+		return route{}, &tipError{
+			err: fmt.Errorf("Thats not a real command: %s", tok0),
+			tip: "Try 'dots help' for usage",
+		}
 	}
 }
+
+// tipError pairs a fatal error with a follow-up tip line, printed dim
+// beneath the arrow-toned error line by die. Not every error carries one —
+// only cases where a next step is obvious, such as mistyping a command.
+type tipError struct {
+	err error
+	tip string
+}
+
+func (e *tipError) Error() string { return e.err.Error() }
+func (e *tipError) Unwrap() error { return e.err }
 
 func contains(list []string, name string) bool {
 	for _, v := range list {
@@ -325,8 +339,15 @@ func printVersion() {
 }
 
 // die prints err set off by a leading blank line, so it reads as its own
-// block rather than running into whatever output preceded it.
+// block rather than running into whatever output preceded it. It prints as
+// an arrow-marked line, the same tone used for "!" markers elsewhere,
+// rather than an "Error:" prefix. When err is a *tipError, a dim follow-up
+// line is appended below it.
 func die(err error) {
-	fmt.Fprintf(os.Stderr, "\n%s\n", ui.ErrorTone(fmt.Sprintf("Error: %v", err)))
+	msg := err.Error()
+	fmt.Fprintf(os.Stderr, "\n%s\n", ui.ErrorTone(fmt.Sprintf("%s %s", ui.Arrow, msg)))
+	if te, ok := err.(*tipError); ok {
+		fmt.Fprintf(os.Stderr, "%s\n", ui.Tip(te.tip))
+	}
 	os.Exit(1)
 }
