@@ -399,6 +399,81 @@ func TestInitRepo_AlreadyGitRepoWithOriginPreservesRemote(t *testing.T) {
 	}
 }
 
+// TestInitRepo_EndsSparseWithEveryNamespaceInCone covers Phase 8.7's success
+// criterion 4: `repo init` on an existing, fully checked out (non-sparse)
+// repository ends with every namespace in the sparse-checkout cone, and
+// `git status` clean — namespace folders already on disk are installed by
+// definition, so nothing should read as a pending deletion.
+func TestInitRepo_EndsSparseWithEveryNamespaceInCone(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+
+	src := newSourceRepo(t)
+	for _, ns := range []string{"editors", "shell"} {
+		if err := os.MkdirAll(filepath.Join(src, ns), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(src, ns, ".dots"), []byte(""), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(src, ns, "file.txt"), []byte(ns), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = src
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("add", ".")
+	run("commit", "-m", "init")
+
+	if got, err := repo.IsSparse(src); err != nil || got {
+		t.Fatalf("expected the fully checked out source to be non-sparse, sparse=%v err=%v", got, err)
+	}
+
+	if err := initRepo(src, shared.Flags{}); err != nil {
+		t.Fatalf("initRepo: %v", err)
+	}
+
+	dest := filepath.Join(dataHome, "ireallylovemydots", filepath.Base(src))
+	sparse, err := repo.IsSparse(dest)
+	if err != nil {
+		t.Fatalf("IsSparse: %v", err)
+	}
+	if !sparse {
+		t.Fatal("expected the moved repository to be converted to cone-mode sparse checkout")
+	}
+	cone, err := repo.List(dest)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	got := map[string]bool{}
+	for _, c := range cone {
+		got[c] = true
+	}
+	for _, ns := range []string{"editors", "shell"} {
+		if !got[ns] {
+			t.Fatalf("cone %v missing namespace %q", cone, ns)
+		}
+		if _, err := os.Stat(filepath.Join(dest, ns)); err != nil {
+			t.Fatalf("expected %s to remain on disk: %v", ns, err)
+		}
+	}
+
+	statusOut, err := exec.Command("git", "-C", dest, "status", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git status: %v\n%s", err, statusOut)
+	}
+	if strings.TrimSpace(string(statusOut)) != "" {
+		t.Fatalf("git status --porcelain = %q, want clean", statusOut)
+	}
+}
+
 func TestInitRepo_ActsOnPathArgumentRegardlessOfCwd(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

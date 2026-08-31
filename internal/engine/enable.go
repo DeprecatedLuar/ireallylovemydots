@@ -2,16 +2,15 @@ package engine
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 
-	"github.com/DeprecatedLuar/dotz/internal/gitutil"
 	"github.com/DeprecatedLuar/dotz/internal/link"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
+	"github.com/DeprecatedLuar/dotz/internal/repo"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/trash"
 )
@@ -47,10 +46,11 @@ func ManifestEntries(repoDir, namespaceDir, name string) (entries []manifest.Ent
 	return m.Entries, false, nil
 }
 
-// materialize sparse-checks-out a namespace's folder from HEAD when it is
-// not already present on disk. A namespace created directly (namespace add,
-// namespace <ns> add) is already there, and this is a no-op — the ordinary
-// case for a namespace that has never been synced anywhere else, and for a
+// materialize brings a namespace's folder into the working tree by adding
+// it to the repository's sparse-checkout cone, when it is not already
+// present on disk. A namespace created directly (namespace add, namespace
+// <ns> add) is already there, and this is a no-op — the ordinary case for
+// a namespace that has never been synced anywhere else, and for a
 // namespace being enabled a second time after a disable.
 func materialize(repoDir, namespaceDir, name string) error {
 	if _, err := os.Stat(namespaceDir); err == nil {
@@ -59,14 +59,11 @@ func materialize(repoDir, namespaceDir, name string) error {
 		return fmt.Errorf("stat namespace directory %s: %w", namespaceDir, err)
 	}
 
-	cmd := exec.Command("git", "-C", repoDir, "checkout", "HEAD", "--", name)
-	var tail gitutil.CappedWriter
-	cmd.Stderr = io.MultiWriter(os.Stderr, &tail)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("checkout namespace %q: %s", name, strings.TrimSpace(tail.String()))
+	if err := repo.Add(repoDir, name); err != nil {
+		return fmt.Errorf("sparse-checkout namespace %q: %w", name, err)
 	}
 	if _, err := os.Stat(namespaceDir); err != nil {
-		return fmt.Errorf("namespace %q was not materialized by checkout", name)
+		return fmt.Errorf("namespace %q was not materialized by sparse checkout", name)
 	}
 	return nil
 }

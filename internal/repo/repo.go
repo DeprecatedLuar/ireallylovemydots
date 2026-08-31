@@ -1,7 +1,9 @@
 // Package repo holds git mechanics for the repository registry: URL
-// parsing into a local name and owner, and a blobless no-checkout clone so
-// the namespace catalogue is readable without materializing file contents.
-// No orchestration and no registry I/O — that is internal/commands/repo.go.
+// parsing into a local name and owner, a blobless sparse clone so the
+// namespace catalogue is readable without materializing file contents, and
+// the sparse-checkout primitives (sparse.go) that bring a namespace's
+// folder into or out of the working tree. No orchestration and no registry
+// I/O — that is internal/commands/repo.go.
 package repo
 
 import (
@@ -38,9 +40,10 @@ func DeriveNameOwner(url string) (name, owner string) {
 	return name, owner
 }
 
-// Clone clones a repository blobless with no checkout into the data
-// directory under localName, so the namespace catalogue can be read from
-// the tree objects alone. spec may be a full URL (any scheme, or
+// Clone clones a repository blobless with an empty sparse-checkout cone
+// into the data directory under localName, so the namespace catalogue can
+// be read from the tree objects alone and no namespace folder is
+// materialized until installed. spec may be a full URL (any scheme, or
 // scp-style), a scheme-less host-qualified path, or a bare "owner/repo"
 // GitHub/GitLab shorthand — see candidateURLs. The destination must not
 // already exist; on failure of every candidate, the destination is removed,
@@ -56,7 +59,7 @@ func Clone(dataDir, spec, localName string) (dest, resolvedURL string, err error
 	candidates := candidateURLs(spec)
 	var lastErr error
 	for i, url := range candidates {
-		cmd := exec.Command("git", "clone", "--filter=blob:none", "--no-checkout", url, dest)
+		cmd := exec.Command("git", "clone", "--filter=blob:none", "--sparse", url, dest)
 		var tail gitutil.CappedWriter
 		cmd.Stderr = io.MultiWriter(os.Stderr, &tail)
 		cloneErr := cmd.Run()

@@ -320,3 +320,100 @@ func TestApply_NeverCommitsAndGitCheckoutRestoresExactly(t *testing.T) {
 		t.Fatalf("expected no commit made by Apply, log changed:\nbefore=%q\nafter=%q", logBefore, got)
 	}
 }
+
+// TestCheckoutAll_MaterializesPastAnEmptySparseCone covers the interaction
+// this phase introduced: Clone now clones with an empty sparse cone, and
+// `git checkout HEAD -- .` alone is bound by that cone and materializes
+// nothing outside it — verified empirically against real git 2.51.2.
+// CheckoutAll must disable sparse checkout first so bootstrap's full
+// conversion actually sees every root entry.
+func TestCheckoutAll_MaterializesPastAnEmptySparseCone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	source := nvimKittyBashrcRepo(t)
+	dest := filepath.Join(t.TempDir(), "clone")
+	gitRun(t, "", "clone", "--filter=blob:none", "--sparse", "file://"+source, dest)
+
+	if _, err := os.Stat(filepath.Join(dest, "nvim")); !os.IsNotExist(err) {
+		t.Fatalf("expected the sparse clone to leave nvim/ unmaterialized, got err=%v", err)
+	}
+
+	if err := CheckoutAll(dest); err != nil {
+		t.Fatalf("CheckoutAll: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "nvim", "init.lua")); err != nil {
+		t.Fatalf("expected CheckoutAll to materialize nvim/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "kitty", "kitty.conf")); err != nil {
+		t.Fatalf("expected CheckoutAll to materialize kitty/: %v", err)
+	}
+}
+
+// TestBootstrapAdd_EndsSparseWithCreatedNamespaces exercises the same
+// sequence addRepo's bootstrapAdd runs after the interactive prompt
+// confirms conversion — CheckoutAll, Apply, then EnsureSparse over the
+// namespaces Apply just created — without going through the prompt itself
+// (faking it needs a real pty; see the comment on
+// TestBootstrap_ConvertedNamespaceEnablesThroughRealPath in
+// internal/commands/repo_test.go for why that is exercised manually
+// instead). It confirms the resulting clone is sparse with exactly the
+// created namespaces in its cone. Apply moves tracked root entries into new,
+// as yet uncommitted namespace folders and never commits (see
+// TestApply_NeverCommitsAndGitCheckoutRestoresExactly above), so `git
+// status` is expected to stay dirty until a later sync commits the
+// conversion — EnsureSparse's job here is only the cone, not cleanliness.
+func TestBootstrapAdd_EndsSparseWithCreatedNamespaces(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	source := nvimKittyBashrcRepo(t)
+	dest := filepath.Join(t.TempDir(), "clone")
+	gitRun(t, "", "clone", "--filter=blob:none", "--sparse", "file://"+source, dest)
+
+	entries, err := RootEntries(dest)
+	if err != nil {
+		t.Fatalf("RootEntries: %v", err)
+	}
+	plan, err := PlanEntries(entries)
+	if err != nil {
+		t.Fatalf("PlanEntries: %v", err)
+	}
+
+	if err := CheckoutAll(dest); err != nil {
+		t.Fatalf("CheckoutAll: %v", err)
+	}
+	if err := Apply(dest, plan); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	postEntries, err := DiskEntries(dest)
+	if err != nil {
+		t.Fatalf("DiskEntries: %v", err)
+	}
+	var cone []string
+	for _, e := range postEntries {
+		if e.HasDots {
+			cone = append(cone, e.Name)
+		}
+	}
+	if len(cone) != 3 {
+		t.Fatalf("expected 3 created namespaces, got %v", cone)
+	}
+
+	if err := EnsureSparse(dest, cone); err != nil {
+		t.Fatalf("EnsureSparse: %v", err)
+	}
+	sparse, err := IsSparse(dest)
+	if err != nil {
+		t.Fatalf("IsSparse: %v", err)
+	}
+	if !sparse {
+		t.Fatal("expected the converted clone to be sparse")
+	}
+	for _, ns := range cone {
+		if _, err := os.Stat(filepath.Join(dest, ns)); err != nil {
+			t.Fatalf("expected namespace %s to remain on disk: %v", ns, err)
+		}
+	}
+}

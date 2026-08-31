@@ -51,6 +51,13 @@ func gitRepoWithNamespaces(t *testing.T, home string) (repoDir string, nsAEntrie
 	run("add", ".")
 	run("commit", "-m", "init")
 
+	// A real Clone (Phase 8.7) is sparse with an empty cone from birth;
+	// `sparse-checkout init --cone` here reproduces that starting point on
+	// this fixture, which was built fully checked out for convenience —
+	// materialize's Add now requires sparse checkout to already be
+	// initialized, matching what every real clone provides.
+	run("sparse-checkout", "init", "--cone")
+
 	return repoDir, []manifest.Entry{{Name: "aaa", Dest: destA}}, []manifest.Entry{{Name: "bbb", Dest: destB}}
 }
 
@@ -62,14 +69,13 @@ func TestEnable_MaterializesOnlyTargetNamespace(t *testing.T) {
 	nsADir := filepath.Join(repoDir, "aaa")
 	nsBDir := filepath.Join(repoDir, "bbb")
 
-	// A fresh clone leaves the worktree empty; simulate that here directly
-	// against the fixture repo instead of round-tripping through repo.Clone,
-	// since only the checked-out-or-not distinction matters to this test.
-	if err := os.RemoveAll(nsADir); err != nil {
-		t.Fatal(err)
+	// gitRepoWithNamespaces' sparse-checkout init --cone already leaves the
+	// worktree empty, matching a fresh Clone's empty cone.
+	if _, err := os.Stat(nsADir); !os.IsNotExist(err) {
+		t.Fatalf("expected the fixture's empty cone to leave aaa/ unmaterialized, got err=%v", err)
 	}
-	if err := os.RemoveAll(nsBDir); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(nsBDir); !os.IsNotExist(err) {
+		t.Fatalf("expected the fixture's empty cone to leave bbb/ unmaterialized, got err=%v", err)
 	}
 
 	key := state.Key{Repo: "dotfiles", Namespace: "aaa"}

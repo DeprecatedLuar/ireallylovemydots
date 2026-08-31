@@ -208,12 +208,18 @@ func moveEntry(src, dst string) error {
 }
 
 // CheckoutAll fetches every blob and checks out repoPath's HEAD in full,
-// turning a blobless, no-checkout clone into a complete working tree. This
-// is bootstrap's one exception to repo add's blobless clone (concept.md
-// "Bootstrap") — paid only once the user has confirmed the conversion,
-// applying the same `git checkout HEAD -- <path>` mechanism
-// engine.materialize uses for a single namespace to the whole tree instead.
+// turning a blobless clone with an empty sparse cone into a complete
+// working tree. This is bootstrap's one exception to repo add's sparse
+// clone (concept.md "Bootstrap") — paid only once the user has confirmed
+// the conversion. `git checkout HEAD -- .` alone would still be bound by
+// the empty cone left by Clone's `--sparse` flag and materialize nothing
+// outside it, so sparse checkout is switched off first; the caller
+// re-establishes the correct cone afterward via EnsureSparse once the
+// conversion's namespace folders are known.
 func CheckoutAll(repoPath string) error {
+	if err := disableSparse(repoPath); err != nil {
+		return err
+	}
 	cmd := exec.Command("git", "-C", repoPath, "checkout", "HEAD", "--", ".")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("checkout %s: %s", repoPath, strings.TrimSpace(string(out)))
