@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
@@ -15,7 +14,6 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/namespace"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
-	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
 
@@ -361,10 +359,7 @@ func resolveNamespace(name string, flags shared.Flags) (namespace.Located, error
 }
 
 // renderNamespaceList lists every namespace across every registered
-// repository: enabled materialized namespaces marked "+", disabled
-// materialized namespaces marked "-", and namespaces that exist in a
-// repository's catalogue but are not materialized here, marked "=". Drift
-// and conflict markers ("!", "?") are phase 7's job.
+// repository, via the shared listing API in listing.go.
 func renderNamespaceList() error {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
@@ -374,75 +369,12 @@ func renderNamespaceList() error {
 		printEmptyRegistryHint()
 		return nil
 	}
-	dataDir, err := paths.Data()
+	rows, err := namespaceListing(reg.Repos, listOptions{})
 	if err != nil {
 		return err
 	}
-	s, err := state.Read()
-	if err != nil {
-		return err
-	}
-
-	var entries []ui.Entry
-	for _, r := range reg.Repos {
-		repoDir := filepath.Join(dataDir, r.Name)
-
-		local, err := namespace.LocalNames(repoDir)
-		if err != nil {
-			return err
-		}
-		localSet := make(map[string]bool, len(local))
-		for _, n := range local {
-			localSet[n] = true
-			marker := ui.MarkerMaterialized
-			if s.Entries[state.Key{Repo: r.Name, Namespace: n}].Enabled {
-				marker = ui.MarkerEnabled
-			}
-			entries = append(entries, ui.Entry{Marker: marker, Name: n})
-		}
-
-		catalogue, err := repo.Namespaces(repoDir)
-		if err != nil {
-			return err
-		}
-		for _, n := range catalogue {
-			if !localSet[n] {
-				entries = append(entries, ui.Entry{Marker: ui.MarkerAbsent, Name: n})
-			}
-		}
-	}
-	sortNamespaceListEntries(entries)
-	fmt.Print(ui.Render(entries))
+	renderListing(rows)
 	return nil
-}
-
-// sortNamespaceListEntries groups namespaces by listing state, then sorts
-// names within each state. Problems lead, followed by enabled and disabled
-// materialized namespaces, with unavailable namespaces last.
-func sortNamespaceListEntries(entries []ui.Entry) {
-	sort.SliceStable(entries, func(i, j int) bool {
-		iRank := namespaceListMarkerRank(entries[i].Marker)
-		jRank := namespaceListMarkerRank(entries[j].Marker)
-		if iRank != jRank {
-			return iRank < jRank
-		}
-		return entries[i].Name < entries[j].Name
-	})
-}
-
-func namespaceListMarkerRank(marker string) int {
-	switch marker {
-	case ui.MarkerProblem:
-		return 0
-	case ui.MarkerEnabled:
-		return 1
-	case ui.MarkerMaterialized:
-		return 2
-	case ui.MarkerAbsent:
-		return 3
-	default:
-		return 4
-	}
 }
 
 func renderNamespaceEntries(name string, flags shared.Flags) error {
@@ -454,11 +386,7 @@ func renderNamespaceEntries(name string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
-	entries := make([]ui.Entry, 0, len(m.Entries))
-	for _, e := range m.Entries {
-		entries = append(entries, ui.Entry{Marker: ui.MarkerMaterialized, Name: e.Name})
-	}
-	fmt.Print(ui.Render(entries))
+	renderListing(entryListing(m.Entries))
 	return nil
 }
 

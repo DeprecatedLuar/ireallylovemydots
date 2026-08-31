@@ -324,10 +324,9 @@ func printVersion() {
 	fmt.Printf("dots %s\n", commit)
 }
 
-// die prints err set off by a blank line on each side, so it reads as its
-// own block rather than running into whatever output preceded it or the
-// shell prompt that follows.
+// die prints err set off by a leading blank line, so it reads as its own
+// block rather than running into whatever output preceded it.
 func die(err error) {
-	fmt.Fprintf(os.Stderr, "\n%s\n\n", ui.ErrorTone(fmt.Sprintf("Error: %v", err)))
+	fmt.Fprintf(os.Stderr, "\n%s\n", ui.ErrorTone(fmt.Sprintf("Error: %v", err)))
 	os.Exit(1)
 }

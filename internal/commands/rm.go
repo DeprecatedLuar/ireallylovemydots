@@ -52,7 +52,7 @@ func rmEntry(name, path string, flags shared.Flags) error {
 		return fmt.Errorf("%s is not tracked in namespace %q", dest, name)
 	}
 
-	if proceed, err := confirmRemoval("file", []removalTarget{{Name: entry.Name}}, flags); err != nil {
+	if proceed, err := confirmRemoval("file", []ui.Entry{{Marker: ui.MarkerMaterialized, Name: entry.Name}}, flags); err != nil {
 		return err
 	} else if !proceed {
 		return nil
@@ -73,8 +73,12 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 		loc     namespace.Located
 		entries []manifest.Entry
 	}
+	s, err := state.Read()
+	if err != nil {
+		return err
+	}
 	targets := make([]resolved, 0, len(names))
-	removalTargets := make([]removalTarget, 0, len(names))
+	rows := make([]ui.Entry, 0, len(names))
 	for _, name := range names {
 		loc, err := resolveNamespace(name, flags)
 		if err != nil {
@@ -85,10 +89,12 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 			return err
 		}
 		targets = append(targets, resolved{loc: loc, entries: m.Entries})
-		removalTargets = append(removalTargets, removalTarget{Name: name, Items: len(m.Entries)})
+		row := namespaceRow(s, loc.Repo.Name, name)
+		row.Count = len(m.Entries)
+		rows = append(rows, row)
 	}
 
-	if proceed, err := confirmRemoval("namespace", removalTargets, flags); err != nil {
+	if proceed, err := confirmRemoval("namespace", rows, flags); err != nil {
 		return err
 	} else if !proceed {
 		return nil
@@ -144,21 +150,20 @@ func rmRepo(name string, flags shared.Flags) error {
 	}
 	repoDir := filepath.Join(dataDir, r.Name)
 
-	names, err := namespace.LocalNames(repoDir)
+	// Everything on disk in this repository is a removal target — "="
+	// namespaces exist only in the catalogue and have no local folder to
+	// trash, so they're excluded by the state filter rather than by a
+	// separate check here.
+	rows, err := namespaceListing(reg.Repos, listOptions{Repo: r.Name, States: onDiskStates, Counts: true})
 	if err != nil {
 		return err
 	}
-
-	removalTargets := make([]removalTarget, 0, len(names))
-	for _, nsName := range names {
-		m, err := manifest.Read(filepath.Join(repoDir, nsName))
-		if err != nil {
-			return err
-		}
-		removalTargets = append(removalTargets, removalTarget{Name: nsName, Items: len(m.Entries)})
+	names := make([]string, len(rows))
+	for i, row := range rows {
+		names[i] = row.Name
 	}
 
-	if proceed, err := confirmRemoval("namespace", removalTargets, flags); err != nil {
+	if proceed, err := confirmRemoval("namespace", rows, flags); err != nil {
 		return err
 	} else if !proceed {
 		return nil
@@ -288,37 +293,35 @@ func checkGitSafety(repoName, repoDir string, flags shared.Flags) error {
 	return nil
 }
 
-// removalTarget is one thing confirmRemoval lists: a namespace with its
-// entry count, or a single file with Items left at 0 so no count is shown
-// next to it (it already is the item).
-type removalTarget struct {
-	Name  string
-	Items int
-}
+// onDiskStates are the listing markers that mean a namespace has a local
+// folder to trash — every state except "=", which exists only in a
+// repository's catalogue and has nothing on disk to remove.
+var onDiskStates = []string{ui.MarkerEnabled, ui.MarkerMaterialized, ui.MarkerProblem}
 
-// confirmRemoval implements concept.md "Confirmation": rm always lists what
-// it's about to touch and how, before touching it. noun names what targets
-// holds ("namespace" or "file"), pluralized in the header. -y (or --force,
-// which implies it) skips the prompt. Non-interactively without either, rm
-// is a hard error that changes nothing — checked here, before any side
-// effect runs. proceed is false only when the user declined at the
-// prompt — not an error, since answering "no" is not a failure; err is
+// confirmRemoval implements concept.md "Confirmation": rm lists what it's
+// about to touch through the shared listing renderer — same markers as
+// everywhere else, decorated with each target's item count — before
+// touching it. noun names what targets holds ("namespace" or "file"),
+// pluralized in the header alongside the summed item count. -y (or
+// --force, which implies it) skips the prompt. Non-interactively without
+// either, rm is a hard error that changes nothing — checked here, before
+// any side effect runs. proceed is false only when the user declined at
+// the prompt — not an error, since answering "no" is not a failure; err is
 // reserved for an actual problem (can't prompt, can't read input).
-func confirmRemoval(noun string, targets []removalTarget, flags shared.Flags) (proceed bool, err error) {
+func confirmRemoval(noun string, targets []ui.Entry, flags shared.Flags) (proceed bool, err error) {
 	if flags.Yes {
 		return true, nil
 	}
 
 	names := make([]string, len(targets))
-	pairs := make([]ui.Pair, len(targets))
+	total := 0
 	for i, t := range targets {
 		names[i] = t.Name
-		pairs[i] = ui.Pair{Name: t.Name}
-		if t.Items > 0 {
-			pairs[i].Value = ui.Plural(t.Items, "item")
-		}
+		total += t.Count
 	}
-	lines := ui.CountedItems(pairs)
+	// The block this feeds is printed to stderr via ui.Prompt, so its lines
+	// must be coloured against that destination, not stdout.
+	lines := ui.RenderLines(targets, os.Stderr)
 
 	if !ui.Interactive() {
 		return false, fmt.Errorf("cannot remove %s non-interactively without -y", strings.Join(names, ", "))
@@ -337,9 +340,13 @@ func confirmRemoval(noun string, targets []removalTarget, flags shared.Flags) (p
 		tip = "If you want to restore real files before deleting, try using --restore first."
 	}
 
-	headerText := fmt.Sprintf("The following %s will be %s:", ui.Plural(len(targets), noun), verb)
+	scale := ui.Plural(len(targets), noun)
+	if total > 0 {
+		scale = fmt.Sprintf("%s (%s)", scale, ui.Plural(total, "item"))
+	}
+	headerText := fmt.Sprintf("The following %s will be %s:", scale, verb)
 	if warning != "" {
-		headerText = fmt.Sprintf("The following %s will be %s (%s):", ui.Plural(len(targets), noun), verb, warning)
+		headerText = fmt.Sprintf("The following %s will be %s (%s):", scale, verb, warning)
 	}
 	// Every removal header carries the warning tone, since rm is always a
 	// destructive confirmation regardless of which flag chose the outcome.

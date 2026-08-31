@@ -1,6 +1,9 @@
 package ui
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 // go test's stdout/stderr are never a character device, so these exercise
 // exactly the piped-output path concept.md requires: plain text, markers
@@ -96,6 +99,28 @@ func TestList_NoTipOmitsTrailingBlock(t *testing.T) {
 	want := "The following file(s) will be trashed:\n\n  nvim"
 	if got != want {
 		t.Fatalf("List (no tip) = %q, want %q", got, want)
+	}
+}
+
+func TestRenderLines_CountedEntriesAlignAndPluralizePiped(t *testing.T) {
+	entries := []Entry{
+		{Marker: MarkerEnabled, Name: "nvim", Count: 40},
+		{Marker: MarkerMaterialized, Name: "shell", Count: 1},
+	}
+	got := RenderLines(entries, os.Stdout)
+	want := []string{
+		"+ nvim  (40 items)",
+		"- shell (1 item)",
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("RenderLines (counted, piped) = %v, want %v", got, want)
+	}
+}
+
+func TestRenderLines_ZeroCountEmitsNoParens(t *testing.T) {
+	got := RenderLines([]Entry{{Marker: MarkerEnabled, Name: "nvim"}}, os.Stdout)
+	if len(got) != 1 || got[0] != "+ nvim" {
+		t.Fatalf("RenderLines (no count) = %v, want [\"+ nvim\"]", got)
 	}
 }
 

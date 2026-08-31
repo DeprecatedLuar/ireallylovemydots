@@ -48,10 +48,14 @@ var markerColor = map[string]string{
 	MarkerRemoved:      errorTone,
 }
 
-// Entry is one rendered line: a marker and the name it applies to.
+// Entry is one rendered line: a marker and the name it applies to. Count is
+// optional (0 = none) — a caller that must convey blast radius, such as
+// rm's confirmation, sets it and gets an aligned "(n items)" column; a bare
+// listing never does, per concept.md "Listing output".
 type Entry struct {
 	Marker string
 	Name   string
+	Count  int
 }
 
 // Interactive reports whether both stdin and stdout are attached to a
@@ -120,12 +124,45 @@ func dimTone(s string, f *os.File) string {
 // when writing to a terminal with NO_COLOR unset.
 func Render(entries []Entry) string {
 	var b strings.Builder
-	for _, e := range entries {
-		line := colorLine(e.Marker, fmt.Sprintf("%s %s", e.Marker, e.Name), os.Stdout)
+	for _, line := range RenderLines(entries, os.Stdout) {
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// RenderLines formats entries one line per entry, without a trailing
+// newline, for a caller that embeds them in a larger block (rm's
+// confirmation, via List) instead of printing them directly. f is the
+// destination the block will actually be written to, since colour and
+// NO_COLOR are decided per-destination, not always stdout.
+//
+// When any entry carries a Count, every counted entry's line gets an
+// aligned "(n items)" column in the dim tone, padded to the widest
+// marker-plus-name among counted entries; an uncounted entry alongside them
+// prints without one. This is CountedItems' alignment rule, folded into the
+// one renderer so a block can carry markers and counts together.
+func RenderLines(entries []Entry, f *os.File) []string {
+	width := 0
+	for _, e := range entries {
+		if e.Count > 0 {
+			if l := len(e.Marker) + 1 + len(e.Name); l > width {
+				width = l
+			}
+		}
+	}
+
+	lines := make([]string, len(entries))
+	for i, e := range entries {
+		prefix := fmt.Sprintf("%s %s", e.Marker, e.Name)
+		line := prefix
+		if e.Count > 0 {
+			paren := dimTone(fmt.Sprintf("(%s)", Plural(e.Count, "item")), f)
+			line = fmt.Sprintf("%-*s %s", width, prefix, paren)
+		}
+		lines[i] = colorLine(e.Marker, line, f)
+	}
+	return lines
 }
 
 // DetailSep separates a mutation report line's name from its trailing
@@ -220,8 +257,7 @@ type Pair struct {
 // Arrow is the one arrow character dots uses wherever output shows a
 // subject going to an outcome — a real arrow, never a listing marker, so it
 // never borrows "+"/"-"/"!"/"=" and implies state that does not exist yet
-// (concept.md "Bootstrap"). RenderAligned's columns and confirmRemoval's
-// scale line both read off this same glyph.
+// (concept.md "Bootstrap"). RenderAligned's columns read off this glyph.
 const Arrow = "→"
 
 // Plural renders n and word as a count label, pluralizing word with a
@@ -255,33 +291,6 @@ func RenderAligned(pairs []Pair) string {
 		fmt.Fprintf(&b, "%-*s %s %s\n", width, p.Name, Arrow, p.Value)
 	}
 	return b.String()
-}
-
-// CountedItems formats pairs as name, then a parenthesized count in the dim
-// tone, with every "(" aligned to the same column — for List callers that
-// need to show each named item's size (confirmRemoval's namespace/item
-// counts is the first case). Value is the text inside the parens (e.g.
-// "6 items"); a pair with an empty Value is rendered as its bare Name, not
-// padded, since it has nothing to align against. The column width is
-// computed from the widest Name among pairs that do carry a Value.
-func CountedItems(pairs []Pair) []string {
-	width := 0
-	for _, p := range pairs {
-		if p.Value != "" && len(p.Name) > width {
-			width = len(p.Name)
-		}
-	}
-
-	lines := make([]string, len(pairs))
-	for i, p := range pairs {
-		if p.Value == "" {
-			lines[i] = p.Name
-			continue
-		}
-		paren := dimTone(fmt.Sprintf("(%s)", p.Value), os.Stderr)
-		lines[i] = fmt.Sprintf("%-*s %s", width, p.Name, paren)
-	}
-	return lines
 }
 
 // ErrorTone wraps msg in the error tone used for "!" markers, for message

@@ -458,24 +458,18 @@ func renderRepoList() error {
 		printEmptyRegistryHint()
 		return nil
 	}
-	dataDir, err := paths.Data()
+	rows, err := repoListing(reg.Repos)
 	if err != nil {
 		return err
 	}
-	entries := make([]ui.Entry, 0, len(reg.Repos))
-	for _, r := range reg.Repos {
-		marker := ui.MarkerMaterialized
-		if _, err := os.Stat(filepath.Join(dataDir, r.Name)); os.IsNotExist(err) {
-			marker = ui.MarkerProblem
-		}
-		entries = append(entries, ui.Entry{Marker: marker, Name: r.Name})
-	}
-	fmt.Print(ui.Render(entries))
+	renderListing(rows)
 	return nil
 }
 
-// renderRepoNamespaces lists one repository's namespace catalogue, reading
-// straight from its cloned tree so unmaterialized namespaces still show up.
+// renderRepoNamespaces lists one repository's namespaces via the shared
+// listing API in listing.go, narrowed to this repository — so it carries
+// the same "+"/"-"/"=" markers as the unscoped listing, not a hardcoded "="
+// for everything.
 func renderRepoNamespaces(name string) error {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
@@ -486,20 +480,11 @@ func renderRepoNamespaces(name string) error {
 		return err
 	}
 
-	dataDir, err := paths.Data()
+	rows, err := namespaceListing(reg.Repos, listOptions{Repo: r.Name})
 	if err != nil {
 		return err
 	}
-	names, err := repo.Namespaces(filepath.Join(dataDir, r.Name))
-	if err != nil {
-		return err
-	}
-
-	entries := make([]ui.Entry, 0, len(names))
-	for _, n := range names {
-		entries = append(entries, ui.Entry{Marker: ui.MarkerAbsent, Name: n})
-	}
-	fmt.Print(ui.Render(entries))
+	renderListing(rows)
 	return nil
 }
 
