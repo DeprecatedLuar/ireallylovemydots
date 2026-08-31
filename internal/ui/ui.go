@@ -23,19 +23,18 @@ const (
 	MarkerRemoved = "x"
 )
 
-// The 256-colour palette, one tone per marker, matching the muted style
-// gohelp-luar already uses for its own output (dim, and 38;5;<n> for
-// anything beyond the basic 8). errorTone and warningTone double as the
-// tones for message output, per concept.md "Listing output": "'!' and '?'
-// borrow the tones errors and warnings already use everywhere else."
+// The basic 8-colour palette, one tone per marker: the standard SGR codes,
+// so each tone renders through whatever colours the user's terminal theme
+// maps them to, rather than a fixed 256-colour RGB that looks the same
+// everywhere. errorTone and warningTone double as the tones for message
+// output, per concept.md "Listing output": "'!' and '?' borrow the tones
+// errors and warnings already use everywhere else."
 const (
 	dim         = "\033[2m"
-	bold        = "\033[1m"
-	green       = "\033[38;5;108m"
-	purple      = "\033[38;5;139m"
-	errorTone   = "\033[38;5;167m"
-	warningTone = "\033[38;5;179m"
-	cyanTone    = "\033[38;5;80m" // the one standard tone for a closing tip, everywhere a tip is printed
+	green       = "\033[32m"
+	purple      = "\033[35m"
+	errorTone   = "\033[31m"
+	warningTone = "\033[33m"
 	reset       = "\033[0m"
 )
 
@@ -97,15 +96,13 @@ func colorLine(marker, line string, f *os.File) string {
 	return line
 }
 
-// tipTone wraps a closing tip in the one standard tip colour, so every tip
-// printed anywhere in dots reads the same way, regardless of what kind of
-// message (confirmation, error) it closes. Coloured only when f is a
+// tipTone wraps a closing tip in the same dim tone used for secondary
+// detail elsewhere (dimTone), so every tip printed anywhere in dots reads
+// as quieter than the line it closes, regardless of what kind of message
+// (confirmation, error) it closes. Coloured only when f is a
 // colour-enabled destination.
 func tipTone(tip string, f *os.File) string {
-	if tip == "" || !colorEnabled(f) {
-		return tip
-	}
-	return bold + cyanTone + tip + reset
+	return dimTone(tip, f)
 }
 
 // dimTone wraps s in the dim tone already used for MarkerAbsent, for
@@ -225,9 +222,9 @@ func Report(lines []string, footer string) string {
 }
 
 // List formats a header, a blank line, one item per line indented under it,
-// a blank line, and an optional closing tip — for reporting an actual list
-// of things (as opposed to Confirm's single summary line under a prompt).
-// tip may be empty.
+// a blank line, and an optional closing tip, followed by a single trailing
+// newline — for reporting an actual list of things (as opposed to
+// Confirm's single summary line under a prompt). tip may be empty.
 func List(header string, items []string, tip string) string {
 	var b strings.Builder
 	b.WriteString(header)
@@ -243,8 +240,9 @@ func List(header string, items []string, tip string) string {
 	}
 	if tip != "" {
 		b.WriteString("\n\n")
-		b.WriteString(tipTone(tip, os.Stderr))
+		b.WriteString(tipTone("Tip: "+tip, os.Stderr))
 	}
+	b.WriteString("\n")
 	return b.String()
 }
 
@@ -318,12 +316,12 @@ func WarningTone(msg string) string {
 // Prompt asks question, with options rendered inline in the conventional
 // "(y/N)" form (the capitalized one signalling the default), and returns
 // the raw response. context is optional leading material — a List or
-// RenderAligned block, say — printed above question, blank-line separated,
-// so options always attach to the actual question and never run into
-// whatever the block's last line happened to be; pass "" when there is no
-// such block. Passing no options asks for free-text instead. Callers are
-// responsible for validating the choice. It is an error to call this when
-// Interactive() is false.
+// RenderAligned block, say — printed directly above question; pass "" when
+// there is no such block. Prompt never inserts spacing of its own between
+// context and question — context is responsible for its own trailing
+// newline(s), same as every other producer here. Passing no options asks
+// for free-text instead. Callers are responsible for validating the
+// choice. It is an error to call this when Interactive() is false.
 func Prompt(context, question string, options []string) (string, error) {
 	if !Interactive() {
 		return "", fmt.Errorf("cannot prompt: not an interactive session")
@@ -331,11 +329,7 @@ func Prompt(context, question string, options []string) (string, error) {
 	if len(options) > 0 {
 		question = fmt.Sprintf("%s (%s)", question, strings.Join(options, "/"))
 	}
-	msg := question
-	if context != "" {
-		msg = context + "\n\n" + question
-	}
-	fmt.Fprintf(os.Stderr, "\n%s ", msg)
+	fmt.Fprintf(os.Stderr, "%s%s ", context, question)
 
 	reader := bufio.NewReader(os.Stdin)
 	line, err := reader.ReadString('\n')

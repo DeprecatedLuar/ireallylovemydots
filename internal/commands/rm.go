@@ -428,7 +428,7 @@ func restoreEntries(loc namespace.Located, nsName string, entries []manifest.Ent
 				nsName, renderRestoreProblems(problems))
 		} else {
 			choice, err := ui.Prompt(
-				fmt.Sprintf("restoring %q has %d occupied destination(s):\n%s", nsName, len(problems), renderRestoreProblems(problems)),
+				fmt.Sprintf("restoring %q has %d occupied destination(s):\n%s\n", nsName, len(problems), renderRestoreProblems(problems)),
 				"choose one",
 				[]string{choiceTrash, choiceSkip, choiceCancel},
 			)

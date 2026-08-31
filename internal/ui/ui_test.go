@@ -88,7 +88,7 @@ func TestReport_NoFooterOmitsBlankLine(t *testing.T) {
 
 func TestList_AssemblesHeaderItemsAndTip(t *testing.T) {
 	got := List("The following file(s) will be trashed:", []string{"nvim"}, "--restore puts the files back first.")
-	want := "The following file(s) will be trashed:\n\n  nvim\n\n--restore puts the files back first."
+	want := "The following file(s) will be trashed:\n\n  nvim\n\nTip: --restore puts the files back first.\n"
 	if got != want {
 		t.Fatalf("List = %q, want %q", got, want)
 	}
@@ -96,7 +96,7 @@ func TestList_AssemblesHeaderItemsAndTip(t *testing.T) {
 
 func TestList_NoTipOmitsTrailingBlock(t *testing.T) {
 	got := List("The following file(s) will be trashed:", []string{"nvim"}, "")
-	want := "The following file(s) will be trashed:\n\n  nvim"
+	want := "The following file(s) will be trashed:\n\n  nvim\n"
 	if got != want {
 		t.Fatalf("List (no tip) = %q, want %q", got, want)
 	}
