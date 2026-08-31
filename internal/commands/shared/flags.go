@@ -12,4 +12,6 @@ type Flags struct {
 	Yes       bool
 	Debug     bool
 	Bootstrap bool
+	Install   bool
+	Restore   bool
 }

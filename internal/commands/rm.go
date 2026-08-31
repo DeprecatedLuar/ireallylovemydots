@@ -7,6 +7,7 @@ import (
 
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
 	"github.com/DeprecatedLuar/dotz/internal/engine"
+	"github.com/DeprecatedLuar/dotz/internal/git"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/namespace"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
@@ -16,10 +17,20 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
 
+// Restore-time occupied-destination choices, per concept.md "Occupied
+// destinations under --restore".
+const (
+	choiceTrash  = "t"
+	choiceSkip   = "s"
+	choiceCancel = "c"
+)
+
 // rmEntry implements `namespace <ns> rm <path>`, per concept.md "Removal":
-// the entry leaves the manifest, the symlink comes down, and the real file
-// returns to its destination — regardless of whether the namespace is
-// currently enabled.
+// the entry leaves the manifest and its symlink comes down. By default the
+// payload goes to the trash and nothing is written to the home directory;
+// --restore writes it back to its destination as a real file first;
+// --purge erases instead of trashing, after a successful --restore when
+// both are given.
 func rmEntry(name, path string, flags shared.Flags) error {
 	loc, err := resolveNamespace(name, flags)
 	if err != nil {
@@ -39,27 +50,70 @@ func rmEntry(name, path string, flags shared.Flags) error {
 		return fmt.Errorf("%s is not tracked in namespace %q", dest, name)
 	}
 
-	return restoreEntries(loc, name, []manifest.Entry{entry}, flags)
-}
-
-// rmNamespace implements `namespace rm <ns>`: every entry is restored to its
-// destination, then the namespace folder is removed. Enabled state does not
-// change this — a disabled namespace has no symlinks, so restoring writes
-// files to destinations that are currently empty.
-func rmNamespace(name string, flags shared.Flags) error {
-	loc, err := resolveNamespace(name, flags)
-	if err != nil {
+	if err := confirmRemoval([]string{name}, 0, 1, flags); err != nil {
 		return err
 	}
-	if err := rmNamespaceAt(loc, name, flags); err != nil {
-		return err
-	}
-	return namespace.Delete(loc.Dir)
+	return removeEntries(loc, name, []manifest.Entry{entry}, flags)
 }
 
-// rmRepo implements `repo rm <repo>`: the same restore path as
-// `namespace rm`, for every namespace in the repository, then the clone and
-// its registry entry are removed.
+// rmNamespaces implements `namespace rm <ns>...`: every named namespace is
+// disabled, its entries removed per the flags below, and its folder
+// trashed. Per concept.md "Confirmation", the whole batch is confirmed once,
+// naming the namespace count, the file count, and whether --restore is in
+// effect.
+func rmNamespaces(names []string, flags shared.Flags) error {
+	type resolved struct {
+		loc     namespace.Located
+		entries []manifest.Entry
+	}
+	targets := make([]resolved, 0, len(names))
+	fileCount := 0
+	for _, name := range names {
+		loc, err := resolveNamespace(name, flags)
+		if err != nil {
+			return err
+		}
+		m, err := manifest.Read(loc.Dir)
+		if err != nil {
+			return err
+		}
+		targets = append(targets, resolved{loc: loc, entries: m.Entries})
+		fileCount += len(m.Entries)
+	}
+
+	if err := confirmRemoval(names, len(names), fileCount, flags); err != nil {
+		return err
+	}
+
+	// Git safety is checked once per affected repository, before anything is
+	// trashed — never inside the per-namespace loop below. Trashing a
+	// namespace uses a raw filesystem move (trash.Move), which is not
+	// git-aware and leaves the repo's git status dirty; checking mid-loop
+	// would make an earlier namespace's own removal trip the safety check
+	// for a later namespace in the same repo, self-blocking a batch the user
+	// already confirmed once. `repo rm` follows this same shape.
+	checkedRepos := map[string]bool{}
+	for _, t := range targets {
+		if checkedRepos[t.loc.Repo.Name] {
+			continue
+		}
+		if err := checkGitSafety(t.loc.Repo.Name, filepath.Dir(t.loc.Dir), flags); err != nil {
+			return err
+		}
+		checkedRepos[t.loc.Repo.Name] = true
+	}
+
+	for i, t := range targets {
+		if err := rmNamespaceAt(t.loc, names[i], flags); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// rmRepo implements `repo rm <repo>`: the same removal path as `namespace
+// rm`, for every namespace in the repository, then the clone and its
+// registry entry are removed.
 func rmRepo(name string, flags shared.Flags) error {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
@@ -79,6 +133,26 @@ func rmRepo(name string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+
+	fileCount := 0
+	entriesByName := make(map[string][]manifest.Entry, len(names))
+	for _, nsName := range names {
+		m, err := manifest.Read(filepath.Join(repoDir, nsName))
+		if err != nil {
+			return err
+		}
+		entriesByName[nsName] = m.Entries
+		fileCount += len(m.Entries)
+	}
+
+	if err := confirmRemoval([]string{r.Name}, len(names), fileCount, flags); err != nil {
+		return err
+	}
+
+	if err := checkGitSafety(r.Name, repoDir, flags); err != nil {
+		return err
+	}
+
 	for _, nsName := range names {
 		loc := namespace.Located{Repo: r, Dir: filepath.Join(repoDir, nsName)}
 		if err := rmNamespaceAt(loc, nsName, flags); err != nil {
@@ -100,21 +174,199 @@ func rmRepo(name string, flags shared.Flags) error {
 	return manifest.WriteRegistry(reg)
 }
 
-// rmNamespaceAt restores every entry of the namespace at loc and clears its
-// machine state, without touching the namespace folder itself — the shared
-// step between `namespace rm <ns>` (which then deletes the folder) and
-// `repo rm <repo>` (which deletes the whole clone afterwards).
+// rmNamespaceAt removes every entry of the namespace at loc per the flags,
+// clears its machine state, and trashes its folder — the shared step
+// between `namespace rm <ns>...` and `repo rm <repo>`.
 func rmNamespaceAt(loc namespace.Located, nsName string, flags shared.Flags) error {
 	m, err := manifest.Read(loc.Dir)
 	if err != nil {
 		return err
 	}
 	if len(m.Entries) > 0 {
-		if err := restoreEntries(loc, nsName, m.Entries, flags); err != nil {
+		if err := removeEntries(loc, nsName, m.Entries, flags); err != nil {
 			return err
 		}
 	}
-	return clearState(loc.Repo.Name, nsName)
+	if err := clearState(loc.Repo.Name, nsName); err != nil {
+		return err
+	}
+
+	// The namespace folder itself always goes through the trash first —
+	// giving Delete a recoverable rollback point exactly like every other
+	// step here — and is only erased afterward under --purge.
+	trashName, err := trash.Move(loc.Dir)
+	if err != nil {
+		return fmt.Errorf("trash namespace %s: %w", loc.Dir, err)
+	}
+	if flags.Purge {
+		return trash.Purge(trashName)
+	}
+	return nil
+}
+
+// checkGitSafety reads repoDir's git state and refuses removal when it
+// would destroy work that exists nowhere else, per concept.md "Git safety
+// on removal": uncommitted changes or unpushed commits point at `dots
+// sync`; no remote at all warns that the trash is the only safety net.
+// --force overrides all three.
+func checkGitSafety(repoName, repoDir string, flags shared.Flags) error {
+	if flags.Force {
+		return nil
+	}
+	st, err := git.Status(repoDir)
+	if err != nil {
+		return err
+	}
+	if len(st.Dirty) > 0 {
+		return fmt.Errorf("%q has uncommitted changes (%s); run `dots sync` first, or --force to override",
+			repoName, strings.Join(st.Dirty, ", "))
+	}
+	if st.Unpushed > 0 {
+		return fmt.Errorf("%q has %d commit(s) not pushed to its remote; run `dots sync` first, or --force to override",
+			repoName, st.Unpushed)
+	}
+	if !st.HasRemote {
+		return fmt.Errorf("%q has no remote; this clone is the only copy of its content — add one with `git remote add origin <url>`, or --force to override",
+			repoName)
+	}
+	return nil
+}
+
+// confirmRemoval implements concept.md "Confirmation": rm always confirms,
+// naming the scale (namespace count and file count) and whether --restore
+// is in effect, with --purge's line naming that nothing will be
+// recoverable. -y (or --force, which implies it) skips the prompt.
+// Non-interactively without either, rm is a hard error that changes
+// nothing — checked here, before any side effect runs. namespaceCount is 0
+// for a single-entry removal, which names files only.
+func confirmRemoval(names []string, namespaceCount, fileCount int, flags shared.Flags) error {
+	if flags.Yes {
+		return nil
+	}
+
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = fmt.Sprintf("%q", n)
+	}
+	subjects := strings.Join(quoted, ", ")
+
+	var scale string
+	if namespaceCount > 0 {
+		scale = fmt.Sprintf("%d namespace(s), %d file(s)", namespaceCount, fileCount)
+	} else {
+		scale = fmt.Sprintf("%d file(s)", fileCount)
+	}
+
+	if !ui.Interactive() {
+		return fmt.Errorf("cannot remove %s (%s) non-interactively without -y", subjects, scale)
+	}
+
+	var tail string
+	switch {
+	case flags.Purge:
+		scale += " -> ERASED FROM DISK. Not recoverable."
+	case flags.Restore:
+		scale += " -> restored to destination"
+		tail = "\n  --restore is in effect: files are written back to their destinations first."
+	default:
+		scale += " -> trash"
+		tail = "\n  Nothing is written to your home directory.\n  Tip: --restore puts the files back at their destinations first."
+	}
+
+	msg := fmt.Sprintf("Remove %s?\n  %s%s", subjects, scale, tail)
+	choice, err := ui.Prompt(msg, []string{"y", "N"})
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(choice, "y") && !strings.EqualFold(choice, "yes") {
+		return fmt.Errorf("removal cancelled")
+	}
+	return nil
+}
+
+// removeEntries removes entries from loc per the flags: --restore writes
+// them back to their destinations (resolving any occupied-destination
+// conflict through one confirmation for the whole batch), otherwise every
+// payload goes straight to the trash. --purge erases whatever this
+// operation sent to the trash once it has fully succeeded — after a
+// verified --restore, never before, per concept.md "--restore --purge".
+func removeEntries(loc namespace.Located, nsName string, entries []manifest.Entry, flags shared.Flags) error {
+	s, err := state.Read()
+	if err != nil {
+		return err
+	}
+	key := state.Key{Repo: loc.Repo.Name, Namespace: nsName}
+
+	// rm disables first, always, without being asked (concept.md
+	// "Removal"): a namespace's destinations may hold symlinks pointing
+	// into its folder, and trashing/restoring without unlinking would
+	// leave them dangling.
+	if err := engine.Disable(key, s); err != nil {
+		return err
+	}
+	s, err = state.Read()
+	if err != nil {
+		return err
+	}
+
+	var trashed []string
+	if flags.Restore {
+		trashed, err = restoreEntries(loc, nsName, entries, key, s, flags)
+	} else {
+		trashed, err = engine.TrashEntries(key, loc.Dir, entries, s)
+	}
+	if err != nil {
+		return err
+	}
+
+	if flags.Purge {
+		for _, name := range trashed {
+			if err := trash.Purge(name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// restoreEntries runs pre-flight for entries within loc, resolves any
+// occupied-destination conflicts through one confirmation for the whole
+// batch (concept.md "Occupied destinations under --restore": [t]/[s]/[c]),
+// then restores every entry via engine.Restore.
+func restoreEntries(loc namespace.Located, nsName string, entries []manifest.Entry, key state.Key, s state.State, flags shared.Flags) ([]string, error) {
+	problems, err := engine.RestorePreflight(loc.Dir, nsName, entries)
+	if err != nil {
+		return nil, err
+	}
+
+	skip := false
+	if len(problems) > 0 {
+		if flags.Force {
+			// --force resolves every occupied destination as [t]: trash the
+			// occupant and restore ours.
+		} else if !ui.Interactive() {
+			return nil, fmt.Errorf("cannot restore %q non-interactively:\n%s\nrerun with --force to trash the occupant(s) and restore, or answer interactively",
+				nsName, renderRestoreProblems(problems))
+		} else {
+			choice, err := ui.Prompt(
+				fmt.Sprintf("restoring %q has %d occupied destination(s):\n%s\nchoose one", nsName, len(problems), renderRestoreProblems(problems)),
+				[]string{choiceTrash, choiceSkip, choiceCancel},
+			)
+			if err != nil {
+				return nil, err
+			}
+			switch strings.ToLower(strings.TrimSpace(choice)) {
+			case choiceTrash:
+				// resolved as --force above.
+			case choiceSkip:
+				skip = true
+			default:
+				return nil, fmt.Errorf("restore cancelled")
+			}
+		}
+	}
+
+	return engine.Restore(key, loc.Dir, entries, problems, s, skip)
 }
 
 // clearState drops a namespace's machine-state entry entirely. Used once the
@@ -131,51 +383,6 @@ func clearState(repoName, nsName string) error {
 	}
 	delete(s.Entries, key)
 	return state.Write(s)
-}
-
-// restoreEntries runs pre-flight for entries within loc, resolves any
-// occupied-destination conflicts through the same single-confirmation shape
-// as enable (concept.md "Occupied destinations on removal"), then restores —
-// or, under --purge, trashes — every entry via engine.Restore.
-func restoreEntries(loc namespace.Located, nsName string, entries []manifest.Entry, flags shared.Flags) error {
-	problems, err := engine.RestorePreflight(loc.Dir, nsName, entries)
-	if err != nil {
-		return err
-	}
-
-	purge := flags.Purge
-	if len(problems) > 0 && !flags.Purge {
-		if flags.Force {
-			// --force resolves every occupied destination as [t]: trash the
-			// occupant and restore ours.
-		} else if !ui.Interactive() {
-			return fmt.Errorf("cannot remove from %q non-interactively:\n%s\nrerun with --force to trash the occupant and restore, or --purge to keep it and discard %s's copy",
-				nsName, renderRestoreProblems(problems), nsName)
-		} else {
-			choice, err := ui.Prompt(
-				fmt.Sprintf("removing from %q has %d occupied destination(s):\n%s\nchoose one", nsName, len(problems), renderRestoreProblems(problems)),
-				[]string{"t", "p", "c"},
-			)
-			if err != nil {
-				return err
-			}
-			switch strings.ToLower(strings.TrimSpace(choice)) {
-			case "t":
-				// resolved as --force above.
-			case "p":
-				purge = true
-			default:
-				return nil
-			}
-		}
-	}
-
-	s, err := state.Read()
-	if err != nil {
-		return err
-	}
-	key := state.Key{Repo: loc.Repo.Name, Namespace: nsName}
-	return engine.Restore(key, loc.Dir, entries, problems, s, purge)
 }
 
 func renderRestoreProblems(problems []engine.RestoreProblem) string {

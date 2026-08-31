@@ -59,3 +59,28 @@ func TestInitIsReserved(t *testing.T) {
 		t.Error(`Reserved() missing "init"`)
 	}
 }
+
+func TestIsNamespaceVerbRecognizesInstallUninstallButNotIsVerb(t *testing.T) {
+	for _, tok := range []string{"install", "uninstall"} {
+		if IsVerb(tok) {
+			t.Errorf(`IsVerb(%q) = true, want false: namespace-only`, tok)
+		}
+		if !IsNamespaceVerb(tok) {
+			t.Errorf(`IsNamespaceVerb(%q) = false, want true`, tok)
+		}
+	}
+	if !IsNamespaceVerb("add") {
+		t.Error(`IsNamespaceVerb("add") = false, want true: shared verbs still count`)
+	}
+}
+
+func TestInstallUninstallAreReserved(t *testing.T) {
+	for _, tok := range []string{"install", "uninstall"} {
+		if !IsReserved(tok) {
+			t.Errorf(`IsReserved(%q) = false, want true`, tok)
+		}
+		if !slices.Contains(Reserved(), tok) {
+			t.Errorf("Reserved() missing %q", tok)
+		}
+	}
+}

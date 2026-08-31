@@ -104,6 +104,28 @@ func Restore(name, destination string) error {
 	return nil
 }
 
+// Purge permanently deletes a trashed item, identified by the name Move
+// returned, bypassing the recovery Restore would otherwise offer. This is
+// the one operation in the trash package that makes something
+// unrecoverable — concept.md "--purge erases instead of trashing": dots
+// always trashes first (which is what makes a transactional rollback
+// possible mid-operation), and only erases via this call once the whole
+// operation has already succeeded.
+func Purge(name string) error {
+	trashDir, err := dir()
+	if err != nil {
+		return err
+	}
+	trashedPath := filepath.Join(trashDir, filesDir, name)
+	infoPath := filepath.Join(trashDir, infoDir, name+infoExt)
+
+	if err := os.RemoveAll(trashedPath); err != nil {
+		return fmt.Errorf("erase trashed item %s: %w", name, err)
+	}
+	os.Remove(infoPath) // best-effort; the item itself is already gone
+	return nil
+}
+
 // uniqueName appends a numeric suffix if base is already trashed, per the
 // XDG spec's collision rule.
 func uniqueName(trashDir, base string) string {

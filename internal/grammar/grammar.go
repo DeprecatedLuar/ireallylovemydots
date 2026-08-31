@@ -37,6 +37,12 @@ var TopOnly = []string{"status", "sync"}
 // profile, unlike the shared Verbs set.
 var RepoOnlyVerbs = []string{"init"}
 
+// NamespaceOnlyVerbs are verbs valid only at the namespace level: install
+// and uninstall move a namespace between "in the repository" and "on this
+// machine" (concept.md "Install and uninstall"), which has no meaning for a
+// repository or profile.
+var NamespaceOnlyVerbs = []string{"install", "uninstall"}
+
 // IsVerb reports whether tok is one of the verbs valid at any level, in
 // either its canonical or aliased spelling.
 func IsVerb(tok string) bool {
@@ -51,6 +57,12 @@ func IsVerb(tok string) bool {
 // subtree specifically: the shared verbs plus repo-only ones.
 func IsRepoVerb(tok string) bool {
 	return IsVerb(tok) || slices.Contains(RepoOnlyVerbs, tok)
+}
+
+// IsNamespaceVerb reports whether tok is valid in verb position within the
+// namespace subtree specifically: the shared verbs plus install/uninstall.
+func IsNamespaceVerb(tok string) bool {
+	return IsVerb(tok) || slices.Contains(NamespaceOnlyVerbs, tok)
 }
 
 // Canonical returns tok's canonical verb spelling if tok is an alias,
@@ -72,7 +84,8 @@ func IsNoun(tok string) bool {
 // be used as namespace, repository, or profile names, because a name in
 // verb position descends the grammar.
 func IsReserved(tok string) bool {
-	return IsVerb(tok) || IsNoun(tok) || slices.Contains(RepoOnlyVerbs, tok) || tok == "status" || tok == "sync"
+	return IsVerb(tok) || IsNoun(tok) || slices.Contains(RepoOnlyVerbs, tok) ||
+		slices.Contains(NamespaceOnlyVerbs, tok) || tok == "status" || tok == "sync"
 }
 
 // Reserved returns every reserved word, sorted, for error messages.
@@ -83,6 +96,7 @@ func Reserved() []string {
 	}
 	all = append(all, Nouns...)
 	all = append(all, RepoOnlyVerbs...)
+	all = append(all, NamespaceOnlyVerbs...)
 	all = append(all, TopOnly...)
 	sort.Strings(all)
 	return all

@@ -103,7 +103,7 @@ func TestRestorePreflight_OccupiedRealFileNonEmptyDirAndLiveSymlink(t *testing.T
 		t.Fatalf("expected 3 occupied problems, got %+v", problems)
 	}
 	for _, p := range problems {
-		if !strings.Contains(p.Message, "[t]") || !strings.Contains(p.Message, "[p]") || !strings.Contains(p.Message, "[c]") {
+		if !strings.Contains(p.Message, "[t]") || !strings.Contains(p.Message, "[s]") || !strings.Contains(p.Message, "[c]") {
 			t.Fatalf("expected the message to name all three choices, got: %s", p.Message)
 		}
 	}
@@ -129,7 +129,7 @@ func TestRestore_DisabledNamespace_WritesRealFileToEmptyDestination(t *testing.T
 	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
 	s := state.State{Entries: map[state.Key]state.Entry{}}
 
-	if err := Restore(key, nsDir, entries, nil, s, false); err != nil {
+	if _, err := Restore(key, nsDir, entries, nil, s, false); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 
@@ -174,7 +174,7 @@ func TestRestore_EnabledNamespace_RemovesSymlinkWritesRealFileAndNarrowsState(t 
 		t.Fatalf("Enable: %v", err)
 	}
 
-	if err := Restore(key, nsDir, entries, nil, s, false); err != nil {
+	if _, err := Restore(key, nsDir, entries, nil, s, false); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 
@@ -223,7 +223,7 @@ func TestRestore_OccupiedDestination_TrashesOccupantAndRestoresOurs(t *testing.T
 
 	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
 	s := state.State{Entries: map[state.Key]state.Entry{}}
-	if err := Restore(key, nsDir, entries, problems, s, false); err != nil {
+	if _, err := Restore(key, nsDir, entries, problems, s, false); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 
@@ -233,6 +233,87 @@ func TestRestore_OccupiedDestination_TrashesOccupantAndRestoresOurs(t *testing.T
 	}
 	if _, err := os.Stat(filepath.Join(dest, "seed")); err != nil {
 		t.Fatalf("expected our payload's contents at the destination: %v", err)
+	}
+}
+
+// TestRestore_Skip_AppliesOnlyToOccupiedEntry_FreeEntryStillRestored
+// reproduces the code-review-flagged bug: skip must apply only to the
+// specific entry RestorePreflight flagged as occupied, not batch-wide.
+// With one occupied entry and one free entry, choosing skip must still
+// write the free entry's payload to its destination as a real file.
+func TestRestore_Skip_AppliesOnlyToOccupiedEntry_FreeEntryStillRestored(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	home := t.TempDir()
+	nsDir := t.TempDir()
+
+	// Occupied entry: its destination already holds a real file.
+	occupiedPayload := filepath.Join(nsDir, "occupied")
+	if err := os.MkdirAll(occupiedPayload, 0755); err != nil {
+		t.Fatal(err)
+	}
+	occupiedDest := filepath.Join(home, ".config", "occupied")
+	if err := os.MkdirAll(filepath.Dir(occupiedDest), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(occupiedDest, []byte("occupant"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Free entry: nothing at its destination.
+	freePayload := filepath.Join(nsDir, "free")
+	if err := os.MkdirAll(freePayload, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(freePayload, "seed"), []byte("free content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	freeDest := filepath.Join(home, ".config", "free")
+
+	entries := []manifest.Entry{
+		{Name: "occupied", Dest: occupiedDest},
+		{Name: "free", Dest: freeDest},
+	}
+	if err := manifest.Write(nsDir, manifest.Manifest{Entries: entries}); err != nil {
+		t.Fatal(err)
+	}
+
+	problems, err := RestorePreflight(nsDir, "editors", entries)
+	if err != nil {
+		t.Fatalf("RestorePreflight: %v", err)
+	}
+	if len(problems) != 1 || problems[0].Entry.Name != "occupied" {
+		t.Fatalf("expected exactly one occupied problem for 'occupied', got %+v", problems)
+	}
+
+	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
+	s := state.State{Entries: map[state.Key]state.Entry{}}
+	if _, err := Restore(key, nsDir, entries, problems, s, true); err != nil {
+		t.Fatalf("Restore with skip: %v", err)
+	}
+
+	// The occupied destination must be left untouched (skip means "leave the
+	// occupant alone").
+	content, err := os.ReadFile(occupiedDest)
+	if err != nil || string(content) != "occupant" {
+		t.Fatalf("expected the occupant left untouched at %s, got content=%q err=%v", occupiedDest, content, err)
+	}
+
+	// The free entry was never occupied, so skip must not have applied to
+	// it: its payload must be a real file at its destination, not left
+	// sitting in the trash.
+	info, err := os.Lstat(freeDest)
+	if err != nil {
+		t.Fatalf("expected the free entry restored to a real file at %s, got err=%v", freeDest, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("expected a real file/dir at %s, got a symlink", freeDest)
+	}
+	if _, err := os.Stat(filepath.Join(freeDest, "seed")); err != nil {
+		t.Fatalf("expected the free entry's payload contents at its destination: %v", err)
+	}
+	if _, err := os.Stat(freePayload); !os.IsNotExist(err) {
+		t.Fatalf("expected the free entry's payload gone from the namespace, got err=%v", err)
 	}
 }
 
@@ -262,9 +343,17 @@ func TestRestore_Purge_TrashesPayloadAndLeavesDestinationUntouched(t *testing.T)
 		t.Fatal(err)
 	}
 
+	problems, err := RestorePreflight(nsDir, "editors", entries)
+	if err != nil {
+		t.Fatalf("RestorePreflight: %v", err)
+	}
+	if len(problems) != 1 {
+		t.Fatalf("expected the occupied destination flagged, got %+v", problems)
+	}
+
 	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
 	s := state.State{Entries: map[state.Key]state.Entry{}}
-	if err := Restore(key, nsDir, entries, nil, s, true); err != nil {
+	if _, err := Restore(key, nsDir, entries, problems, s, true); err != nil {
 		t.Fatalf("Restore with purge: %v", err)
 	}
 
@@ -285,16 +374,23 @@ func TestRestore_Purge_TrashesPayloadAndLeavesDestinationUntouched(t *testing.T)
 	}
 }
 
-func TestRestore_Purge_ClearsOwnSymlinkLeftFromTracking(t *testing.T) {
+func TestRestore_Skip_NotOccupiedOwnSymlink_StillRestoredNotTrashed(t *testing.T) {
 	// namespace <ns> add symlinks the destination immediately, independent
-	// of enable/disable state (concept.md "Namespace level"). Purging that
-	// entry must not leave that symlink dangling once its target is trashed.
+	// of enable/disable state (concept.md "Namespace level"). A destination
+	// holding only the entry's own correct symlink is not "occupied" per
+	// RestorePreflight (concept.md's "Occupied destinations on removal"), so
+	// skip — scoped to occupied entries only per the fix for the
+	// batch-wide-skip bug — must not apply to it: it must still be restored
+	// as a real file, with its own symlink cleared first, not trashed away.
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	home := t.TempDir()
 	nsDir := t.TempDir()
 	payload := filepath.Join(nsDir, "config")
 	if err := os.MkdirAll(payload, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(payload, "seed"), []byte("ours"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -311,14 +407,29 @@ func TestRestore_Purge_ClearsOwnSymlinkLeftFromTracking(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
-	s := state.State{Entries: map[state.Key]state.Entry{}}
-	if err := Restore(key, nsDir, entries, nil, s, true); err != nil {
-		t.Fatalf("Restore with purge: %v", err)
+	problems, err := RestorePreflight(nsDir, "editors", entries)
+	if err != nil {
+		t.Fatalf("RestorePreflight: %v", err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("expected the entry's own correct symlink not flagged occupied, got %+v", problems)
 	}
 
-	if _, err := os.Lstat(dest); !os.IsNotExist(err) {
-		t.Fatalf("expected no dangling symlink left at %s after purge, got err=%v", dest, err)
+	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
+	s := state.State{Entries: map[state.Key]state.Entry{}}
+	if _, err := Restore(key, nsDir, entries, problems, s, true); err != nil {
+		t.Fatalf("Restore with skip (no occupied entries): %v", err)
+	}
+
+	info, err := os.Lstat(dest)
+	if err != nil {
+		t.Fatalf("expected the entry restored to a real file/dir at %s, got err=%v", dest, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("expected the own symlink replaced by real content at %s, got a symlink", dest)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "seed")); err != nil {
+		t.Fatalf("expected the restored payload's contents at the destination: %v", err)
 	}
 }
 
@@ -380,7 +491,7 @@ func TestRestore_InjectedFailureOnSeventhRestore_RollsBackEverything(t *testing.
 		t.Fatalf("expected no occupied-destination problems, got %+v", problems)
 	}
 
-	if err := Restore(key, nsDir, entries, problems, s, false); err == nil {
+	if _, err := Restore(key, nsDir, entries, problems, s, false); err == nil {
 		t.Fatal("expected the seventh restore's permission failure to surface as an error")
 	}
 

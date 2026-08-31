@@ -35,7 +35,7 @@ func HandleNamespace(args []string, flags shared.Flags) error {
 		return renderNamespaceList()
 	}
 
-	if grammar.IsVerb(args[0]) {
+	if grammar.IsNamespaceVerb(args[0]) {
 		return handleNamespaceNounVerb(grammar.Canonical(args[0]), args[1:], flags)
 	}
 
@@ -49,7 +49,7 @@ func HandleNamespace(args []string, flags shared.Flags) error {
 		return handleProfiles(name, rest[1:], flags)
 	}
 
-	if !grammar.IsVerb(rest[0]) {
+	if !grammar.IsNamespaceVerb(rest[0]) {
 		return fmt.Errorf("unknown token %q after namespace %q", rest[0], name)
 	}
 	return handleNamespaceVerb(name, grammar.Canonical(rest[0]), rest[1:], flags)
@@ -67,10 +67,10 @@ func handleNamespaceNounVerb(verb string, args []string, flags shared.Flags) err
 		}
 		return createNamespace(name, flags)
 	case "rm":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: namespace rm <name>")
+		if len(args) == 0 {
+			return fmt.Errorf("usage: namespace rm <name>...")
 		}
-		return rmNamespace(args[0], flags)
+		return rmNamespaces(args, flags)
 	case "mv":
 		if len(args) != 2 {
 			return fmt.Errorf("usage: namespace mv <name> <newname>")
@@ -93,6 +93,16 @@ func handleNamespaceNounVerb(verb string, args []string, flags shared.Flags) err
 			return fmt.Errorf("usage: namespace disable <name>")
 		}
 		return disableNamespace(args[0], flags)
+	case "install":
+		if len(args) == 0 {
+			return fmt.Errorf("usage: namespace install <name>...")
+		}
+		return installNamespaces(args, flags)
+	case "uninstall":
+		if len(args) == 0 {
+			return fmt.Errorf("usage: namespace uninstall <name>...")
+		}
+		return uninstallNamespaces(args, flags)
 	default:
 		return fmt.Errorf("namespace %s: not valid without a namespace name", verb)
 	}
@@ -115,6 +125,10 @@ func handleNamespaceVerb(name, verb string, args []string, flags shared.Flags) e
 		return enableNamespace(name, flags)
 	case "disable":
 		return disableNamespace(name, flags)
+	case "install":
+		return installNamespaces([]string{name}, flags)
+	case "uninstall":
+		return uninstallNamespaces([]string{name}, flags)
 	case "mv":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: namespace %s mv <newname>", name)

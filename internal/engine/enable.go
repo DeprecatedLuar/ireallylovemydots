@@ -46,13 +46,15 @@ func ManifestEntries(repoDir, namespaceDir, name string) (entries []manifest.Ent
 	return m.Entries, false, nil
 }
 
-// materialize brings a namespace's folder into the working tree by adding
+// Materialize brings a namespace's folder into the working tree by adding
 // it to the repository's sparse-checkout cone, when it is not already
 // present on disk. A namespace created directly (namespace add, namespace
 // <ns> add) is already there, and this is a no-op — the ordinary case for
 // a namespace that has never been synced anywhere else, and for a
-// namespace being enabled a second time after a disable.
-func materialize(repoDir, namespaceDir, name string) error {
+// namespace being enabled a second time after a disable. Exported for
+// `install`, which is exactly this operation on its own, per concept.md
+// "Install and uninstall".
+func Materialize(repoDir, namespaceDir, name string) error {
 	if _, err := os.Stat(namespaceDir); err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {
@@ -92,7 +94,7 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 		}
 	}
 
-	if err := materialize(repoDir, namespaceDir, name); err != nil {
+	if err := Materialize(repoDir, namespaceDir, name); err != nil {
 		return err
 	}
 

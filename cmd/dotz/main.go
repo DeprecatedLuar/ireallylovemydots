@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/commands"
@@ -99,6 +100,7 @@ var shortFlags = map[byte]func(*shared.Flags){
 	'p': func(f *shared.Flags) { f.Purge = true },
 	'y': func(f *shared.Flags) { f.Yes = true },
 	'd': func(f *shared.Flags) { f.Debug = true },
+	'i': func(f *shared.Flags) { f.Install = true },
 }
 
 // extractGlobalFlags pulls the command-wide flags from anywhere in args and
@@ -130,6 +132,10 @@ func extractGlobalFlags(args []string) ([]string, shared.Flags, error) {
 			flags.Debug = true
 		case arg == "--bootstrap":
 			flags.Bootstrap = true
+		case arg == "--install":
+			flags.Install = true
+		case arg == "--restore":
+			flags.Restore = true
 		case arg == "--repo" || arg == "-r":
 			if i+1 >= len(args) {
 				return nil, shared.Flags{}, fmt.Errorf("%s requires a value", arg)
@@ -145,6 +151,13 @@ func extractGlobalFlags(args []string) ([]string, shared.Flags, error) {
 		default:
 			remaining = append(remaining, arg)
 		}
+	}
+
+	// "--force" implies "--yes"; "--yes" never implies "--force" (concept.md
+	// "Flags"). Wired here once so no command has to duplicate the
+	// implication.
+	if flags.Force {
+		flags.Yes = true
 	}
 
 	return remaining, flags, nil
@@ -198,16 +211,18 @@ func resolveRoute(args []string, namespaces, repos []string, ambiguous func(name
 	// Verb-first alias: `dots enable neovim` -> `namespace neovim enable`.
 	// This alias only ever targets the namespace subtree — repo has its
 	// own explicit `repo add`/`repo rm`, never a bare verb form.
-	if grammar.IsVerb(tok0) {
+	if grammar.IsVerb(tok0) || slices.Contains(grammar.NamespaceOnlyVerbs, tok0) {
 		canon := grammar.Canonical(tok0)
-		if canon == "enable" && len(args) == 1 {
-			return route{target: targetNamespace, args: []string{"enable"}}, nil
+		// enable, install, and uninstall all accept more than one namespace
+		// name (concept.md "Any verb that takes a namespace takes several");
+		// every other verb stays single-name, so only these three are
+		// routed to the noun-level batch form here.
+		batchable := canon == "enable" || canon == "install" || canon == "uninstall"
+		if batchable && len(args) == 1 {
+			return route{target: targetNamespace, args: []string{canon}}, nil
 		}
-		// `enable` alone accepts more than one namespace name (concept.md
-		// "Enabling more than one"); every other verb stays single-name, so
-		// only enable is routed to the noun-level batch form here.
-		if canon == "enable" && len(args) > 2 {
-			return route{target: targetNamespace, args: append([]string{"enable"}, args[1:]...)}, nil
+		if batchable && len(args) > 2 {
+			return route{target: targetNamespace, args: append([]string{canon}, args[1:]...)}, nil
 		}
 		if len(args) < 2 {
 			return route{}, fmt.Errorf("usage: %s <namespace> [args]", tok0)

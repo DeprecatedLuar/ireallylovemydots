@@ -37,8 +37,8 @@ func RestorePreflight(namespaceDir, namespaceName string, entries []manifest.Ent
 			problems = append(problems, RestoreProblem{
 				Entry: e,
 				Message: fmt.Sprintf(
-					"%s already exists (%s)\n  [t] trash it and restore %s's copy\n  [p] keep it, trash %s's copy instead\n  [c] cancel",
-					e.Dest, detail, namespaceName, namespaceName),
+					"%s already exists (%s)\n  [t] trash it and restore %s's copy\n  [s] skip this entry, leave the occupant alone\n  [c] cancel",
+					e.Dest, detail, namespaceName),
 			})
 		}
 	}
@@ -92,20 +92,26 @@ type restoreOp struct {
 
 // Restore restores every entry in targets to its destination as a real
 // file — removing any symlink of its own first, moving the payload out of
-// the namespace, and removing the manifest entry — or, under purge, trashes
+// the namespace, and removing the manifest entry — or, under skip, trashes
 // the payload instead and leaves the destination untouched. It is
 // transactional across the whole set: a failure partway through rolls back
-// every entry already restored or purged, and neither the manifest nor
-// machine state is written until every entry has succeeded.
+// every entry already restored or trashed, and neither the manifest nor
+// machine state is written until every entry has succeeded. It returns the
+// trash name of everything it sent to the trash — a displaced occupant, or
+// a skipped entry's own payload — so a caller running under --purge can
+// erase them once the whole restore has verifiably succeeded, per
+// concept.md "--restore --purge": "the restore completes and is verified
+// before anything is erased."
 //
 // problems, from RestorePreflight, names which destinations are occupied.
-// Under purge every entry's payload is trashed regardless of occupancy,
-// exactly concept.md's "[p] keep it, trash <namespace>'s copy instead" for
-// an occupied destination and its ordinary "nothing is restored" meaning for
-// every other entry. Without purge, an occupied destination is trashed first
-// and then replaced by the restored payload — concept.md's "--force is
-// [t]" — which by this point the caller has already confirmed.
-func Restore(key state.Key, namespaceDir string, targets []manifest.Entry, problems []RestoreProblem, s state.State, purge bool) error {
+// skip applies only to those occupied entries — concept.md's "[s] skip this
+// entry, leave the occupant alone" is scoped to the specific entry the
+// prompt was asking about, not the whole batch. An entry whose destination
+// is not occupied is always restored normally, regardless of skip. Without
+// skip, an occupied destination is trashed first and then replaced by the
+// restored payload — concept.md's "--force is [t]" — which by this point
+// the caller has already confirmed.
+func Restore(key state.Key, namespaceDir string, targets []manifest.Entry, problems []RestoreProblem, s state.State, skip bool) ([]string, error) {
 	occupied := map[string]bool{}
 	for _, p := range problems {
 		occupied[p.Entry.Dest] = true
@@ -138,23 +144,23 @@ func Restore(key state.Key, namespaceDir string, targets []manifest.Entry, probl
 		payload := filepath.Join(namespaceDir, e.Name)
 		op := restoreOp{name: e.Name, payload: payload, dest: e.Dest}
 
-		if purge {
+		if skip && occupied[e.Dest] {
 			// A tracked entry is symlinked at its destination from the
 			// moment it is added, independent of enable/disable state, so
-			// purging must clear that symlink too — otherwise the payload
+			// skipping must clear that symlink too — otherwise the payload
 			// it names is trashed out from under it, leaving a dangling
 			// link behind for a namespace nothing restores into.
 			if st, err := link.Classify(e.Dest, payload); err == nil && st == link.CorrectSymlink {
 				if err := link.Remove(e.Dest); err != nil {
 					rollback()
-					return err
+					return nil, err
 				}
 				op.removedLink = true
 			}
 			name, err := trash.Move(payload)
 			if err != nil {
 				rollback()
-				return fmt.Errorf("trash %s: %w", payload, err)
+				return nil, fmt.Errorf("trash %s: %w", payload, err)
 			}
 			op.purgedPayload = name
 			completed = append(completed, op)
@@ -165,26 +171,26 @@ func Restore(key state.Key, namespaceDir string, targets []manifest.Entry, probl
 			name, err := trash.Move(e.Dest)
 			if err != nil {
 				rollback()
-				return fmt.Errorf("trash occupied destination %s: %w", e.Dest, err)
+				return nil, fmt.Errorf("trash occupied destination %s: %w", e.Dest, err)
 			}
 			op.trashedOccupant = name
 		} else {
 			st, err := link.Classify(e.Dest, payload)
 			if err != nil {
 				rollback()
-				return err
+				return nil, err
 			}
 			switch st {
 			case link.CorrectSymlink, link.WrongSymlink:
 				if err := link.Remove(e.Dest); err != nil {
 					rollback()
-					return err
+					return nil, err
 				}
 				op.removedLink = true
 			case link.RealDir:
 				if err := os.Remove(e.Dest); err != nil {
 					rollback()
-					return fmt.Errorf("remove empty directory %s: %w", e.Dest, err)
+					return nil, fmt.Errorf("remove empty directory %s: %w", e.Dest, err)
 				}
 				op.removedEmptyDir = true
 			}
@@ -192,11 +198,11 @@ func Restore(key state.Key, namespaceDir string, targets []manifest.Entry, probl
 
 		if err := os.MkdirAll(filepath.Dir(e.Dest), dirPerm); err != nil {
 			rollback()
-			return fmt.Errorf("create parent directory for %s: %w", e.Dest, err)
+			return nil, fmt.Errorf("create parent directory for %s: %w", e.Dest, err)
 		}
 		if err := os.Rename(payload, e.Dest); err != nil {
 			rollback()
-			return fmt.Errorf("restore %s: %w", e.Dest, err)
+			return nil, fmt.Errorf("restore %s: %w", e.Dest, err)
 		}
 		completed = append(completed, op)
 	}
@@ -204,7 +210,7 @@ func Restore(key state.Key, namespaceDir string, targets []manifest.Entry, probl
 	m, err := manifest.Read(namespaceDir)
 	if err != nil {
 		rollback()
-		return err
+		return nil, err
 	}
 	removedNames := make(map[string]bool, len(targets))
 	removedDests := make(map[string]bool, len(targets))
@@ -220,7 +226,7 @@ func Restore(key state.Key, namespaceDir string, targets []manifest.Entry, probl
 	}
 	if err := manifest.Write(namespaceDir, manifest.Manifest{Entries: remaining}); err != nil {
 		rollback()
-		return err
+		return nil, err
 	}
 
 	if entry, ok := s.Entries[key]; ok {
@@ -234,9 +240,18 @@ func Restore(key state.Key, namespaceDir string, targets []manifest.Entry, probl
 		s.Entries[key] = entry
 		if err := state.Write(s); err != nil {
 			rollback()
-			return err
+			return nil, err
 		}
 	}
 
-	return nil
+	var trashed []string
+	for _, op := range completed {
+		switch {
+		case op.trashedOccupant != "":
+			trashed = append(trashed, op.trashedOccupant)
+		case op.purgedPayload != "":
+			trashed = append(trashed, op.purgedPayload)
+		}
+	}
+	return trashed, nil
 }

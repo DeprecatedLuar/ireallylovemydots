@@ -52,6 +52,9 @@ func enableNamespace(name string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	if !namespaceInstalled(nsDir) && !flags.Install {
+		return fmt.Errorf("namespace %q is not installed; rerun with -i to install and enable it", name)
+	}
 
 	entries, _, err := engine.ManifestEntries(repoDir, nsDir, name)
 	if err != nil {
@@ -211,7 +214,16 @@ func discoverAllTargets(dataDir string, reg manifest.Registry, s state.State, fl
 	var candidates []candidate
 	counts := make(map[string]int)
 	for _, r := range repos {
-		names, err := allNamespaceNames(filepath.Join(dataDir, r.Name))
+		// --all means every installed namespace; --all -i widens that to the
+		// whole catalogue, installed or not, per concept.md "Enabling more
+		// than one".
+		var names []string
+		var err error
+		if flags.Install {
+			names, err = allNamespaceNames(filepath.Join(dataDir, r.Name))
+		} else {
+			names, err = namespace.LocalNames(filepath.Join(dataDir, r.Name))
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -256,6 +268,9 @@ func resolveExplicitTargets(dataDir string, reg manifest.Registry, names []strin
 		if err != nil {
 			return nil, err
 		}
+		if !namespaceInstalled(nsDir) && !flags.Install {
+			return nil, fmt.Errorf("namespace %q is not installed; rerun with -i to install and enable it", name)
+		}
 		entries, _, err := engine.ManifestEntries(repoDir, nsDir, name)
 		if err != nil {
 			return nil, err
@@ -276,6 +291,15 @@ func problemSummaries(problems []engine.Problem) string {
 		summaries[i] = strings.SplitN(p.Message, "\n", 2)[0]
 	}
 	return strings.Join(summaries, "; ")
+}
+
+// namespaceInstalled reports whether a namespace's folder is materialized
+// on disk — concept.md "Install and uninstall"'s middle state — without
+// consulting machine state, which records enabled/disabled but not
+// installed/not-installed.
+func namespaceInstalled(nsDir string) bool {
+	_, err := os.Stat(nsDir)
+	return err == nil
 }
 
 func allNamespaceNames(repoDir string) ([]string, error) {
