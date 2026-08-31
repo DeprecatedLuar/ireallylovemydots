@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/paths"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
 	"github.com/DeprecatedLuar/dotz/internal/state"
+	"github.com/DeprecatedLuar/dotz/internal/trash"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
 
@@ -86,8 +86,8 @@ func rmRepo(name string, flags shared.Flags) error {
 		}
 	}
 
-	if err := os.RemoveAll(repoDir); err != nil {
-		return fmt.Errorf("remove repository %s: %w", repoDir, err)
+	if _, err := trash.Move(repoDir); err != nil {
+		return fmt.Errorf("trash repository %s: %w", repoDir, err)
 	}
 
 	remaining := make([]manifest.Repo, 0, len(reg.Repos))

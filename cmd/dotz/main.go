@@ -17,6 +17,16 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
 
+// version is stamped at build time via -ldflags "-X main.version=...", per
+// build.sh, using `git describe --always --dirty`. Left at its default when
+// built any other way (`go build ./...`, `go run`), so an unstamped binary
+// still identifies itself as such rather than lying about its provenance.
+var version = "dev"
+
+// versionDirtySuffix is git describe --dirty's own marker; checking for it
+// avoids needing a second ldflags variable to carry a dirty bit.
+const versionDirtySuffix = "-dirty"
+
 // target names which command subtree a resolved route dispatches into.
 type target int
 
@@ -36,6 +46,11 @@ type route struct {
 }
 
 func main() {
+	if hasVersionFlag(os.Args[1:]) {
+		printVersion()
+		return
+	}
+
 	rawArgs, flags, err := extractGlobalFlags(os.Args[1:])
 	if err != nil {
 		die(err)
@@ -264,6 +279,33 @@ func ambiguityChooser(name string) (string, error) {
 // every registered repository, for router ambiguity resolution.
 func namespaceNames() ([]string, error) {
 	return commands.NamespaceNames()
+}
+
+// hasVersionFlag reports whether --version appears anywhere in args. It is
+// checked ahead of extractGlobalFlags and route resolution, per concept.md
+// "Flags", since printing the build stamp should never depend on the state
+// of any registered repository or namespace.
+func hasVersionFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--version" {
+			return true
+		}
+	}
+	return false
+}
+
+// printVersion reports the commit dots was built from and whether the tree
+// was dirty at build time, per concept.md "Flags" and "Top level". Both come
+// from a single string stamped by build.sh via -ldflags -X main.version=...
+// (git describe --always --dirty), so the dirty state is read back off its
+// "-dirty" suffix rather than carried as a second variable.
+func printVersion() {
+	commit := strings.TrimSuffix(version, versionDirtySuffix)
+	if commit != version {
+		fmt.Printf("dots %s (dirty)\n", commit)
+		return
+	}
+	fmt.Printf("dots %s\n", commit)
 }
 
 func die(err error) {

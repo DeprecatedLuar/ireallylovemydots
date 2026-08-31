@@ -12,6 +12,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
 	"github.com/DeprecatedLuar/dotz/internal/state"
+	"github.com/DeprecatedLuar/dotz/internal/trash"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
 
@@ -124,12 +125,12 @@ func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Loca
 	return Located{}, fmt.Errorf("no repository named %q", choice)
 }
 
-// Delete removes a namespace's folder from disk, unconditionally. Callers
-// are responsible for having restored or trashed its entries first; Delete
+// Delete trashes a namespace's folder, unconditionally. Callers are
+// responsible for having restored or trashed its entries first; Delete
 // itself does not touch destinations.
 func Delete(dir string) error {
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("remove namespace %s: %w", dir, err)
+	if _, err := trash.Move(dir); err != nil {
+		return fmt.Errorf("trash namespace %s: %w", dir, err)
 	}
 	return nil
 }

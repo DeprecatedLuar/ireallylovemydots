@@ -2,12 +2,14 @@ package engine
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/DeprecatedLuar/dotz/internal/gitutil"
 	"github.com/DeprecatedLuar/dotz/internal/link"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/state"
@@ -58,8 +60,10 @@ func materialize(repoDir, namespaceDir, name string) error {
 	}
 
 	cmd := exec.Command("git", "-C", repoDir, "checkout", "HEAD", "--", name)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("checkout namespace %q: %s", name, strings.TrimSpace(string(out)))
+	var tail gitutil.CappedWriter
+	cmd.Stderr = io.MultiWriter(os.Stderr, &tail)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("checkout namespace %q: %s", name, strings.TrimSpace(tail.String()))
 	}
 	if _, err := os.Stat(namespaceDir); err != nil {
 		return fmt.Errorf("namespace %q was not materialized by checkout", name)

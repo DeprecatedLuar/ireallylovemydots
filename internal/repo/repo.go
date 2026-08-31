@@ -6,11 +6,13 @@ package repo
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/DeprecatedLuar/dotz/internal/gitutil"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 )
 
@@ -55,15 +57,18 @@ func Clone(dataDir, spec, localName string) (dest, resolvedURL string, err error
 	var lastErr error
 	for i, url := range candidates {
 		cmd := exec.Command("git", "clone", "--filter=blob:none", "--no-checkout", url, dest)
-		out, cloneErr := cmd.CombinedOutput()
+		var tail gitutil.CappedWriter
+		cmd.Stderr = io.MultiWriter(os.Stderr, &tail)
+		cloneErr := cmd.Run()
 		if cloneErr == nil {
 			return dest, url, nil
 		}
 		os.RemoveAll(dest)
-		lastErr = fmt.Errorf("git clone %s: %s", url, strings.TrimSpace(string(out)))
+		out := tail.String()
+		lastErr = fmt.Errorf("git clone %s: %s", url, strings.TrimSpace(out))
 
 		isLastCandidate := i == len(candidates)-1
-		if !isLastCandidate && looksLikeNotFound(string(out)) {
+		if !isLastCandidate && looksLikeNotFound(out) {
 			continue
 		}
 		return "", "", lastErr

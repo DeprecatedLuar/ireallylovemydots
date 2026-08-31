@@ -138,6 +138,8 @@ func TestRename_TargetAlreadyExists(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
 	repoDir := t.TempDir()
 	dir, err := Create(repoDir, "editors")
 	if err != nil {
