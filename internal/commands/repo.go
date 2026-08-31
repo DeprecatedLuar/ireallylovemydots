@@ -209,6 +209,15 @@ func planBootstrap(repoPath string, entries []repo.RootEntry) ([]repo.PlannedNam
 	}
 
 	fmt.Print(ui.RenderAligned(bootstrapPreviewEntries(plan)))
+
+	gitignoreChanges, err := repo.PlanGitignore(repoPath, plan)
+	if err != nil {
+		return nil, false, err
+	}
+	if preview := renderGitignorePreview(gitignoreChanges); preview != "" {
+		fmt.Print("\n" + preview)
+	}
+
 	choice, err := ui.Prompt(
 		fmt.Sprintf("--bootstrap will create %d namespace(s) as shown above. Proceed?", len(plan)),
 		[]string{"y", "N"},
@@ -217,6 +226,38 @@ func planBootstrap(repoPath string, entries []repo.RootEntry) ([]repo.PlannedNam
 		return nil, false, err
 	}
 	return plan, strings.EqualFold(choice, "y") || strings.EqualFold(choice, "yes"), nil
+}
+
+// renderGitignorePreview shows all three outcomes of the root .gitignore
+// rewrite (concept.md "Bootstrap rewrites the root .gitignore") before the
+// bootstrap confirmation prompt — the only place the conversion is agreed
+// to. Blank lines and comments are real GitignoreUnchanged entries but are
+// not worth showing; a repository with no .gitignore, or one holding only
+// such lines, previews nothing.
+func renderGitignorePreview(changes []repo.GitignoreChange) string {
+	var b strings.Builder
+	shown := 0
+	for _, c := range changes {
+		switch c.Outcome {
+		case repo.GitignoreRewritten:
+			fmt.Fprintf(&b, "  rewritten   %s -> %s\n", c.Original, c.Rewritten)
+			shown++
+		case repo.GitignoreUnmapped:
+			fmt.Fprintf(&b, "  unmapped    %s      no such entry, left as-is\n", c.Original)
+			shown++
+		case repo.GitignoreUnchanged:
+			trimmed := strings.TrimSpace(c.Original)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			fmt.Fprintf(&b, "  unchanged   %s\n", c.Original)
+			shown++
+		}
+	}
+	if shown == 0 {
+		return ""
+	}
+	return ".gitignore\n" + b.String()
 }
 
 // bootstrapPreviewEntries renders the proposed conversion as aligned pairs,

@@ -226,6 +226,40 @@ func TestUninstallNamespaces_DirtyRepo_RefusesForceOverrides(t *testing.T) {
 	}
 }
 
+// TestInstallNamespaces_MidBatchFailure_StillReportsCompletedItems covers a
+// code-review finding: installNamespaces accumulates a report line per
+// namespace as it materializes each one, but used to return the mid-batch
+// error before ever printing what had already succeeded — leaving a user
+// with no indication that "editors" really was materialized to disk even
+// though the command as a whole failed. "editors" resolves and
+// materializes fine; the second name doesn't exist in the catalogue, so
+// resolution fails partway through the batch. The already-completed
+// "editors" line must still reach stdout before the error propagates.
+func TestInstallNamespaces_MidBatchFailure_StillReportsCompletedItems(t *testing.T) {
+	home := t.TempDir()
+	source := newCatalogueSourceRepo(t, home)
+	registerClonedCatalogue(t, source)
+
+	var err error
+	stdout, _ := captureStdoutStderr(t, func() {
+		err = installNamespaces([]string{"editors", "does-not-exist"}, shared.Flags{})
+	})
+	if err == nil {
+		t.Fatal("expected installNamespaces to fail on the unresolvable second name")
+	}
+	if strings.TrimSpace(stdout) != "- editors" {
+		t.Fatalf("expected the completed \"editors\" install still reported before the error, got %q", stdout)
+	}
+
+	dataDir, derr := paths.Data()
+	if derr != nil {
+		t.Fatal(derr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, "dotfiles", "editors")); statErr != nil {
+		t.Fatalf("expected editors actually materialized on disk despite the later failure, got err=%v", statErr)
+	}
+}
+
 func TestRmRepo_NoRemote_RefusesNamingRemoteAdd(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	dataHome := t.TempDir()

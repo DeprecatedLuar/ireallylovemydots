@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
@@ -53,7 +54,11 @@ func rmEntry(name, path string, flags shared.Flags) error {
 	if err := confirmRemoval([]string{name}, 0, 1, flags); err != nil {
 		return err
 	}
-	return removeEntries(loc, name, []manifest.Entry{entry}, flags)
+	if err := removeEntries(loc, name, []manifest.Entry{entry}, flags); err != nil {
+		return err
+	}
+	fmt.Print(ui.Report([]string{ui.Operation(ui.MarkerRemoved, entry.Name, "")}, ""))
+	return nil
 }
 
 // rmNamespaces implements `namespace rm <ns>...`: every named namespace is
@@ -103,10 +108,16 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 		checkedRepos[t.loc.Repo.Name] = true
 	}
 
+	// lines is printed via defer so a mid-batch failure still reports every
+	// namespace already removed before the error, rather than silently
+	// dropping that partial progress on an early return.
+	var lines []string
+	defer func() { fmt.Print(ui.Report(lines, "")) }()
 	for i, t := range targets {
 		if err := rmNamespaceAt(t.loc, names[i], flags); err != nil {
 			return err
 		}
+		lines = append(lines, ui.Operation(ui.MarkerRemoved, names[i], ""))
 	}
 	return nil
 }
@@ -153,16 +164,25 @@ func rmRepo(name string, flags shared.Flags) error {
 		return err
 	}
 
+	// lines is printed via defer so a mid-batch failure — whether a later
+	// namespace's removal, the repo trash, or the registry write — still
+	// reports every step already completed before the error, rather than
+	// silently dropping that partial progress on an early return.
+	var lines []string
+	defer func() { fmt.Print(ui.Report(lines, "")) }()
+
 	for _, nsName := range names {
 		loc := namespace.Located{Repo: r, Dir: filepath.Join(repoDir, nsName)}
 		if err := rmNamespaceAt(loc, nsName, flags); err != nil {
 			return err
 		}
+		lines = append(lines, ui.Operation(ui.MarkerRemoved, nsName, ""))
 	}
 
 	if _, err := trash.Move(repoDir); err != nil {
 		return fmt.Errorf("trash repository %s: %w", repoDir, err)
 	}
+	lines = append(lines, ui.Operation(ui.MarkerRemoved, r.Name, ""))
 
 	remaining := make([]manifest.Repo, 0, len(reg.Repos))
 	for _, existing := range reg.Repos {
@@ -171,7 +191,10 @@ func rmRepo(name string, flags shared.Flags) error {
 		}
 	}
 	reg.Repos = remaining
-	return manifest.WriteRegistry(reg)
+	if err := manifest.WriteRegistry(reg); err != nil {
+		return err
+	}
+	return nil
 }
 
 // rmNamespaceAt removes every entry of the namespace at loc per the flags,
@@ -204,6 +227,30 @@ func rmNamespaceAt(loc namespace.Located, nsName string, flags shared.Flags) err
 	return nil
 }
 
+// dirtyNamespaces reduces a list of git-status paths (relative to a repo
+// root, so namespace/entry/...) to the sorted, deduplicated set of
+// namespaces they fall under, for checkGitSafety's error to name what's
+// dirty without dumping every path. rootFiles counts paths with no
+// namespace segment (repo-root files such as .gitignore) separately —
+// they aren't a namespace, so they're never folded into the list.
+func dirtyNamespaces(paths []string) (namespaces []string, rootFiles int) {
+	seen := make(map[string]bool)
+	for _, p := range paths {
+		head, _, ok := strings.Cut(p, "/")
+		if !ok {
+			rootFiles++
+			continue
+		}
+		seen[head] = true
+	}
+	namespaces = make([]string, 0, len(seen))
+	for ns := range seen {
+		namespaces = append(namespaces, ns)
+	}
+	sort.Strings(namespaces)
+	return namespaces, rootFiles
+}
+
 // checkGitSafety reads repoDir's git state and refuses removal when it
 // would destroy work that exists nowhere else, per concept.md "Git safety
 // on removal": uncommitted changes or unpushed commits point at `dots
@@ -218,8 +265,13 @@ func checkGitSafety(repoName, repoDir string, flags shared.Flags) error {
 		return err
 	}
 	if len(st.Dirty) > 0 {
-		return fmt.Errorf("%q has uncommitted changes (%s); run `dots sync` first, or --force to override",
-			repoName, strings.Join(st.Dirty, ", "))
+		namespaces, rootFiles := dirtyNamespaces(st.Dirty)
+		header := fmt.Sprintf("%q has uncommitted changes in %d namespace(s):", repoName, len(namespaces))
+		if rootFiles > 0 {
+			header = fmt.Sprintf("%s, plus %d repo-root file(s)", strings.TrimSuffix(header, ":"), rootFiles) + ":"
+		}
+		msg := ui.List(header, namespaces, "run `dots sync` first, or --force to override")
+		return fmt.Errorf("%s", msg)
 	}
 	if st.Unpushed > 0 {
 		return fmt.Errorf("%q has %d commit(s) not pushed to its remote; run `dots sync` first, or --force to override",
@@ -261,19 +313,19 @@ func confirmRemoval(names []string, namespaceCount, fileCount int, flags shared.
 		return fmt.Errorf("cannot remove %s (%s) non-interactively without -y", subjects, scale)
 	}
 
-	var tail string
+	var tip string
 	switch {
 	case flags.Purge:
 		scale += " -> ERASED FROM DISK. Not recoverable."
 	case flags.Restore:
 		scale += " -> restored to destination"
-		tail = "\n  --restore is in effect: files are written back to their destinations first."
+		tip = "--restore is in effect: files are written back to their destinations first."
 	default:
 		scale += " -> trash"
-		tail = "\n  Nothing is written to your home directory.\n  Tip: --restore puts the files back at their destinations first."
+		tip = "Nothing is written to your home directory.\nTip: --restore puts the files back at their destinations first."
 	}
 
-	msg := fmt.Sprintf("Remove %s?\n  %s%s", subjects, scale, tail)
+	msg := ui.Confirm(fmt.Sprintf("Remove %s?", subjects), []string{scale}, tip)
 	choice, err := ui.Prompt(msg, []string{"y", "N"})
 	if err != nil {
 		return err

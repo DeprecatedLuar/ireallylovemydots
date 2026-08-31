@@ -80,7 +80,7 @@ func TestEnable_MaterializesOnlyTargetNamespace(t *testing.T) {
 
 	key := state.Key{Repo: "dotfiles", Namespace: "aaa"}
 	s := state.State{Entries: map[state.Key]state.Entry{}}
-	if err := Enable(key, repoDir, nsADir, "aaa", entriesA, s, nil); err != nil {
+	if _, err := Enable(key, repoDir, nsADir, "aaa", entriesA, s, nil); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 
@@ -110,7 +110,7 @@ func TestEnable_DirectoryEntry_OneSymlinkAndPayloadWritesVisible(t *testing.T) {
 
 	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
 	s := state.State{Entries: map[state.Key]state.Entry{}}
-	if err := Enable(key, nsDir, nsDir, "editors", entries, s, nil); err != nil {
+	if _, err := Enable(key, nsDir, nsDir, "editors", entries, s, nil); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 
@@ -170,7 +170,7 @@ func TestEnable_InjectedFailureOnSeventhLink_RollsBackEverythingAndWritesNoState
 	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
 	s := state.State{Entries: map[state.Key]state.Entry{}}
 
-	if err := Enable(key, nsDir, nsDir, "editors", entries, s, nil); err == nil {
+	if _, err := Enable(key, nsDir, nsDir, "editors", entries, s, nil); err == nil {
 		t.Fatal("expected the seventh link's permission failure to surface as an error")
 	}
 
@@ -205,14 +205,14 @@ func TestEnable_MaterializeReusesExistingFolderWithNoGitOperation(t *testing.T) 
 
 	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
 	s := state.State{Entries: map[state.Key]state.Entry{}}
-	if err := Enable(key, repoDir, nsDir, "editors", entries, s, nil); err != nil {
+	if _, err := Enable(key, repoDir, nsDir, "editors", entries, s, nil); err != nil {
 		t.Fatalf("Enable on an already-materialized namespace touched git: %v", err)
 	}
 
 	if err := Disable(key, s); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
-	if err := Enable(key, repoDir, nsDir, "editors", entries, s, nil); err != nil {
+	if _, err := Enable(key, repoDir, nsDir, "editors", entries, s, nil); err != nil {
 		t.Fatalf("re-Enable after disable touched git: %v", err)
 	}
 }

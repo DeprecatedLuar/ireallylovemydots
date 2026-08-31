@@ -17,6 +17,10 @@ import (
 // matching the permissions namespace.Create uses elsewhere.
 const namespaceDirPerm = 0755
 
+// gitignorePerm is the mode RewriteGitignore writes the rewritten root
+// .gitignore back with.
+const gitignorePerm = 0644
+
 // configDestPrefix is the "not dot-prefixed" half of concept.md "Bootstrap"'s
 // destination rule: dot-prefixed goes to ~/<name>, everything else to
 // ~/.config/<name>.
@@ -154,8 +158,172 @@ func namespaceNameFor(name string, isDir bool) string {
 	return nsName
 }
 
+// GitignoreOutcome classifies what happened to one line of a root
+// .gitignore under bootstrap's rewrite, per concept.md "Bootstrap rewrites
+// the root .gitignore".
+type GitignoreOutcome int
+
+const (
+	// GitignoreRewritten: the pattern's first path segment names a
+	// converted entry, so its namespace was prepended.
+	GitignoreRewritten GitignoreOutcome = iota
+	// GitignoreUnchanged: a slashless pattern (git matches it at any
+	// depth regardless of restructuring), or a blank/comment line.
+	GitignoreUnchanged
+	// GitignoreUnmapped: the pattern's first segment names no converted
+	// entry — a path from an older layout, left as-is and reported.
+	GitignoreUnmapped
+)
+
+// GitignoreChange is what happened to one line of a root .gitignore under
+// bootstrap's rewrite. Rewritten equals Original whenever Outcome is not
+// GitignoreRewritten, so the slice alone reconstructs the file.
+type GitignoreChange struct {
+	Outcome   GitignoreOutcome
+	Original  string
+	Rewritten string
+}
+
+// PlanGitignoreLines classifies every line of a root .gitignore against
+// plan's move map, per concept.md "Bootstrap rewrites the root .gitignore":
+// "Bootstrap's transformation is total and one-way — every root entry X
+// moves to <namespace>/X — so the move map answers every pattern that has
+// a path in it." Blank lines and comments pass through untouched as
+// GitignoreUnchanged.
+func PlanGitignoreLines(lines []string, plan []PlannedNamespace) []GitignoreChange {
+	moved := make(map[string]string, len(plan)) // original entry name -> namespace
+	for _, p := range plan {
+		moved[p.EntryName] = p.Namespace
+	}
+
+	changes := make([]GitignoreChange, len(lines))
+	for i, line := range lines {
+		changes[i] = planGitignoreLine(line, moved)
+	}
+	return changes
+}
+
+// planGitignoreLine classifies one .gitignore line per concept.md's table:
+// a converted entry's first segment gets its namespace prepended
+// (negation and a rooting leading slash carried through unchanged); a
+// slashless pattern is left alone; anything else maps to nothing and is
+// reported unmapped.
+func planGitignoreLine(line string, moved map[string]string) GitignoreChange {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return GitignoreChange{Outcome: GitignoreUnchanged, Original: line, Rewritten: line}
+	}
+
+	negated := strings.HasPrefix(line, "!")
+	body := line
+	if negated {
+		body = body[1:]
+	}
+	rooted := strings.HasPrefix(body, "/")
+	if rooted {
+		body = body[1:]
+	}
+
+	// Per gitignore(5): a pattern is rooted to this directory only if it has
+	// a slash at the beginning (already captured above) or in the middle —
+	// a slash that appears ONLY at the end (a trailing "build/") does not
+	// root it and still matches at any depth, exactly like a slashless
+	// pattern. So a slash found only as the last character doesn't count.
+	withoutTrailing := strings.TrimSuffix(body, "/")
+	hasMiddleSlash := strings.Contains(withoutTrailing, "/")
+	if !rooted && !hasMiddleSlash {
+		return GitignoreChange{Outcome: GitignoreUnchanged, Original: line, Rewritten: line}
+	}
+
+	firstSegment, _, _ := strings.Cut(body, "/")
+	namespace, ok := moved[firstSegment]
+	if !ok {
+		return GitignoreChange{Outcome: GitignoreUnmapped, Original: line, Rewritten: line}
+	}
+
+	var rewritten strings.Builder
+	if negated {
+		rewritten.WriteByte('!')
+	}
+	if rooted {
+		rewritten.WriteByte('/')
+	}
+	rewritten.WriteString(namespace)
+	rewritten.WriteByte('/')
+	rewritten.WriteString(body)
+	return GitignoreChange{Outcome: GitignoreRewritten, Original: line, Rewritten: rewritten.String()}
+}
+
+// readGitignoreLines reads repoPath's root .gitignore, if present, split
+// into lines with any trailing newline recorded separately so it can be
+// reproduced exactly. A missing file returns a nil slice, not an error —
+// not every bootstrapped repository has one.
+func readGitignoreLines(repoPath string) (lines []string, trailingNewline bool, err error) {
+	path := filepath.Join(repoPath, ".gitignore")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("read %s: %w", path, err)
+	}
+	trailingNewline = strings.HasSuffix(string(data), "\n")
+	lines = strings.Split(string(data), "\n")
+	if trailingNewline {
+		lines = lines[:len(lines)-1]
+	}
+	return lines, trailingNewline, nil
+}
+
+// PlanGitignore reads repoPath's root .gitignore, if present, and
+// classifies every pattern against plan's move map, without writing
+// anything — the preview half of the rewrite, so a declined bootstrap never
+// touches the file. A repository with no root .gitignore reports no
+// changes.
+func PlanGitignore(repoPath string, plan []PlannedNamespace) ([]GitignoreChange, error) {
+	lines, _, err := readGitignoreLines(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	if lines == nil {
+		return nil, nil
+	}
+	return PlanGitignoreLines(lines, plan), nil
+}
+
+// RewriteGitignore rewrites repoPath's root .gitignore in place per plan's
+// move map, per concept.md "Bootstrap rewrites the root .gitignore". A
+// repository with no root .gitignore is left alone. Called by Apply, once
+// the conversion the preview described has been confirmed.
+func RewriteGitignore(repoPath string, plan []PlannedNamespace) ([]GitignoreChange, error) {
+	lines, trailingNewline, err := readGitignoreLines(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	if lines == nil {
+		return nil, nil
+	}
+
+	changes := PlanGitignoreLines(lines, plan)
+	rewritten := make([]string, len(changes))
+	for i, c := range changes {
+		rewritten[i] = c.Rewritten
+	}
+	out := strings.Join(rewritten, "\n")
+	if trailingNewline {
+		out += "\n"
+	}
+	path := filepath.Join(repoPath, ".gitignore")
+	if err := os.WriteFile(path, []byte(out), gitignorePerm); err != nil {
+		return nil, fmt.Errorf("write %s: %w", path, err)
+	}
+	return changes, nil
+}
+
 // Apply performs the conversion Plan proposed: for each planned namespace,
-// creates its folder, moves the root entry into it, and writes its .dots.
+// creates its folder, moves the root entry into it, writes its .dots, and
+// rewrites the root .gitignore (per concept.md "Bootstrap rewrites the root
+// .gitignore") so it still matches the paths it did before restructuring.
 // Never commits, never creates a symlink, and never writes outside
 // repoPath.
 func Apply(repoPath string, plan []PlannedNamespace) error {
@@ -185,6 +353,10 @@ func Apply(repoPath string, plan []PlannedNamespace) error {
 		if err := manifest.Write(nsDir, m); err != nil {
 			return fmt.Errorf("write manifest for namespace %s: %w", p.Namespace, err)
 		}
+	}
+
+	if _, err := RewriteGitignore(repoPath, plan); err != nil {
+		return err
 	}
 	return nil
 }

@@ -32,7 +32,11 @@ func installNamespaces(names []string, flags shared.Flags) error {
 		return err
 	}
 
-	var report []ui.Entry
+	// lines is printed via defer so a mid-batch failure still reports every
+	// namespace already materialized before the error, rather than silently
+	// dropping that partial progress on an early return.
+	var lines []string
+	defer func() { fmt.Print(ui.Report(lines, "")) }()
 	for _, name := range names {
 		_, repoDir, nsDir, err := locateNamespaceForEnable(dataDir, reg, name, flags)
 		if err != nil {
@@ -41,9 +45,8 @@ func installNamespaces(names []string, flags shared.Flags) error {
 		if err := engine.Materialize(repoDir, nsDir, name); err != nil {
 			return err
 		}
-		report = append(report, ui.Entry{Marker: ui.MarkerMaterialized, Name: name})
+		lines = append(lines, ui.Operation(ui.MarkerMaterialized, name, ""))
 	}
-	fmt.Print(ui.Render(report))
 	return nil
 }
 
@@ -59,7 +62,11 @@ func installNamespaces(names []string, flags shared.Flags) error {
 // "non-interactively the prompt defaults to no."
 func uninstallNamespaces(names []string, flags shared.Flags) error {
 	checkedRepos := map[string]bool{}
-	var report []ui.Entry
+	// lines is printed via defer so a mid-batch failure still reports every
+	// namespace already uninstalled before the error, rather than silently
+	// dropping that partial progress on an early return.
+	var lines []string
+	defer func() { fmt.Print(ui.Report(lines, "")) }()
 	for _, name := range names {
 		loc, err := resolveNamespace(name, flags)
 		if err != nil {
@@ -100,9 +107,8 @@ func uninstallNamespaces(names []string, flags shared.Flags) error {
 		if err := repo.Remove(repoDir, name); err != nil {
 			return err
 		}
-		report = append(report, ui.Entry{Marker: ui.MarkerAbsent, Name: name})
+		lines = append(lines, ui.Operation(ui.MarkerAbsent, name, ""))
 	}
-	fmt.Print(ui.Render(report))
 	return nil
 }
 

@@ -52,7 +52,7 @@ func registerRepoWithNamespace(t *testing.T, nsName string, entries []manifest.E
 	return dataDir, repoDir, nsDir
 }
 
-func TestEnableNamespace_NonInteractive_PromptsOnceListsEveryOccupiedDestination(t *testing.T) {
+func TestEnableNamespace_NonInteractive_SkipsAndReportsEveryOccupiedDestination(t *testing.T) {
 	home := t.TempDir()
 
 	var entries []manifest.Entry
@@ -73,13 +73,16 @@ func TestEnableNamespace_NonInteractive_PromptsOnceListsEveryOccupiedDestination
 
 	registerRepoWithNamespace(t, "editors", entries)
 
-	err := enableNamespace("editors", shared.Flags{})
-	if err == nil {
-		t.Fatal("expected a non-interactive enable with occupied destinations and no --force to fail")
+	var err error
+	stdout, _ := captureStdoutStderr(t, func() {
+		err = enableNamespace("editors", shared.Flags{})
+	})
+	if !errors.Is(err, ErrSomeSkipped) {
+		t.Fatalf("expected a non-interactive enable with occupied destinations and no --force to skip and report, got %v", err)
 	}
 	for _, dest := range occupiedDests {
-		if !strings.Contains(err.Error(), dest) {
-			t.Fatalf("expected the single error to name every occupied destination, missing %s in: %v", dest, err)
+		if !strings.Contains(stdout, dest) {
+			t.Fatalf("expected the report to name every occupied destination, missing %s in: %s", dest, stdout)
 		}
 	}
 
@@ -89,12 +92,12 @@ func TestEnableNamespace_NonInteractive_PromptsOnceListsEveryOccupiedDestination
 			t.Fatalf("expected the occupied destination to remain on disk: %v", statErr)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			t.Fatalf("expected no link created at %s when the prompt was never confirmed", dest)
+			t.Fatalf("expected no link created at %s when nothing was confirmed", dest)
 		}
 	}
 }
 
-func TestEnableNamespace_OccupiedMessageNamesForceAndTracking(t *testing.T) {
+func TestEnableNamespace_OccupiedReportNamesDestinationAndOccupant(t *testing.T) {
 	home := t.TempDir()
 	dest := filepath.Join(home, "ssh")
 	if err := os.MkdirAll(dest, 0755); err != nil {
@@ -106,15 +109,21 @@ func TestEnableNamespace_OccupiedMessageNamesForceAndTracking(t *testing.T) {
 	entries := []manifest.Entry{{Name: "ssh", Dest: dest}}
 	registerRepoWithNamespace(t, "editors", entries)
 
-	err := enableNamespace("editors", shared.Flags{})
-	if err == nil {
-		t.Fatal("expected an occupied destination to block enable")
+	var err error
+	stdout, stderr := captureStdoutStderr(t, func() {
+		err = enableNamespace("editors", shared.Flags{})
+	})
+	if !errors.Is(err, ErrSomeSkipped) {
+		t.Fatalf("expected an occupied destination to be skipped, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "--force") {
-		t.Fatalf("expected the error to name --force, got: %v", err)
+	if !strings.Contains(stdout, dest) {
+		t.Fatalf("expected the report to name the occupied destination, got: %s", stdout)
 	}
-	if !strings.Contains(err.Error(), "track the paths inside it") {
-		t.Fatalf("expected the error to name tracking the paths inside it instead of the parent, got: %v", err)
+	if !strings.Contains(stdout, "real directory") {
+		t.Fatalf("expected the report to name what occupies the destination, got: %s", stdout)
+	}
+	if !strings.Contains(stderr, "--force") {
+		t.Fatalf("expected the count line to name --force, got: %s", stderr)
 	}
 }
 

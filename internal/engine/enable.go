@@ -71,37 +71,48 @@ func Materialize(repoDir, namespaceDir, name string) error {
 }
 
 type trashedEntry struct {
-	dest string
-	name string
+	dest   string
+	name   string
+	detail string
+}
+
+// TrashedDestination records one destination Enable found occupied and
+// trashed before linking, so a caller can report it as a Sub line under the
+// namespace's Operation line, per concept.md "What enable reports": "what
+// was trashed is reported as an indented sub-line beneath its namespace."
+type TrashedDestination struct {
+	Dest   string
+	Detail string
 }
 
 // Enable materializes the namespace via sparse checkout if needed, disables
 // every namespace named by a Collision problem, trashes every destination
 // named by a confirmed Occupied problem, then links every entry, parent
-// before child by path depth, per concept.md "Enable".
+// before child by path depth, per concept.md "Enable". It returns every
+// destination it trashed, in link order, for the caller to report.
 //
 // State is written only once every link has succeeded — never before,
 // unlike the narrative order in concept.md — so that a failure partway
 // through leaves neither a link nor a state entry behind: rolling back a
 // state entry that was already persisted is one more thing that could fail,
 // where never persisting it in the first place cannot.
-func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifest.Entry, s state.State, problems []Problem) error {
+func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifest.Entry, s state.State, problems []Problem) ([]TrashedDestination, error) {
 	for _, p := range problems {
 		if p.Kind == Collision {
 			if err := disableConflicting(*p.Conflicting, s); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
 
 	if err := Materialize(repoDir, namespaceDir, name); err != nil {
-		return err
+		return nil, err
 	}
 
-	occupied := map[string]bool{}
+	occupiedDetail := map[string]string{}
 	for _, p := range problems {
 		if p.Kind == Occupied {
-			occupied[p.Entry.Dest] = true
+			occupiedDetail[p.Entry.Dest] = OccupancyDetail(p.Message)
 		}
 	}
 
@@ -119,22 +130,22 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 	}
 
 	for _, e := range sorted {
-		if occupied[e.Dest] {
+		if detail, ok := occupiedDetail[e.Dest]; ok {
 			trashedName, err := trash.Move(e.Dest)
 			if err != nil {
 				rollback()
-				return fmt.Errorf("trash occupied destination %s: %w", e.Dest, err)
+				return nil, fmt.Errorf("trash occupied destination %s: %w", e.Dest, err)
 			}
-			trashed = append(trashed, trashedEntry{dest: e.Dest, name: trashedName})
+			trashed = append(trashed, trashedEntry{dest: e.Dest, name: trashedName, detail: detail})
 		}
 		if err := os.MkdirAll(filepath.Dir(e.Dest), dirPerm); err != nil {
 			rollback()
-			return fmt.Errorf("create parent directory for %s: %w", e.Dest, err)
+			return nil, fmt.Errorf("create parent directory for %s: %w", e.Dest, err)
 		}
 		payload := filepath.Join(namespaceDir, e.Name)
 		if err := link.Create(e.Dest, payload); err != nil {
 			rollback()
-			return err
+			return nil, err
 		}
 		created = append(created, e.Dest)
 	}
@@ -146,9 +157,28 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 	s.Entries[key] = state.Entry{Enabled: true, LinkedDests: dests}
 	if err := state.Write(s); err != nil {
 		rollback()
-		return err
+		return nil, err
 	}
-	return nil
+
+	result := make([]TrashedDestination, len(trashed))
+	for i, t := range trashed {
+		result[i] = TrashedDestination{Dest: t.dest, Detail: t.detail}
+	}
+	return result, nil
+}
+
+// OccupancyDetail pulls the parenthesised detail (e.g. "real directory, 340
+// files") out of an Occupied problem's message, so Enable's trash report —
+// and any command's skip-report line, e.g. problemSummary in
+// internal/commands/enable.go — can reuse the same wording pre-flight
+// already computed rather than re-deriving it.
+func OccupancyDetail(msg string) string {
+	open := strings.IndexByte(msg, '(')
+	close := strings.IndexByte(msg, ')')
+	if open == -1 || close == -1 || close < open {
+		return ""
+	}
+	return msg[open+1 : close]
 }
 
 // disableConflicting disables an entire namespace found to conflict during

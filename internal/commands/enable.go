@@ -18,83 +18,16 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
 
-// ErrSomeSkipped is returned by a batch enable that linked at least one
-// namespace but skipped at least one other, per concept.md "What enable
-// reports": "Skipping is a failure of the request... the exit status is
-// non-zero." The report (the "+"/"!" lines and the count line) is already
-// printed by the time this is returned, so main.go exits 1 without an
-// additional "Error: ..." line on top of it.
+// ErrSomeSkipped is returned by enable when it linked at least one namespace
+// but skipped at least one other, per concept.md "What enable reports":
+// "Skipping is a failure of the request... the exit status is non-zero."
+// The report (the "+"/"!" lines and the count line) is already printed by
+// the time this is returned, so main.go exits 1 without an additional
+// "Error: ..." line on top of it.
 var ErrSomeSkipped = errors.New("some namespaces were skipped")
 
-// enableNamespace implements `namespace <ns> enable` / `namespace enable
-// <ns>` / `enable <ns>` for exactly one, explicitly named namespace, per
-// concept.md "Enable": materialize the namespace's folder, write its state
-// entry, and create its links — with every pre-flight problem collected and
-// presented exactly once before anything happens. A namespace named this
-// way is never silently skipped: an unresolved problem is either confirmed
-// (interactively or via --force) or hard-errors. Batches of more than one
-// namespace go through enableNamespaces instead, which skips rather than
-// blocking the whole request.
-func enableNamespace(name string, flags shared.Flags) error {
-	if flags.All {
-		return fmt.Errorf("usage: enable --all")
-	}
-	dataDir, err := paths.Data()
-	if err != nil {
-		return err
-	}
-	reg, err := manifest.ReadRegistry()
-	if err != nil {
-		return err
-	}
-
-	r, repoDir, nsDir, err := locateNamespaceForEnable(dataDir, reg, name, flags)
-	if err != nil {
-		return err
-	}
-	if !namespaceInstalled(nsDir) && !flags.Install {
-		return fmt.Errorf("namespace %q is not installed; rerun with -i to install and enable it", name)
-	}
-
-	entries, _, err := engine.ManifestEntries(repoDir, nsDir, name)
-	if err != nil {
-		return err
-	}
-
-	key := state.Key{Repo: r.Name, Namespace: name}
-	s, err := state.Read()
-	if err != nil {
-		return err
-	}
-
-	problems, err := engine.Preflight(key, nsDir, entries, s)
-	if err != nil {
-		return err
-	}
-
-	if hardBlocked(problems) {
-		return fmt.Errorf("cannot enable %q:\n%s", name, renderProblems(problems))
-	}
-
-	if len(problems) > 0 {
-		proceed, err := confirmProblems(name, problems, flags)
-		if err != nil {
-			return err
-		}
-		if !proceed {
-			return nil
-		}
-	}
-
-	if err := engine.Enable(key, repoDir, nsDir, name, entries, s, problems); err != nil {
-		return err
-	}
-	fmt.Print(ui.Render([]ui.Entry{{Marker: ui.MarkerEnabled, Name: name}}))
-	return nil
-}
-
-// enableTarget is one namespace under consideration by a batch enable, with
-// its pre-flight problems filled in once the whole batch has been gathered.
+// enableTarget is one namespace under consideration by enable, with its
+// pre-flight problems filled in once the whole batch has been gathered.
 type enableTarget struct {
 	repo     manifest.Repo
 	repoDir  string
@@ -106,12 +39,23 @@ type enableTarget struct {
 	problems []engine.Problem
 }
 
+// enableNamespace implements the single-name convenience form used by
+// `namespace <ns> enable` and `<ns> enable`, and by anything else that
+// names exactly one namespace: it is enableNamespaces with a slice of one,
+// never a separate code path with a confirmation of its own, per
+// concept.md "Enabling more than one": "One namespace is a batch of one."
+func enableNamespace(name string, flags shared.Flags) error {
+	return enableNamespaces([]string{name}, flags)
+}
+
 // enableNamespaces implements `enable <ns>...` / `enable --all` / `namespace
-// enable <ns>...`: batch enable, per concept.md "Enabling more than one".
-// Exactly one explicit name keeps enableNamespace's confirm-or-hard-error
-// behavior; --all or more than one name runs the batch path, where a
-// namespace that fails pre-flight is skipped and reported rather than
-// blocking the rest.
+// enable <ns>...` / `namespace <ns> enable`, per concept.md "Enabling more
+// than one": "One namespace and twenty-six behave identically, because one
+// namespace is a batch of one — there is no separate single-namespace path
+// with a confirmation of its own." Pre-flight runs across the whole batch
+// before the first link is created; a namespace that cannot be enabled is
+// skipped and reported, never blocking the rest. --force proceeds without
+// asking anything; without it, the run itself is the warning.
 func enableNamespaces(names []string, flags shared.Flags) error {
 	if flags.All {
 		if len(names) > 0 {
@@ -122,19 +66,19 @@ func enableNamespaces(names []string, flags shared.Flags) error {
 	if len(names) == 0 {
 		return fmt.Errorf("usage: enable <namespace>...")
 	}
-	if len(names) == 1 {
-		return enableNamespace(names[0], flags)
-	}
 	return runEnableBatch(names, false, flags)
 }
 
 // runEnableBatch resolves every target namespace, runs pre-flight for the
 // entire batch before the first link is created, then links every target
 // that is clean or forced — skipping, never blocking, any target a
-// hard-blocked problem rules out or an unresolved occupied/collision
-// problem leaves unconfirmed. Per concept.md "What enable reports", it
-// prints one "+"/"!" line per target and, only when something was skipped,
-// a count line to stderr and a non-zero exit via ErrSomeSkipped.
+// hard-blocked problem rules out (no flag overrides a protected root, the
+// in-repo link guard, or an unwritable destination) or an unresolved
+// occupied/collision problem leaves unconfirmed without --force. Per
+// concept.md "What enable reports", it prints one report line per target in
+// the listing alphabet, an indented sub-line under it for every destination
+// --force trashed, and — only when something was skipped — a count line to
+// stderr and a non-zero exit via ErrSomeSkipped.
 func runEnableBatch(names []string, all bool, flags shared.Flags) error {
 	dataDir, err := paths.Data()
 	if err != nil {
@@ -170,24 +114,28 @@ func runEnableBatch(names []string, all bool, flags shared.Flags) error {
 		targets[i].problems = problems
 	}
 
-	var report []ui.Entry
+	var lines []string
 	var enabled, skipped int
 	for _, t := range targets {
 		if hardBlocked(t.problems) || (len(t.problems) > 0 && !flags.Force) {
 			skipped++
-			report = append(report, ui.Entry{Marker: ui.MarkerProblem, Name: t.display + "    " + problemSummaries(t.problems)})
+			lines = append(lines, ui.Operation(ui.MarkerProblem, t.display, problemSummary(t.problems)))
 			continue
 		}
-		if err := engine.Enable(t.key, t.repoDir, t.nsDir, t.name, t.entries, s, t.problems); err != nil {
+		trashed, err := engine.Enable(t.key, t.repoDir, t.nsDir, t.name, t.entries, s, t.problems)
+		if err != nil {
 			skipped++
-			report = append(report, ui.Entry{Marker: ui.MarkerProblem, Name: t.display + "    " + err.Error()})
+			lines = append(lines, ui.Operation(ui.MarkerProblem, t.display, err.Error()))
 			continue
 		}
 		enabled++
-		report = append(report, ui.Entry{Marker: ui.MarkerEnabled, Name: t.display})
+		lines = append(lines, ui.Operation(ui.MarkerEnabled, t.display, ""))
+		for _, td := range trashed {
+			lines = append(lines, ui.Sub(ui.MarkerRemoved, td.Dest, td.Detail+" -> trash"))
+		}
 	}
 
-	fmt.Print(ui.Render(report))
+	fmt.Print(ui.Report(lines, ""))
 	if skipped > 0 {
 		fmt.Fprintf(os.Stderr, "%d enabled, %d skipped. --force to override.\n", enabled, skipped)
 		return ErrSomeSkipped
@@ -283,11 +231,22 @@ func resolveExplicitTargets(dataDir string, reg manifest.Registry, names []strin
 	return targets, nil
 }
 
-// problemSummaries joins each problem's first line — the occupied message's
-// remedy lines are omitted — into one skip reason.
-func problemSummaries(problems []engine.Problem) string {
+// problemSummary joins each problem into one skip reason, naming the
+// destination and what currently occupies it, in the same clean
+// "<dest>    <detail>" column shape the force-trashed sub-line already uses
+// (concept.md "What enable reports": "! nvim     ~/.config/nvim    real
+// directory, 340 files") — rather than an Occupied problem's raw pre-flight
+// sentence, which also carries a remedy paragraph meant for that other
+// context. One line per namespace, per concept.md "What enable reports":
+// "Reasons joined onto a single run-on line are unreadable at twenty-six
+// namespaces."
+func problemSummary(problems []engine.Problem) string {
 	summaries := make([]string, len(problems))
 	for i, p := range problems {
+		if p.Kind == engine.Occupied {
+			summaries[i] = p.Entry.Dest + ui.DetailSep + engine.OccupancyDetail(p.Message)
+			continue
+		}
 		summaries[i] = strings.SplitN(p.Message, "\n", 2)[0]
 	}
 	return strings.Join(summaries, "; ")
@@ -333,36 +292,6 @@ func hardBlocked(problems []engine.Problem) bool {
 		}
 	}
 	return false
-}
-
-func renderProblems(problems []engine.Problem) string {
-	lines := make([]string, len(problems))
-	for i, p := range problems {
-		lines[i] = p.Message
-	}
-	return strings.Join(lines, "\n")
-}
-
-// confirmProblems presents every resolvable pre-flight problem (occupied
-// destinations, conflicting namespaces) exactly once and reports whether to
-// proceed. --force proceeds without asking; otherwise an interactive prompt
-// asks once for the whole list, and a non-interactive session without
-// --force is a hard error naming --force as the way forward.
-func confirmProblems(name string, problems []engine.Problem, flags shared.Flags) (bool, error) {
-	if flags.Force {
-		return true, nil
-	}
-	if !ui.Interactive() {
-		return false, fmt.Errorf("cannot enable %q non-interactively:\n%s\nrerun with --force to proceed", name, renderProblems(problems))
-	}
-	choice, err := ui.Prompt(
-		fmt.Sprintf("enabling %q has %d problem(s):\n%s\nproceed?", name, len(problems), renderProblems(problems)),
-		[]string{"y", "N"},
-	)
-	if err != nil {
-		return false, err
-	}
-	return strings.EqualFold(choice, "y") || strings.EqualFold(choice, "yes"), nil
 }
 
 // locateNamespaceForEnable finds the namespace named name across every

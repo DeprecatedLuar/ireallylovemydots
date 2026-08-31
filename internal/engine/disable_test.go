@@ -22,7 +22,7 @@ func TestDisable_RemovesLinksKeepsFilesFlipsState(t *testing.T) {
 
 	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
 	s := state.State{Entries: map[state.Key]state.Entry{}}
-	if err := Enable(key, nsDir, nsDir, "editors", entries, s, nil); err != nil {
+	if _, err := Enable(key, nsDir, nsDir, "editors", entries, s, nil); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 
@@ -95,7 +95,7 @@ func TestEnable_CollisionDisablesWholeConflictingNamespace(t *testing.T) {
 		t.Fatalf("expected exactly one Collision problem, got %+v", problems)
 	}
 
-	if err := Enable(newKey, nsDir, nsDir, "new", entries, s, problems); err != nil {
+	if _, err := Enable(newKey, nsDir, nsDir, "new", entries, s, problems); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 

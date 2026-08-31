@@ -42,8 +42,12 @@ func TestEnable_OccupiedDestinationTrashedThenLinked(t *testing.T) {
 		t.Fatalf("expected exactly one Occupied problem, got %+v", problems)
 	}
 
-	if err := Enable(key, nsDir, nsDir, "editors", entries, s, problems); err != nil {
+	trashed, err := Enable(key, nsDir, nsDir, "editors", entries, s, problems)
+	if err != nil {
 		t.Fatalf("Enable: %v", err)
+	}
+	if len(trashed) != 1 || trashed[0].Dest != dest {
+		t.Fatalf("expected Enable to report the trashed destination %s, got %+v", dest, trashed)
 	}
 
 	info, err := os.Lstat(dest)
