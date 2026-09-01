@@ -127,6 +127,26 @@ func looksLikeNotFound(gitOutput string) bool {
 	return false
 }
 
+// Rename moves a repository's clone directory to newName within dataDir. It
+// touches no registry entry and no state — those cross package boundaries
+// this package does not otherwise touch; that is internal/commands/repo.go's
+// job.
+func Rename(dataDir, oldName, newName string) error {
+	oldDir := filepath.Join(dataDir, oldName)
+	newDir := filepath.Join(dataDir, newName)
+
+	if _, err := os.Stat(oldDir); err != nil {
+		return fmt.Errorf("repository %q not found in %s", oldName, dataDir)
+	}
+	if _, err := os.Stat(newDir); err == nil {
+		return fmt.Errorf("repository %q already exists in %s", newName, dataDir)
+	}
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return fmt.Errorf("rename repository %s to %s: %w", oldDir, newDir, err)
+	}
+	return nil
+}
+
 // Resolve finds the repository named by spec against repos — a bare local
 // name, or "owner/name" — case-insensitively, per concept.md "Name
 // resolution".

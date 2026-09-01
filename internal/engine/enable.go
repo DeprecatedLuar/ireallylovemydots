@@ -76,27 +76,86 @@ type trashedEntry struct {
 	detail string
 }
 
-// TrashedDestination records one destination Enable found occupied and
-// trashed before linking, so a caller can report it as a Sub line under the
-// namespace's Operation line, per concept.md "What enable reports": "what
-// was trashed is reported as an indented sub-line beneath its namespace."
-type TrashedDestination struct {
+// absorbedEntry records one destination Enable cleared without trashing —
+// a symlink or an empty directory, neither of which held data — so it can
+// be recreated if a later entry in the same batch fails.
+type absorbedEntry struct {
+	dest       string
+	wasSymlink bool
+	target     string // only meaningful when wasSymlink
+}
+
+func (a absorbedEntry) detail() string {
+	if a.wasSymlink {
+		return "symlink"
+	}
+	return "empty directory"
+}
+
+// clearAbsorbable removes dest when pre-flight's occupancy test would have
+// absorbed it silently — a symlink, dangling or not, or an empty directory —
+// and reports what it removed so Enable can recreate it on rollback. Nothing
+// else can be there: a real file or non-empty directory was already flagged
+// Occupied and trashed above pre-flight ran, per concept.md "Occupied
+// destinations". Returns nil, nil when dest does not exist — the ordinary
+// case, nothing to clear.
+func clearAbsorbable(dest string) (*absorbedEntry, error) {
+	info, err := os.Lstat(dest)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lstat %s: %w", dest, err)
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, readErr := link.Read(dest)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if err := link.Remove(dest); err != nil {
+			return nil, err
+		}
+		return &absorbedEntry{dest: dest, wasSymlink: true, target: target}, nil
+	}
+
+	if info.IsDir() {
+		if err := os.Remove(dest); err != nil {
+			return nil, fmt.Errorf("remove empty directory %s: %w", dest, err)
+		}
+		return &absorbedEntry{dest: dest}, nil
+	}
+
+	return nil, nil
+}
+
+// ReplacedDestination records one destination Enable found something at and
+// removed before linking — either trashed (it held data) or simply cleared
+// (a symlink or empty directory, holding none) — so a caller can report it
+// as a Sub line under the namespace's Operation line, per concept.md "What
+// enable reports": "what was trashed is reported as an indented sub-line
+// beneath its namespace," and concept.md "Occupied destinations": an
+// absorbed symlink "is still reported as a sub-line under the entry it
+// replaced."
+type ReplacedDestination struct {
 	Dest   string
 	Detail string
 }
 
 // Enable materializes the namespace via sparse checkout if needed, disables
 // every namespace named by a Collision problem, trashes every destination
-// named by a confirmed Occupied problem, then links every entry, parent
-// before child by path depth, per concept.md "Enable". It returns every
-// destination it trashed, in link order, for the caller to report.
+// named by a confirmed Occupied problem, clears every destination pre-flight
+// found absorbable (a symlink or an empty directory — concept.md "Occupied
+// destinations": neither holds data), then links every entry, parent before
+// child by path depth, per concept.md "Enable". It returns every destination
+// it trashed or cleared, in link order, for the caller to report.
 //
 // State is written only once every link has succeeded — never before,
 // unlike the narrative order in concept.md — so that a failure partway
 // through leaves neither a link nor a state entry behind: rolling back a
 // state entry that was already persisted is one more thing that could fail,
 // where never persisting it in the first place cannot.
-func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifest.Entry, s state.State, problems []Problem) ([]TrashedDestination, error) {
+func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifest.Entry, s state.State, problems []Problem) ([]ReplacedDestination, error) {
 	for _, p := range problems {
 		if p.Kind == Collision {
 			if err := disableConflicting(*p.Conflicting, s); err != nil {
@@ -120,9 +179,19 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 
 	var created []string
 	var trashed []trashedEntry
+	var absorbed []absorbedEntry
+	var replaced []ReplacedDestination
 	rollback := func() {
 		for i := len(created) - 1; i >= 0; i-- {
 			link.Remove(created[i])
+		}
+		for i := len(absorbed) - 1; i >= 0; i-- {
+			a := absorbed[i]
+			if a.wasSymlink {
+				link.Create(a.dest, a.target)
+			} else {
+				os.Mkdir(a.dest, dirPerm)
+			}
 		}
 		for i := len(trashed) - 1; i >= 0; i-- {
 			trash.Restore(trashed[i].name, trashed[i].dest)
@@ -137,6 +206,19 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 				return nil, fmt.Errorf("trash occupied destination %s: %w", e.Dest, err)
 			}
 			trashed = append(trashed, trashedEntry{dest: e.Dest, name: trashedName, detail: detail})
+			replaced = append(replaced, ReplacedDestination{Dest: e.Dest, Detail: detail + " -> trash"})
+		} else if cleared, err := clearAbsorbable(e.Dest); err != nil {
+			rollback()
+			return nil, fmt.Errorf("clear %s: %w", e.Dest, err)
+		} else if cleared != nil {
+			absorbed = append(absorbed, *cleared)
+			if cleared.wasSymlink {
+				// concept.md "Occupied destinations": an absorbed symlink is
+				// still reported, since it may have been placed by hand or
+				// by another tool. An absorbed empty directory held nothing
+				// and is absorbed as silently as an absent destination.
+				replaced = append(replaced, ReplacedDestination{Dest: e.Dest, Detail: cleared.detail() + " -> relinked"})
+			}
 		}
 		if err := os.MkdirAll(filepath.Dir(e.Dest), dirPerm); err != nil {
 			rollback()
@@ -160,11 +242,7 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 		return nil, err
 	}
 
-	result := make([]TrashedDestination, len(trashed))
-	for i, t := range trashed {
-		result[i] = TrashedDestination{Dest: t.dest, Detail: t.detail}
-	}
-	return result, nil
+	return replaced, nil
 }
 
 // OccupancyDetail pulls the parenthesised detail (e.g. "real directory, 340

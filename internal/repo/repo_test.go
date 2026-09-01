@@ -166,3 +166,42 @@ func TestClone_FailedCloneLeavesNoPartialDirectory(t *testing.T) {
 		t.Fatalf("expected no partial clone directory, got err=%v", err)
 	}
 }
+
+func TestRename(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dataDir, "old"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Rename(dataDir, "old", "new"); err != nil {
+		t.Fatalf("Rename error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "old")); !os.IsNotExist(err) {
+		t.Fatalf("expected old directory gone, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "new")); err != nil {
+		t.Fatalf("expected new directory to exist: %v", err)
+	}
+}
+
+func TestRename_TargetAlreadyExists(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dataDir, "old"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "new"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Rename(dataDir, "old", "new"); err == nil {
+		t.Fatal("expected error renaming onto an existing directory")
+	}
+}
+
+func TestRename_SourceNotFound(t *testing.T) {
+	dataDir := t.TempDir()
+
+	if err := Rename(dataDir, "missing", "new"); err == nil {
+		t.Fatal("expected error renaming a nonexistent directory")
+	}
+}

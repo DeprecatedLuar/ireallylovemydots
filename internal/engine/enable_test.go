@@ -188,6 +188,79 @@ func TestEnable_InjectedFailureOnSeventhLink_RollsBackEverythingAndWritesNoState
 	}
 }
 
+// TestEnable_InjectedFailureAfterAbsorbingSymlink_RestoresOriginalTarget
+// covers rollback's other half: an entry whose destination held a live
+// symlink gets it cleared before Enable links its own payload there; if a
+// later entry in the same batch then fails, rollback must recreate that
+// original symlink exactly as found, not leave the destination missing.
+func TestEnable_InjectedFailureAfterAbsorbingSymlink_RestoresOriginalTarget(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if runtime.GOOS == "windows" {
+		t.Skip("permission bits behave differently on windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses permission checks")
+	}
+
+	home := t.TempDir()
+	nsDir := t.TempDir()
+
+	firstPayload := filepath.Join(nsDir, "first")
+	if err := os.MkdirAll(firstPayload, 0755); err != nil {
+		t.Fatal(err)
+	}
+	originalTarget := filepath.Join(home, "elsewhere")
+	if err := os.WriteFile(originalTarget, []byte("z"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	firstDest := filepath.Join(home, "first")
+	if err := os.Symlink(originalTarget, firstDest); err != nil {
+		t.Fatal(err)
+	}
+
+	secondPayload := filepath.Join(nsDir, "second")
+	if err := os.MkdirAll(secondPayload, 0755); err != nil {
+		t.Fatal(err)
+	}
+	blockedDir := filepath.Join(home, "blocked")
+	if err := os.MkdirAll(blockedDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	secondDest := filepath.Join(blockedDir, "second")
+	if err := os.Chmod(blockedDir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(blockedDir, 0755) })
+
+	entries := []manifest.Entry{
+		{Name: "first", Dest: firstDest},
+		{Name: "second", Dest: secondDest},
+	}
+	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
+	s := state.State{Entries: map[state.Key]state.Entry{}}
+
+	if _, err := Enable(key, nsDir, nsDir, "editors", entries, s, nil); err == nil {
+		t.Fatal("expected the second entry's permission failure to surface as an error")
+	}
+
+	got := readLinkEnableTest(t, firstDest)
+	if got != originalTarget {
+		t.Fatalf("expected %s restored pointing at %s, got %s", firstDest, originalTarget, got)
+	}
+	if _, ok := s.Entries[key]; ok {
+		t.Fatalf("expected no state entry after a rolled-back enable, got %+v", s.Entries[key])
+	}
+}
+
+func readLinkEnableTest(t *testing.T, path string) string {
+	t.Helper()
+	target, err := os.Readlink(path)
+	if err != nil {
+		t.Fatalf("readlink %s: %v", path, err)
+	}
+	return target
+}
+
 func TestEnable_MaterializeReusesExistingFolderWithNoGitOperation(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	home := t.TempDir()

@@ -1,8 +1,9 @@
 // Package selfheal reconciles machine state and the filesystem against the
-// repository manifest, per concept.md "Self-healing": it never prompts and
-// never destroys, and it never writes a manifest. It is single-purpose —
-// correction only. Deciding what a correction means for a listing's markers
-// is internal/commands' job, not this package's.
+// repository manifest, per concept.md "Self-healing": it detects and
+// reports, and it never prompts or destroys data. It is single-purpose —
+// correction only. Deciding what a finding means for a listing's markers,
+// or turning a report into an action, is internal/commands' job, not this
+// package's.
 package selfheal
 
 import (
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/link"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
@@ -28,6 +30,31 @@ type Problem struct {
 	Entry     string
 	Dest      string
 	Detail    string
+}
+
+// Findings is everything one Run pass discovered: drift it corrected,
+// drift it left for the command layer to report, and any evidence one
+// direction of the hierarchy has drifted from another. Only Problems and
+// Unregistered are ever shown to the user unprompted, since only they name
+// something the user can still act on — Dropped is history by the time Run
+// returns.
+type Findings struct {
+	// Problems is unchanged from before: a real file or directory occupying
+	// a destination a symlink belongs at, left untouched.
+	Problems []Problem
+	// Unregistered names every directory in the data directory that holds
+	// no matching entry in the repository manifest — concept.md
+	// "Self-healing": reported on every invocation, never auto-registered.
+	// The fix is `repo adopt <name>`.
+	Unregistered []string
+	// Dropped lists every state entry removed this pass because its
+	// repository's directory no longer exists in the data directory.
+	Dropped []state.Key
+	// DataDirEmpty is true when the data directory holds no repository
+	// clones at all, which reads identically to every repository having
+	// vanished at once — the wrong-XDG_DATA_HOME / unmounted-disk case.
+	// When true, Run reconciles nothing: no drops, no unregistered scan.
+	DataDirEmpty bool
 }
 
 // Run walks every namespace state records as enabled, verifying each linked
@@ -51,35 +78,86 @@ type Problem struct {
 // Only namespaces recorded Enabled are reconciled. An installed-but-disabled
 // namespace has no links to verify, and an uninstalled namespace ("=") is
 // not drift by design — concept.md "An uninstalled namespace is not drift."
-func Run() ([]Problem, error) {
+//
+// Two more directions are checked against the data directory itself, guarded
+// by DataDirEmpty so a wrong XDG_DATA_HOME can never be mistaken for every
+// repository having been removed — concept.md "The data directory can drift
+// from the registry too":
+//
+//   - a directory there with no registry entry is reported (Unregistered),
+//     never auto-registered;
+//   - a state entry whose repository directory is gone is dropped, after
+//     removing only the linked destinations self-heal can prove were its
+//     own — a symlink still pointing inside that now-missing directory.
+func Run() (Findings, error) {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
-		return nil, err
+		return Findings{}, err
 	}
 	s, err := state.Read()
 	if err != nil {
-		return nil, err
+		return Findings{}, err
 	}
 	dataDir, err := paths.Data()
 	if err != nil {
-		return nil, err
+		return Findings{}, err
 	}
 
-	repoDirs := make(map[string]string, len(reg.Repos))
-	for _, r := range reg.Repos {
-		repoDirs[r.Name] = filepath.Join(dataDir, r.Name)
+	dataDirEntries, err := os.ReadDir(dataDir)
+	if err != nil {
+		return Findings{}, fmt.Errorf("read data directory %s: %w", dataDir, err)
 	}
+	present := make(map[string]bool, len(dataDirEntries))
+	for _, e := range dataDirEntries {
+		if e.IsDir() {
+			present[e.Name()] = true
+		}
+	}
+	if len(present) == 0 {
+		return Findings{DataDirEmpty: true}, nil
+	}
+
+	registered := make(map[string]string, len(reg.Repos))
+	for _, r := range reg.Repos {
+		registered[r.Name] = filepath.Join(dataDir, r.Name)
+	}
+
+	var unregistered []string
+	for name := range present {
+		if _, ok := registered[name]; !ok {
+			unregistered = append(unregistered, name)
+		}
+	}
+	sort.Strings(unregistered)
 
 	var problems []Problem
+	var dropped []state.Key
 	changed := false
 	for key, entry := range s.Entries {
 		if !entry.Enabled {
 			continue
 		}
-		repoDir, ok := repoDirs[key.Repo]
+
+		if !present[key.Repo] {
+			// The repository's directory is gone from the data directory —
+			// unambiguous once the DataDirEmpty guard above has passed,
+			// since other repositories are still present. Its enabled
+			// intent is meaningless without a repository to enable.
+			stranded := cleanStrandedLinks(dataDir, key, entry.LinkedDests)
+			problems = append(problems, stranded...)
+			delete(s.Entries, key)
+			dropped = append(dropped, key)
+			changed = true
+			continue
+		}
+
+		repoDir, ok := registered[key.Repo]
 		if !ok {
-			// The repository is no longer registered. Nothing to reconcile
-			// against; not this pass's job to guess at removal.
+			// The directory exists but is not registered — an
+			// Unregistered finding above already names it. Left alone
+			// rather than reconciled: whether these links are still
+			// correct is not this pass's call to make on behalf of a
+			// repository the user has not confirmed.
 			continue
 		}
 		namespaceDir := filepath.Join(repoDir, key.Namespace)
@@ -91,12 +169,12 @@ func Run() ([]Problem, error) {
 
 		m, readErr := manifest.Read(namespaceDir)
 		if readErr != nil {
-			return nil, readErr
+			return Findings{}, readErr
 		}
 
 		linkedDests, nsProblems, reconcileErr := reconcileNamespace(key, namespaceDir, m.Entries, entry.LinkedDests)
 		if reconcileErr != nil {
-			return nil, reconcileErr
+			return Findings{}, reconcileErr
 		}
 		problems = append(problems, nsProblems...)
 
@@ -109,7 +187,7 @@ func Run() ([]Problem, error) {
 
 	if changed {
 		if err := state.Write(s); err != nil {
-			return nil, err
+			return Findings{}, err
 		}
 	}
 
@@ -119,7 +197,49 @@ func Run() ([]Problem, error) {
 		}
 		return problems[i].Entry < problems[j].Entry
 	})
-	return problems, nil
+	sort.Slice(dropped, func(i, j int) bool {
+		if dropped[i].Repo != dropped[j].Repo {
+			return dropped[i].Repo < dropped[j].Repo
+		}
+		return dropped[i].Namespace < dropped[j].Namespace
+	})
+	return Findings{Problems: problems, Unregistered: unregistered, Dropped: dropped}, nil
+}
+
+// cleanStrandedLinks removes, from a state entry whose repository directory
+// no longer exists, every recorded destination self-heal can prove was its
+// own: still a symlink, still pointing inside that now-missing directory.
+// A target inside a directory that does not exist is necessarily dangling —
+// nothing else could be at the other end. A destination that has since
+// become a real file or directory, or a symlink repointed elsewhere, is left
+// exactly as found; it stopped being dots' the moment it changed. Removal
+// failures are reported as Problems but never block dropping the state
+// entry itself, since the entry is meaningless either way once its
+// repository is gone.
+func cleanStrandedLinks(dataDir string, key state.Key, dests []string) []Problem {
+	prefix := filepath.Join(dataDir, key.Repo) + string(os.PathSeparator)
+	var problems []Problem
+	for _, dest := range dests {
+		info, err := os.Lstat(dest)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		target, err := os.Readlink(dest)
+		if err != nil {
+			problems = append(problems, Problem{Repo: key.Repo, Namespace: key.Namespace, Dest: dest, Detail: err.Error()})
+			continue
+		}
+		if !strings.HasPrefix(target, prefix) {
+			continue
+		}
+		if err := link.Remove(dest); err != nil {
+			problems = append(problems, Problem{Repo: key.Repo, Namespace: key.Namespace, Dest: dest, Detail: err.Error()})
+		}
+	}
+	return problems
 }
 
 // reconcileNamespace reconciles one enabled namespace's entries against its

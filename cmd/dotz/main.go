@@ -74,12 +74,16 @@ func main() {
 
 	// Self-heal runs once here, ahead of every dispatch target, so no
 	// command handler has to remember to call it — concept.md
-	// "Self-healing": it fires on every invocation. Its findings feed
+	// "Self-healing": it fires on every invocation. Its Problems feed
 	// listing's markers by rereading the filesystem there, not by being
-	// threaded through; self-heal itself never prints.
-	if _, err := selfheal.Run(); err != nil {
+	// threaded through; self-heal itself never prints. Its other findings —
+	// evidence about the data directory as a whole, which no per-namespace
+	// listing can see — are rendered here instead.
+	findings, err := selfheal.Run()
+	if err != nil {
 		die(err)
 	}
+	commands.RenderSelfHealFindings(findings)
 
 	switch r.target {
 	case targetNamespace:

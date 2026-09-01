@@ -34,8 +34,11 @@ var TopOnly = []string{"status", "sync"}
 
 // RepoOnlyVerbs are verbs valid only at the repository level: init takes a
 // local folder rather than a name, and has no meaning for a namespace or
-// profile, unlike the shared Verbs set.
-var RepoOnlyVerbs = []string{"init"}
+// profile, unlike the shared Verbs set. adopt registers a clone already
+// sitting in the data directory with no registry entry — concept.md "The
+// data directory can drift from the registry too" — which is likewise
+// meaningless below the repository level.
+var RepoOnlyVerbs = []string{"init", "adopt"}
 
 // NamespaceOnlyVerbs are verbs valid only at the namespace level: install
 // and uninstall move a namespace between "in the repository" and "on this

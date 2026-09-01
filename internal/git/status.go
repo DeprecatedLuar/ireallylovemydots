@@ -90,6 +90,18 @@ func hasRemote(repoDir string) (bool, error) {
 	return strings.TrimSpace(string(out)) != "", nil
 }
 
+// RemoteURL returns repoDir's "origin" remote URL, or "" if it has none —
+// `repo adopt`'s way of recovering what a clone was cloned from when its
+// registry entry is gone but the clone itself is not.
+func RemoteURL(repoDir string) (string, error) {
+	cmd := exec.Command("git", "-C", repoDir, "remote", "get-url", "origin")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", nil
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // unpushedCount returns the number of commits on HEAD not reachable from its
 // upstream remote-tracking branch. No upstream configured (a remote exists
 // but the current branch is not tracking it) reads as zero rather than an

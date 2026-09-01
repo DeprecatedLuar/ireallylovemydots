@@ -7,10 +7,12 @@ import (
 	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
+	"github.com/DeprecatedLuar/dotz/internal/git"
 	"github.com/DeprecatedLuar/dotz/internal/grammar"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
+	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
 
@@ -31,10 +33,20 @@ func HandleRepo(args []string, flags shared.Flags) error {
 	if len(rest) == 0 {
 		return fmt.Errorf("usage: repo %s list", name)
 	}
-	if grammar.Canonical(rest[0]) != "list" {
+	switch grammar.Canonical(rest[0]) {
+	case "list":
+		return renderRepoNamespaces(name)
+	case "mv":
+		if len(rest[1:]) != 1 {
+			return fmt.Errorf("usage: repo %s mv <newname>", name)
+		}
+		if grammar.IsReserved(rest[1]) {
+			return fmt.Errorf("%q is a reserved word and cannot be used as a repository name", rest[1])
+		}
+		return renameRepo(name, rest[1], flags)
+	default:
 		return fmt.Errorf("unknown verb %q for repo %q", rest[0], name)
 	}
-	return renderRepoNamespaces(name)
 }
 
 func handleRepoNounVerb(verb string, args []string, flags shared.Flags) error {
@@ -49,6 +61,14 @@ func handleRepoNounVerb(verb string, args []string, flags shared.Flags) error {
 			return fmt.Errorf("usage: repo rm <repo>")
 		}
 		return rmRepo(args[0], flags)
+	case "mv":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: repo mv <repo> <newname>")
+		}
+		if grammar.IsReserved(args[1]) {
+			return fmt.Errorf("%q is a reserved word and cannot be used as a repository name", args[1])
+		}
+		return renameRepo(args[0], args[1], flags)
 	case "init":
 		if len(args) > 1 {
 			return fmt.Errorf("usage: repo init [path]")
@@ -58,6 +78,11 @@ func handleRepoNounVerb(verb string, args []string, flags shared.Flags) error {
 			path = args[0]
 		}
 		return initRepo(path, flags)
+	case "adopt":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: repo adopt <name>")
+		}
+		return adoptRepo(args[0])
 	case "list":
 		return renderRepoList()
 	default:
@@ -127,6 +152,64 @@ func addRepo(url string, flags shared.Flags) error {
 	if state == repo.StateNamespaces {
 		fmt.Print(ui.Render([]ui.Entry{{Marker: ui.MarkerMaterialized, Name: name}}))
 	}
+	return nil
+}
+
+// adoptRepo implements `repo adopt <name>`: the fix self-heal's unregistered-
+// clone warning names, per concept.md "The data directory can drift from
+// the registry too" — a directory already sitting in the data directory,
+// left behind by a registry that lost its entry, gets registered without
+// being touched on disk. Unlike addRepo, nothing is cloned and nothing is
+// removed on failure; adopt only ever reads what is already there.
+func adoptRepo(name string) error {
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		return err
+	}
+	if repoNameTaken(reg, name) {
+		return fmt.Errorf("%q is already registered", name)
+	}
+
+	dataDir, err := paths.Data()
+	if err != nil {
+		return err
+	}
+	dest := filepath.Join(dataDir, name)
+	if info, statErr := os.Stat(dest); statErr != nil || !info.IsDir() {
+		return fmt.Errorf("%s is not a directory in the data directory — nothing to adopt", dest)
+	}
+
+	entries, err := repo.DiskEntries(dest)
+	if err != nil {
+		return err
+	}
+	if repo.Inspect(entries) != repo.StateNamespaces {
+		return fmt.Errorf("%s is not a dots repository: no top-level folder holds a .dots manifest", dest)
+	}
+
+	isRepo, err := repo.IsGitRepo(dest)
+	if err != nil {
+		return err
+	}
+	var owner, url string
+	origin := manifest.OriginLocal
+	if isRepo {
+		url, err = git.RemoteURL(dest)
+		if err != nil {
+			return err
+		}
+		if url != "" {
+			_, owner = repo.DeriveNameOwner(url)
+			origin = manifest.OriginConfig
+		}
+	}
+
+	reg.Repos = append(reg.Repos, manifest.Repo{Name: name, Owner: owner, URL: url, Origin: origin})
+	if err := manifest.WriteRegistry(reg); err != nil {
+		return err
+	}
+
+	fmt.Print(ui.Render([]ui.Entry{{Marker: ui.MarkerMaterialized, Name: name}}))
 	return nil
 }
 
@@ -434,6 +517,68 @@ func resolveNewRepoName(reg manifest.Registry, name string) (string, error) {
 		}
 		name = resp
 	}
+}
+
+// renameRepo implements repo `mv`, reached from either spelling: resolve the
+// registered repository, guard the new name against collisions, then rename
+// its on-disk clone, its registry entry, and every state key recorded under
+// its old name.
+func renameRepo(oldName, newName string, flags shared.Flags) error {
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		return err
+	}
+	r, err := repo.Resolve(reg.Repos, oldName)
+	if err != nil {
+		return err
+	}
+	if newName == r.Name {
+		return nil
+	}
+	for _, other := range reg.Repos {
+		if other.Name != r.Name && strings.EqualFold(other.Name, newName) {
+			return fmt.Errorf("%q is already registered", newName)
+		}
+	}
+
+	dataDir, err := paths.Data()
+	if err != nil {
+		return err
+	}
+	if err := repo.Rename(dataDir, r.Name, newName); err != nil {
+		return err
+	}
+
+	for i := range reg.Repos {
+		if reg.Repos[i].Name == r.Name {
+			reg.Repos[i].Name = newName
+			break
+		}
+	}
+	if err := manifest.WriteRegistry(reg); err != nil {
+		return err
+	}
+
+	return renameRepoState(r.Name, newName)
+}
+
+// renameRepoState rewrites every recorded state entry belonging to oldName
+// onto newName, preserving each entry's Namespace and Entry value — a
+// repository may hold many namespaces, so this is a full-map loop rather
+// than the single-key move namespace.Rename does.
+func renameRepoState(oldName, newName string) error {
+	s, err := state.Read()
+	if err != nil {
+		return err
+	}
+	for k, e := range s.Entries {
+		if k.Repo != oldName {
+			continue
+		}
+		delete(s.Entries, k)
+		s.Entries[state.Key{Repo: newName, Namespace: k.Namespace}] = e
+	}
+	return state.Write(s)
 }
 
 func repoNameTaken(reg manifest.Registry, name string) bool {

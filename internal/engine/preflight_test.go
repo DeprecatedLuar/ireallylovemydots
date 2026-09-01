@@ -30,11 +30,20 @@ func TestPreflight_AbsentEmptyDirDanglingSymlink_NotOccupied(t *testing.T) {
 	if err := os.Symlink(danglingTarget, dangling); err != nil {
 		t.Fatal(err)
 	}
+	liveTarget := filepath.Join(home, "live-elsewhere")
+	if err := os.WriteFile(liveTarget, []byte("z"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	live := filepath.Join(home, "live")
+	if err := os.Symlink(liveTarget, live); err != nil {
+		t.Fatal(err)
+	}
 
 	entries := []manifest.Entry{
 		{Name: "absent", Dest: absent},
 		{Name: "empty", Dest: emptyDir},
 		{Name: "dangling", Dest: dangling},
+		{Name: "live", Dest: live},
 	}
 	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
 	problems, err := Preflight(key, nsDir, entries, emptyState())
@@ -42,7 +51,7 @@ func TestPreflight_AbsentEmptyDirDanglingSymlink_NotOccupied(t *testing.T) {
 		t.Fatalf("Preflight: %v", err)
 	}
 	if len(problems) != 0 {
-		t.Fatalf("expected no problems for absent/empty-dir/dangling-symlink destinations, got %+v", problems)
+		t.Fatalf("expected no problems for absent/empty-dir/dangling-symlink/live-symlink destinations, got %+v", problems)
 	}
 }
 

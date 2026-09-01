@@ -10,7 +10,9 @@ import (
 
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
+	"github.com/DeprecatedLuar/dotz/internal/paths"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
+	"github.com/DeprecatedLuar/dotz/internal/state"
 )
 
 // newSourceRepo builds a git repository at a fresh temp dir, running each
@@ -167,6 +169,141 @@ func TestAddRepo_RejectsReservedDerivedName(t *testing.T) {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
 		t.Fatalf("ReadRegistry: %v", err)
+	}
+	if len(reg.Repos) != 0 {
+		t.Fatalf("registry should be untouched, got %+v", reg.Repos)
+	}
+}
+
+// strayClone builds a git repository with one namespace holding a .dots
+// manifest directly inside the data directory under name, exactly the shape
+// left behind when a registry entry is lost but the clone itself survives —
+// the case adoptRepo exists to recover from.
+func strayClone(t *testing.T, name string, withRemote bool) string {
+	t.Helper()
+	dataDir, err := paths.Data()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dataDir, name)
+	if err := os.MkdirAll(filepath.Join(dest, "editors"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "editors", ".dots"), []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dest
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	if withRemote {
+		run("remote", "add", "origin", "https://example.com/someone/"+name+".git")
+	}
+	run("add", ".")
+	run("commit", "-m", "init")
+	return dest
+}
+
+func TestAdoptRepo_RegistersCloneWithRemoteAsConfigOrigin(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	strayClone(t, "dots2", true)
+
+	if err := adoptRepo("dots2"); err != nil {
+		t.Fatalf("adoptRepo: %v", err)
+	}
+
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		t.Fatalf("ReadRegistry: %v", err)
+	}
+	if len(reg.Repos) != 1 {
+		t.Fatalf("expected the clone registered, got %+v", reg.Repos)
+	}
+	r := reg.Repos[0]
+	if r.Name != "dots2" || r.Owner != "someone" || r.URL != "https://example.com/someone/dots2.git" {
+		t.Fatalf("unexpected registered repo: %+v", r)
+	}
+	if r.Origin != manifest.OriginConfig {
+		t.Fatalf("expected OriginConfig for a clone with a remote, got %v", r.Origin)
+	}
+}
+
+func TestAdoptRepo_RegistersCloneWithoutRemoteAsLocalOrigin(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	strayClone(t, "local-only", false)
+
+	if err := adoptRepo("local-only"); err != nil {
+		t.Fatalf("adoptRepo: %v", err)
+	}
+
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		t.Fatalf("ReadRegistry: %v", err)
+	}
+	if len(reg.Repos) != 1 || reg.Repos[0].Origin != manifest.OriginLocal {
+		t.Fatalf("expected OriginLocal for a remoteless clone, got %+v", reg.Repos)
+	}
+}
+
+func TestAdoptRepo_RejectsAlreadyRegisteredName(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	strayClone(t, "dots2", true)
+
+	reg := manifest.Registry{Repos: []manifest.Repo{{Name: "dots2"}}}
+	if err := manifest.WriteRegistry(reg); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := adoptRepo("dots2"); err == nil {
+		t.Fatal("expected an error adopting an already-registered name")
+	}
+}
+
+func TestAdoptRepo_RejectsMissingDirectory(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	if err := adoptRepo("nothing-here"); err == nil {
+		t.Fatal("expected an error adopting a name with no directory in the data directory")
+	}
+}
+
+func TestAdoptRepo_RejectsIncompatibleDirectory(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dataDir, err := paths.Data()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "plain"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "plain", "README.md"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := adoptRepo("plain"); err == nil {
+		t.Fatal("expected an error adopting a directory with no namespace holding a .dots manifest")
+	}
+
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(reg.Repos) != 0 {
 		t.Fatalf("registry should be untouched, got %+v", reg.Repos)
@@ -633,6 +770,210 @@ func registryPathForTest(t *testing.T) string {
 		t.Fatalf("RegistryPath: %v", err)
 	}
 	return p
+}
+
+// setupRegisteredRepoWithNamespaces registers a repo with two namespace
+// directories under it, each carrying a state entry, standing in for a repo
+// that's been in use — the shape needed to prove a repo rename rewrites
+// every state key that belongs to it, not just one.
+func setupRegisteredRepoWithNamespaces(t *testing.T, repoName string) string {
+	t.Helper()
+	dataHome, err := paths.Data()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Join(dataHome, repoName)
+	for _, ns := range []string{"editors", "shell"} {
+		if err := os.MkdirAll(filepath.Join(repoDir, ns), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reg := manifest.Registry{Repos: []manifest.Repo{
+		{Name: repoName, Owner: "someone", URL: "https://example.com/someone/" + repoName},
+	}}
+	if err := manifest.WriteRegistry(reg); err != nil {
+		t.Fatalf("WriteRegistry: %v", err)
+	}
+
+	s, err := state.Read()
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if s.Entries == nil {
+		s.Entries = map[state.Key]state.Entry{}
+	}
+	s.Entries[state.Key{Repo: repoName, Namespace: "editors"}] = state.Entry{Enabled: true}
+	s.Entries[state.Key{Repo: repoName, Namespace: "shell"}] = state.Entry{Enabled: false}
+	if err := state.Write(s); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	return repoDir
+}
+
+func TestRenameRepo_HappyPath(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+
+	setupRegisteredRepoWithNamespaces(t, "dotfiles")
+
+	if err := renameRepo("dotfiles", "renamed", shared.Flags{}); err != nil {
+		t.Fatalf("renameRepo: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dataHome, "ireallylovemydots", "dotfiles")); !os.IsNotExist(err) {
+		t.Fatalf("expected old repo directory gone, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataHome, "ireallylovemydots", "renamed")); err != nil {
+		t.Fatalf("expected renamed repo directory to exist: %v", err)
+	}
+
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		t.Fatalf("ReadRegistry: %v", err)
+	}
+	if len(reg.Repos) != 1 || reg.Repos[0].Name != "renamed" {
+		t.Fatalf("expected registry entry renamed, got %+v", reg.Repos)
+	}
+
+	s, err := state.Read()
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if _, ok := s.Entries[state.Key{Repo: "dotfiles", Namespace: "editors"}]; ok {
+		t.Fatal("expected old repo state key gone for editors")
+	}
+	editors, ok := s.Entries[state.Key{Repo: "renamed", Namespace: "editors"}]
+	if !ok || !editors.Enabled {
+		t.Fatalf("expected editors state moved under renamed repo and still enabled, got %+v ok=%v", editors, ok)
+	}
+	shell, ok := s.Entries[state.Key{Repo: "renamed", Namespace: "shell"}]
+	if !ok || shell.Enabled {
+		t.Fatalf("expected shell state moved under renamed repo and still disabled, got %+v ok=%v", shell, ok)
+	}
+}
+
+func TestRenameRepo_CollisionWithExistingRepo(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	reg := manifest.Registry{Repos: []manifest.Repo{
+		{Name: "dotfiles"},
+		{Name: "other"},
+	}}
+	if err := manifest.WriteRegistry(reg); err != nil {
+		t.Fatalf("WriteRegistry: %v", err)
+	}
+
+	if err := renameRepo("dotfiles", "other", shared.Flags{}); err == nil {
+		t.Fatal("expected error renaming onto an already-registered name")
+	}
+
+	after, err := manifest.ReadRegistry()
+	if err != nil {
+		t.Fatalf("ReadRegistry: %v", err)
+	}
+	if len(after.Repos) != 2 || after.Repos[0].Name != "dotfiles" && after.Repos[1].Name != "dotfiles" {
+		t.Fatalf("registry should be untouched, got %+v", after.Repos)
+	}
+}
+
+func TestRenameRepo_NotFound(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	if err := renameRepo("missing", "renamed", shared.Flags{}); err == nil {
+		t.Fatal("expected error renaming an unregistered repository")
+	}
+}
+
+func TestRenameRepo_NoOp(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+
+	setupRegisteredRepoWithNamespaces(t, "dotfiles")
+
+	if err := renameRepo("dotfiles", "dotfiles", shared.Flags{}); err != nil {
+		t.Fatalf("renameRepo no-op: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dataHome, "ireallylovemydots", "dotfiles")); err != nil {
+		t.Fatalf("expected repo directory untouched: %v", err)
+	}
+}
+
+func TestRenameRepo_CaseOnly(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+
+	setupRegisteredRepoWithNamespaces(t, "Dotfiles")
+
+	if err := renameRepo("Dotfiles", "dotfiles", shared.Flags{}); err != nil {
+		t.Fatalf("renameRepo case-only: %v", err)
+	}
+
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		t.Fatalf("ReadRegistry: %v", err)
+	}
+	if len(reg.Repos) != 1 || reg.Repos[0].Name != "dotfiles" {
+		t.Fatalf("expected registry entry cased as \"dotfiles\", got %+v", reg.Repos)
+	}
+}
+
+func TestHandleRepo_MvRejectsReservedTarget(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	setupRegisteredRepoWithNamespaces(t, "dotfiles")
+
+	if err := HandleRepo([]string{"mv", "dotfiles", "list"}, shared.Flags{}); err == nil {
+		t.Fatal("expected error renaming a repository to a reserved word")
+	}
+	if err := HandleRepo([]string{"dotfiles", "mv", "list"}, shared.Flags{}); err == nil {
+		t.Fatal("expected error renaming a repository to a reserved word (name-first spelling)")
+	}
+}
+
+func TestHandleRepo_MvBothSpellingsReachSameHandler(t *testing.T) {
+	run := func(t *testing.T, args []string) {
+		t.Helper()
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		dataHome := t.TempDir()
+		t.Setenv("XDG_DATA_HOME", dataHome)
+
+		setupRegisteredRepoWithNamespaces(t, "dotfiles")
+
+		if err := HandleRepo(args, shared.Flags{}); err != nil {
+			t.Fatalf("HandleRepo(%v): %v", args, err)
+		}
+
+		reg, err := manifest.ReadRegistry()
+		if err != nil {
+			t.Fatalf("ReadRegistry: %v", err)
+		}
+		if len(reg.Repos) != 1 || reg.Repos[0].Name != "renamed" {
+			t.Fatalf("expected registry entry renamed, got %+v", reg.Repos)
+		}
+	}
+
+	t.Run("noun-first", func(t *testing.T) {
+		run(t, []string{"mv", "dotfiles", "renamed"})
+	})
+	t.Run("name-first", func(t *testing.T) {
+		run(t, []string{"dotfiles", "mv", "renamed"})
+	})
 }
 
 func TestAddRepo_RejectsDuplicateDerivedName_NonInteractive(t *testing.T) {

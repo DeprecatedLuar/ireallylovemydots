@@ -134,21 +134,18 @@ func selfContainmentGuard(entries []manifest.Entry) map[string]bool {
 
 // occupancy is concept.md "Occupied destinations"'s general test: does
 // anything dots would place at dest collide with what is already there? An
-// absent destination, an empty directory, and a dangling symlink are
-// absorbed silently and are not occupied; anything else is.
+// absent destination, an empty directory, and a symlink — dangling or
+// pointing somewhere live — are absorbed silently and are not occupied; a
+// symlink holds no data of its own, so replacing one loses nothing. Anything
+// else is.
 func occupancy(dest, wantTarget string) (occupied bool, detail string, err error) {
 	st, err := link.Classify(dest, wantTarget)
 	if err != nil {
 		return false, "", err
 	}
 	switch st {
-	case link.Missing:
+	case link.Missing, link.CorrectSymlink, link.WrongSymlink:
 		return false, "", nil
-	case link.CorrectSymlink, link.WrongSymlink:
-		if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
-			return false, "", nil
-		}
-		return true, "symlink", nil
 	case link.RealDir:
 		dirEntries, readErr := os.ReadDir(dest)
 		if readErr != nil {

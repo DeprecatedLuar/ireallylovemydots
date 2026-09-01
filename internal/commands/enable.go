@@ -122,7 +122,7 @@ func runEnableBatch(names []string, all bool, flags shared.Flags) error {
 			lines = append(lines, ui.Operation(ui.MarkerProblem, t.display, problemSummary(t.problems)))
 			continue
 		}
-		trashed, err := engine.Enable(t.key, t.repoDir, t.nsDir, t.name, t.entries, s, t.problems)
+		replaced, err := engine.Enable(t.key, t.repoDir, t.nsDir, t.name, t.entries, s, t.problems)
 		if err != nil {
 			skipped++
 			lines = append(lines, ui.Operation(ui.MarkerProblem, t.display, err.Error()))
@@ -130,8 +130,8 @@ func runEnableBatch(names []string, all bool, flags shared.Flags) error {
 		}
 		enabled++
 		lines = append(lines, ui.Operation(ui.MarkerEnabled, t.display, ""))
-		for _, td := range trashed {
-			lines = append(lines, ui.Sub(ui.MarkerRemoved, td.Dest, td.Detail+" -> trash"))
+		for _, rd := range replaced {
+			lines = append(lines, ui.Sub(ui.MarkerRemoved, rd.Dest, rd.Detail))
 		}
 	}
 
