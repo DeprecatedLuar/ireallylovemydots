@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
@@ -207,6 +208,171 @@ func TestRenderRepoNamespaces_MatchesUnscopedMarkers(t *testing.T) {
 	}
 	if stdout != "+ nixos\n- starship\n" {
 		t.Fatalf("unexpected listing: %q", stdout)
+	}
+}
+
+// TestHandleList_StatusAliasIsByteIdentical proves `dots` and `dots status`
+// produce byte-identical output: both route to HandleList with the same
+// argument shape (cmd/dotz's resolveRoute maps "status" to targetList, same
+// as bare invocation), so calling it twice with the request's own args must
+// come back identical.
+func TestHandleList_StatusAliasIsByteIdentical(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	reg := manifest.Registry{Repos: []manifest.Repo{{Name: "dotfiles"}}}
+	if err := manifest.WriteRegistry(reg); err != nil {
+		t.Fatal(err)
+	}
+	dataDir, err := paths.Data()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Join(dataDir, "dotfiles")
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", repoDir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	nsDir := filepath.Join(repoDir, "nixos")
+	if err := os.MkdirAll(nsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := manifest.Write(nsDir, manifest.Manifest{}); err != nil {
+		t.Fatal(err)
+	}
+
+	bareOut, bareErr := captureStdoutStderr(t, func() {
+		if err := HandleList(nil); err != nil {
+			t.Fatalf("HandleList(nil): %v", err)
+		}
+	})
+	// cmd/dotz's resolveRoute passes args[1:] of ["status"] through, an
+	// empty (non-nil) slice — HandleList treats it the same as nil, which
+	// is exactly the byte-identical guarantee under test.
+	statusOut, statusErr := captureStdoutStderr(t, func() {
+		if err := HandleList([]string{}); err != nil {
+			t.Fatalf("HandleList([]string{}): %v", err)
+		}
+	})
+
+	if bareOut != statusOut {
+		t.Fatalf("stdout differs: bare=%q status=%q", bareOut, statusOut)
+	}
+	if bareErr != statusErr {
+		t.Fatalf("stderr differs: bare=%q status=%q", bareErr, statusErr)
+	}
+}
+
+// TestClassifyEntry_EmptyDestinationMarksUntracked covers: a manifest entry
+// with an empty destination marks the entry "?" and is never enabled —
+// concept.md "Manual edits": invalid, not pending.
+func TestClassifyEntry_EmptyDestinationMarksUntracked(t *testing.T) {
+	row, orphan := classifyEntry(manifest.Entry{Name: "cfg", Dest: ""}, t.TempDir(), true)
+	if row.Marker != ui.MarkerUntracked {
+		t.Fatalf("expected marker %q, got %q", ui.MarkerUntracked, row.Marker)
+	}
+	if orphan {
+		t.Fatalf("an empty-destination entry is not an orphan")
+	}
+}
+
+// TestClassifyEntry_MissingPayloadIsOrphan covers the orphan case: a
+// tracked entry whose payload is gone from an installed namespace is
+// marked "!".
+func TestClassifyEntry_MissingPayloadIsOrphan(t *testing.T) {
+	nsDir := t.TempDir()
+	row, orphan := classifyEntry(manifest.Entry{Name: "gone", Dest: "/tmp/whatever"}, nsDir, true)
+	if row.Marker != ui.MarkerProblem {
+		t.Fatalf("expected marker %q, got %q", ui.MarkerProblem, row.Marker)
+	}
+	if !orphan {
+		t.Fatalf("expected a missing payload to be reported as an orphan")
+	}
+}
+
+// TestEntryListing_UntrackedPayloadMarked covers: a payload present in the
+// namespace but absent from the manifest is marked "?".
+func TestEntryListing_UntrackedPayloadMarked(t *testing.T) {
+	nsDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(nsDir, "mystery"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, _, err := entryListing(nsDir, nil, false)
+	if err != nil {
+		t.Fatalf("entryListing: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Marker != ui.MarkerUntracked || rows[0].Name != "mystery" {
+		t.Fatalf("unexpected rows: %+v", rows)
+	}
+}
+
+// TestEntryListing_OrphanAndUntrackedSuggestRename covers the scope's
+// rename suggestion: an orphan and an untracked file in the same namespace
+// are almost certainly a rename, and entryListing says so.
+func TestEntryListing_OrphanAndUntrackedSuggestRename(t *testing.T) {
+	nsDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(nsDir, "newname"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	entries := []manifest.Entry{{Name: "oldname", Dest: "/tmp/oldname-dest"}}
+
+	rows, suggestion, err := entryListing(nsDir, entries, false)
+	if err != nil {
+		t.Fatalf("entryListing: %v", err)
+	}
+	if suggestion == "" {
+		t.Fatalf("expected a rename suggestion, got none; rows=%+v", rows)
+	}
+	if !strings.Contains(suggestion, "oldname") || !strings.Contains(suggestion, "newname") {
+		t.Fatalf("suggestion doesn't name both sides: %q", suggestion)
+	}
+}
+
+// TestNamespaceRow_PromotesToProblemOnOrphanEntry covers: a namespace with
+// an orphaned entry underneath it is reported "!" at the top level, per
+// concept.md "a `!` namespace always has at least one `!` or `?` entry
+// underneath it".
+func TestNamespaceRow_PromotesToProblemOnOrphanEntry(t *testing.T) {
+	nsDir := t.TempDir()
+	entries := []manifest.Entry{{Name: "gone", Dest: "/tmp/gone-dest"}}
+	s := state.State{Entries: map[state.Key]state.Entry{}}
+
+	row, err := namespaceRow(s, "dotfiles", "cfg-ns", nsDir, entries)
+	if err != nil {
+		t.Fatalf("namespaceRow: %v", err)
+	}
+	if row.Marker != ui.MarkerProblem {
+		t.Fatalf("expected marker %q, got %q", ui.MarkerProblem, row.Marker)
+	}
+}
+
+// TestNamespaceRow_HealthyEnabledNamespaceStaysPlus proves the "!" rollup
+// doesn't fire for an ordinary correctly-linked namespace.
+func TestNamespaceRow_HealthyEnabledNamespaceStaysPlus(t *testing.T) {
+	nsDir := t.TempDir()
+	payload := filepath.Join(nsDir, "cfg")
+	if err := os.WriteFile(payload, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "cfg-dest")
+	if err := os.Symlink(payload, dest); err != nil {
+		t.Fatal(err)
+	}
+	entries := []manifest.Entry{{Name: "cfg", Dest: dest}}
+	s := state.State{Entries: map[state.Key]state.Entry{
+		{Repo: "dotfiles", Namespace: "cfg-ns"}: {Enabled: true},
+	}}
+
+	row, err := namespaceRow(s, "dotfiles", "cfg-ns", nsDir, entries)
+	if err != nil {
+		t.Fatalf("namespaceRow: %v", err)
+	}
+	if row.Marker != ui.MarkerEnabled {
+		t.Fatalf("expected marker %q, got %q", ui.MarkerEnabled, row.Marker)
 	}
 }
 

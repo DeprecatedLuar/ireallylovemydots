@@ -14,6 +14,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/namespace"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
+	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
 
@@ -386,7 +387,20 @@ func renderNamespaceEntries(name string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
-	renderListing(entryListing(m.Entries))
+	s, err := state.Read()
+	if err != nil {
+		return err
+	}
+	enabled := s.Entries[state.Key{Repo: loc.Repo.Name, Namespace: name}].Enabled
+
+	rows, suggestion, err := entryListing(loc.Dir, m.Entries, enabled)
+	if err != nil {
+		return err
+	}
+	renderListing(rows)
+	if suggestion != "" {
+		fmt.Fprintln(os.Stderr, ui.Tip(suggestion))
+	}
 	return nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/DeprecatedLuar/dotz/internal/link"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/namespace"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
@@ -14,6 +15,12 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
+
+// dotsManifestFile names the per-namespace manifest so an untracked-payload
+// scan can skip it; internal/repo/catalogue.go keeps its own copy of this
+// same constant for the same reason (its own directory walk), rather than
+// this package importing repo for one string.
+const dotsManifestFile = ".dots"
 
 // This file owns every row dots's listings produce. concept.md "Listing
 // output": every listing is the same renderer; a caller may narrow its
@@ -37,12 +44,17 @@ func (o listOptions) wantState(marker string) bool {
 
 // namespaceListing enumerates namespaces across repos, per concept.md
 // "Listing output": enabled materialized namespaces marked "+", disabled
-// materialized namespaces marked "-", and namespaces that exist in a
-// repository's catalogue but are not materialized here, marked "=". Drift
-// and conflict markers ("!", "?") are phase 10's job. The catalogue walk
-// (repo.Namespaces) is skipped for a repository when "=" is excluded by
-// opts.States, and each namespace's manifest is read only when opts.Counts
-// is set — a bare listing pays for neither.
+// materialized namespaces marked "-", namespaces that exist in a
+// repository's catalogue but are not materialized here marked "=", and any
+// materialized namespace holding a drifted, conflicted, or manifest-invalid
+// entry underneath it marked "!" — concept.md "Manual edits": "a `!`
+// namespace always has at least one `!` or `?` entry underneath it". The
+// catalogue walk (repo.Namespaces) is skipped for a repository when "="
+// is excluded by opts.States. Every materialized namespace's manifest is
+// read regardless of opts.Counts now, since deciding "+"/"-" vs "!" needs
+// it; self-heal (run once ahead of every dispatch, in cmd/dotz/main.go) has
+// already corrected whatever it could by the time this runs, so what is
+// left to find here is exactly what self-heal would not touch.
 func namespaceListing(repos []manifest.Repo, opts listOptions) ([]ui.Entry, error) {
 	dataDir, err := paths.Data()
 	if err != nil {
@@ -67,15 +79,19 @@ func namespaceListing(repos []manifest.Repo, opts listOptions) ([]ui.Entry, erro
 		localSet := make(map[string]bool, len(local))
 		for _, n := range local {
 			localSet[n] = true
-			row := namespaceRow(s, r.Name, n)
+			nsDir := filepath.Join(repoDir, n)
+			m, err := manifest.Read(nsDir)
+			if err != nil {
+				return nil, err
+			}
+			row, err := namespaceRow(s, r.Name, n, nsDir, m.Entries)
+			if err != nil {
+				return nil, err
+			}
 			if !opts.wantState(row.Marker) {
 				continue
 			}
 			if opts.Counts {
-				m, err := manifest.Read(filepath.Join(repoDir, n))
-				if err != nil {
-					return nil, err
-				}
 				row.Count = len(m.Entries)
 			}
 			rows = append(rows, row)
@@ -100,13 +116,26 @@ func namespaceListing(repos []manifest.Repo, opts listOptions) ([]ui.Entry, erro
 
 // namespaceRow is the one place a namespace's listing marker is decided:
 // enabled materialized namespaces are "+", every other materialized
-// namespace is "-". Phase 10 adds "!" here for drift and conflicts.
-func namespaceRow(s state.State, repoName, nsName string) ui.Entry {
+// namespace is "-", unless namespaceProblems finds a "!" or "?" entry
+// underneath it, which promotes the namespace itself to "!".
+func namespaceRow(s state.State, repoName, nsName, namespaceDir string, entries []manifest.Entry) (ui.Entry, error) {
+	stateEntry := s.Entries[state.Key{Repo: repoName, Namespace: nsName}]
 	marker := ui.MarkerMaterialized
-	if s.Entries[state.Key{Repo: repoName, Namespace: nsName}].Enabled {
+	if stateEntry.Enabled {
 		marker = ui.MarkerEnabled
 	}
-	return ui.Entry{Marker: marker, Name: nsName}
+
+	rows, _, _, err := namespaceProblems(namespaceDir, entries, stateEntry.Enabled)
+	if err != nil {
+		return ui.Entry{}, err
+	}
+	for _, row := range rows {
+		if row.Marker == ui.MarkerProblem || row.Marker == ui.MarkerUntracked {
+			marker = ui.MarkerProblem
+			break
+		}
+	}
+	return ui.Entry{Marker: marker, Name: nsName}, nil
 }
 
 // repoListing enumerates registered repositories, marking one whose clone
@@ -129,15 +158,80 @@ func repoListing(repos []manifest.Repo) ([]ui.Entry, error) {
 	return rows, nil
 }
 
-// entryListing enumerates one namespace's tracked entries. Per-entry markers
-// beyond "-" — "+" for a linked entry, "!"/"?" for drift and untracked
-// payloads — arrive with self-healing in phase 10.
-func entryListing(entries []manifest.Entry) []ui.Entry {
-	rows := make([]ui.Entry, 0, len(entries))
-	for _, e := range entries {
-		rows = append(rows, ui.Entry{Marker: ui.MarkerMaterialized, Name: e.Name})
+// entryListing enumerates one namespace's tracked entries plus any
+// untracked payloads found beside them, and proposes a rename when the scan
+// finds exactly one orphan and one untracked file together — concept.md
+// "Manual edits": "An orphan and an untracked file in the same namespace is
+// almost certainly a rename. Listing may suggest it — the one place a
+// listing prints more than a marker and a name." The suggestion is a plain
+// string for the caller to print as a tip; entryListing never prints.
+func entryListing(namespaceDir string, entries []manifest.Entry, enabled bool) (rows []ui.Entry, suggestion string, err error) {
+	rows, orphans, untracked, err := namespaceProblems(namespaceDir, entries, enabled)
+	if err != nil {
+		return nil, "", err
 	}
-	return rows
+	sortEntryRows(rows)
+	if len(orphans) == 1 && len(untracked) == 1 {
+		suggestion = fmt.Sprintf("%s looks renamed to %s — track it under its new name, then remove the old entry", orphans[0], untracked[0])
+	}
+	return rows, suggestion, nil
+}
+
+// namespaceProblems classifies namespace's tracked entries and finds any
+// untracked payload beside them, per concept.md "Manual edits". orphans and
+// untracked name the entries/payloads driving each half of the rename
+// suggestion; a caller that only needs the namespace-level "!" rollup
+// (namespaceRow) ignores them.
+func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bool) (rows []ui.Entry, orphans, untracked []string, err error) {
+	tracked := make(map[string]bool, len(entries))
+	rows = make([]ui.Entry, 0, len(entries))
+	for _, e := range entries {
+		tracked[e.Name] = true
+		row, orphan := classifyEntry(e, namespaceDir, enabled)
+		rows = append(rows, row)
+		if orphan {
+			orphans = append(orphans, e.Name)
+		}
+	}
+
+	dirEntries, readErr := os.ReadDir(namespaceDir)
+	if readErr != nil {
+		return nil, nil, nil, fmt.Errorf("read namespace directory %s: %w", namespaceDir, readErr)
+	}
+	for _, de := range dirEntries {
+		name := de.Name()
+		if name == dotsManifestFile || tracked[name] {
+			continue
+		}
+		rows = append(rows, ui.Entry{Marker: ui.MarkerUntracked, Name: name})
+		untracked = append(untracked, name)
+	}
+	return rows, orphans, untracked, nil
+}
+
+// classifyEntry decides one tracked entry's listing marker, per concept.md
+// "Manual edits": "?" for an entry with an empty destination — invalid, not
+// pending — "!" for an orphan (its payload is gone from the namespace) or a
+// destination self-heal already found occupied by something real, "+" for
+// a correctly linked entry in an enabled namespace, "-" otherwise. isOrphan
+// reports the orphan case specifically, for the rename suggestion.
+func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool) (row ui.Entry, isOrphan bool) {
+	if e.Dest == "" {
+		return ui.Entry{Marker: ui.MarkerUntracked, Name: e.Name}, false
+	}
+
+	payload := filepath.Join(namespaceDir, e.Name)
+	if _, statErr := os.Lstat(payload); os.IsNotExist(statErr) {
+		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}, true
+	}
+
+	if !enabled {
+		return ui.Entry{Marker: ui.MarkerMaterialized, Name: e.Name}, false
+	}
+	if st, classifyErr := link.Classify(e.Dest, payload); classifyErr != nil || st != link.CorrectSymlink {
+		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}, false
+	}
+	return ui.Entry{Marker: ui.MarkerEnabled, Name: e.Name}, false
 }
 
 // renderListing prints rows through the shared renderer — the single sink
@@ -151,8 +245,8 @@ func renderListing(rows []ui.Entry) {
 // materialized namespaces, with unavailable namespaces last.
 func sortNamespaceRows(rows []ui.Entry) {
 	sort.SliceStable(rows, func(i, j int) bool {
-		iRank := namespaceRowRank(rows[i].Marker)
-		jRank := namespaceRowRank(rows[j].Marker)
+		iRank := markerRank(rows[i].Marker)
+		jRank := markerRank(rows[j].Marker)
 		if iRank != jRank {
 			return iRank < jRank
 		}
@@ -160,17 +254,33 @@ func sortNamespaceRows(rows []ui.Entry) {
 	})
 }
 
-func namespaceRowRank(marker string) int {
+// sortEntryRows applies the same state-then-name grouping to one
+// namespace's entry rows, so a "!" or "?" entry leads a per-namespace
+// listing the same way a "!" namespace leads the top-level one.
+func sortEntryRows(rows []ui.Entry) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		iRank := markerRank(rows[i].Marker)
+		jRank := markerRank(rows[j].Marker)
+		if iRank != jRank {
+			return iRank < jRank
+		}
+		return rows[i].Name < rows[j].Name
+	})
+}
+
+func markerRank(marker string) int {
 	switch marker {
 	case ui.MarkerProblem:
 		return 0
-	case ui.MarkerEnabled:
+	case ui.MarkerUntracked:
 		return 1
-	case ui.MarkerMaterialized:
+	case ui.MarkerEnabled:
 		return 2
-	case ui.MarkerAbsent:
+	case ui.MarkerMaterialized:
 		return 3
-	default:
+	case ui.MarkerAbsent:
 		return 4
+	default:
+		return 5
 	}
 }

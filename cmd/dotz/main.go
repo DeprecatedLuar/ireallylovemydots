@@ -15,6 +15,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/commands"
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
 	"github.com/DeprecatedLuar/dotz/internal/grammar"
+	"github.com/DeprecatedLuar/dotz/internal/selfheal"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
 
@@ -68,6 +69,15 @@ func main() {
 
 	r, err := resolveRoute(rawArgs, namespaces, repos, ambiguityChooser)
 	if err != nil {
+		die(err)
+	}
+
+	// Self-heal runs once here, ahead of every dispatch target, so no
+	// command handler has to remember to call it — concept.md
+	// "Self-healing": it fires on every invocation. Its findings feed
+	// listing's markers by rereading the filesystem there, not by being
+	// threaded through; self-heal itself never prints.
+	if _, err := selfheal.Run(); err != nil {
 		die(err)
 	}
 

@@ -89,7 +89,10 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 			return err
 		}
 		targets = append(targets, resolved{loc: loc, entries: m.Entries})
-		row := namespaceRow(s, loc.Repo.Name, name)
+		row, err := namespaceRow(s, loc.Repo.Name, name, loc.Dir, m.Entries)
+		if err != nil {
+			return err
+		}
 		row.Count = len(m.Entries)
 		rows = append(rows, row)
 	}
