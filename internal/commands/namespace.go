@@ -102,12 +102,36 @@ func handleNamespaceNounVerb(verb string, args []string, flags shared.Flags) err
 			return fmt.Errorf("usage: namespace uninstall <name>...")
 		}
 		return uninstallNamespaces(args, flags)
+	case "ignore":
+		if len(args) == 0 {
+			return renderIgnoredNamespaces()
+		}
+		if len(args) != 1 {
+			return fmt.Errorf("usage: namespace ignore [<name>]")
+		}
+		return ignoreNamespace(args[0], flags)
+	case "unignore":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: namespace unignore <name>")
+		}
+		return unignoreNamespace(args[0], flags)
 	default:
 		return fmt.Errorf("namespace %s: not valid without a namespace name", verb)
 	}
 }
 
+// namespaceVerbsIgnoredMayUse are the only verbs an ignored namespace still
+// answers to by name — concept.md "Namespace": an explicit opt-out must
+// never look like "not found", so every other verb is refused, naming the
+// flag, instead of acting on a namespace that declared itself out of scope.
+var namespaceVerbsIgnoredMayUse = map[string]bool{"ignore": true, "unignore": true, "edit": true, "list": true, "mv": true}
+
 func handleNamespaceVerb(name, verb string, args []string, flags shared.Flags) error {
+	if !namespaceVerbsIgnoredMayUse[verb] {
+		if err := refuseIfIgnored(name, flags); err != nil {
+			return err
+		}
+	}
 	switch verb {
 	case "add":
 		return trackPaths(name, args, flags)
@@ -128,6 +152,10 @@ func handleNamespaceVerb(name, verb string, args []string, flags shared.Flags) e
 		return installNamespaces([]string{name}, flags)
 	case "uninstall":
 		return uninstallNamespaces([]string{name}, flags)
+	case "ignore":
+		return ignoreNamespace(name, flags)
+	case "unignore":
+		return unignoreNamespace(name, flags)
 	case "mv":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: namespace %s mv <newname>", name)
@@ -139,6 +167,25 @@ func handleNamespaceVerb(name, verb string, args []string, flags shared.Flags) e
 	default:
 		return fmt.Errorf("unknown verb %q for namespace %q", verb, name)
 	}
+}
+
+// refuseIfIgnored is the one gate every namespace verb but ignore/unignore/
+// edit/list/mv passes through: a namespace whose manifest carries
+// `ignore = true` refuses by name, naming the flag, rather than acting on
+// it or reporting "not found".
+func refuseIfIgnored(name string, flags shared.Flags) error {
+	loc, err := resolveNamespace(name, flags)
+	if err != nil {
+		return err
+	}
+	m, err := manifest.Read(loc.Dir)
+	if err != nil {
+		return err
+	}
+	if m.Ignore {
+		return fmt.Errorf("namespace %q is ignored (ignore = true in its .dots)", name)
+	}
+	return nil
 }
 
 // createNamespace implements `namespace add <name>`: resolves which
@@ -327,7 +374,7 @@ func prepareEditBuffer(namespaceDir string) ([]byte, error) {
 		augmented = append(augmented, manifest.Entry{Name: n, Dest: ""})
 	}
 
-	return manifest.Encode(manifest.Manifest{Entries: augmented})
+	return manifest.Encode(manifest.Manifest{Ignore: m.Ignore, Entries: augmented})
 }
 
 // applyEditedBuffer persists the edited buffer as the namespace's manifest,
@@ -357,6 +404,87 @@ func resolveNamespace(name string, flags shared.Flags) (namespace.Located, error
 		return namespace.Located{}, err
 	}
 	return namespace.Resolve(dataDir, reg.Repos, name, flags.Repo)
+}
+
+// ignoreNamespace implements `namespace ignore <name>`: writes
+// `ignore = true` to the namespace's manifest, per concept.md "Namespace".
+// Refused while the namespace is enabled — disabling first means self-heal
+// is never asked to choose between abandoning live symlinks and honoring
+// the flag. A namespace with no manifest yet gets one holding just the
+// flag, which is what stops self-heal from regenerating one on its own.
+func ignoreNamespace(name string, flags shared.Flags) error {
+	loc, err := resolveNamespace(name, flags)
+	if err != nil {
+		return err
+	}
+	s, err := state.Read()
+	if err != nil {
+		return err
+	}
+	if s.Entries[state.Key{Repo: loc.Repo.Name, Namespace: name}].Enabled {
+		return fmt.Errorf("namespace %q is enabled; disable it before ignoring it", name)
+	}
+	m, err := manifest.Read(loc.Dir)
+	if err != nil {
+		return err
+	}
+	if m.Ignore {
+		return fmt.Errorf("namespace %q is already ignored", name)
+	}
+	m.Ignore = true
+	return manifest.Write(loc.Dir, m)
+}
+
+// unignoreNamespace implements `namespace unignore <name>`: clears
+// `ignore` from the namespace's manifest.
+func unignoreNamespace(name string, flags shared.Flags) error {
+	loc, err := resolveNamespace(name, flags)
+	if err != nil {
+		return err
+	}
+	m, err := manifest.Read(loc.Dir)
+	if err != nil {
+		return err
+	}
+	if !m.Ignore {
+		return fmt.Errorf("namespace %q is not ignored", name)
+	}
+	m.Ignore = false
+	return manifest.Write(loc.Dir, m)
+}
+
+// renderIgnoredNamespaces implements bare `namespace ignore`: lists every
+// namespace currently ignored across every registered repository, since an
+// explicit opt-out must stay discoverable rather than requiring the user to
+// remember which folders they set it on.
+func renderIgnoredNamespaces() error {
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		return err
+	}
+	dataDir, err := paths.Data()
+	if err != nil {
+		return err
+	}
+	var rows []ui.Entry
+	for _, r := range reg.Repos {
+		repoDir := filepath.Join(dataDir, r.Name)
+		local, err := namespace.LocalNames(repoDir)
+		if err != nil {
+			return err
+		}
+		for _, n := range local {
+			m, err := manifest.Read(filepath.Join(repoDir, n))
+			if err != nil {
+				return err
+			}
+			if m.Ignore {
+				rows = append(rows, ui.Entry{Marker: ui.MarkerMaterialized, Name: n})
+			}
+		}
+	}
+	renderListing(rows)
+	return nil
 }
 
 // renderNamespaceList lists every namespace across every registered

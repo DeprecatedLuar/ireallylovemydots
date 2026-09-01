@@ -43,8 +43,10 @@ var RepoOnlyVerbs = []string{"init", "adopt"}
 // NamespaceOnlyVerbs are verbs valid only at the namespace level: install
 // and uninstall move a namespace between "in the repository" and "on this
 // machine" (concept.md "Install and uninstall"), which has no meaning for a
-// repository or profile.
-var NamespaceOnlyVerbs = []string{"install", "uninstall"}
+// repository or profile. ignore and unignore declare a namespace explicitly
+// out of dots' scope (concept.md "Namespace"), likewise meaningless above
+// the namespace level.
+var NamespaceOnlyVerbs = []string{"install", "uninstall", "ignore", "unignore"}
 
 // IsVerb reports whether tok is one of the verbs valid at any level, in
 // either its canonical or aliased spelling.

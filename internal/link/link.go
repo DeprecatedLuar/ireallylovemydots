@@ -77,3 +77,27 @@ func Read(path string) (string, error) {
 	}
 	return target, nil
 }
+
+// ReadIfSymlink reports whether path is currently a symlink and, if so, what
+// it points to. isSymlink is false whenever nothing exists at path or
+// whatever is there is not a symlink — both read simply as "nothing to go
+// on" rather than an error, since a caller proving ownership of a
+// destination (self-heal's stranded-link cleanup, namespace manifest
+// recovery) treats a missing or non-symlink path the same way: no evidence.
+// A symlink present but unreadable is the one case reported as an error, so
+// a caller that must act on every recorded destination (cleanup) can
+// surface it rather than silently skip.
+func ReadIfSymlink(path string) (target string, isSymlink bool, err error) {
+	info, statErr := os.Lstat(path)
+	if statErr != nil {
+		return "", false, nil
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return "", false, nil
+	}
+	target, err = os.Readlink(path)
+	if err != nil {
+		return "", true, fmt.Errorf("readlink %s: %w", path, err)
+	}
+	return target, true, nil
+}

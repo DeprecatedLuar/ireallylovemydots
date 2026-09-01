@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/DeprecatedLuar/dotz/internal/git"
 	"github.com/DeprecatedLuar/dotz/internal/link"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/namespace"
@@ -15,12 +16,6 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
-
-// dotsManifestFile names the per-namespace manifest so an untracked-payload
-// scan can skip it; internal/repo/catalogue.go keeps its own copy of this
-// same constant for the same reason (its own directory walk), rather than
-// this package importing repo for one string.
-const dotsManifestFile = ".dots"
 
 // This file owns every row dots's listings produce. concept.md "Listing
 // output": every listing is the same renderer; a caller may narrow its
@@ -46,7 +41,7 @@ func (o listOptions) wantState(marker string) bool {
 // "Listing output": enabled materialized namespaces marked "+", disabled
 // materialized namespaces marked "-", namespaces that exist in a
 // repository's catalogue but are not materialized here marked "=", and any
-// materialized namespace holding a drifted, conflicted, or manifest-invalid
+// materialized namespace holding an orphaned, invalid, or untracked
 // entry underneath it marked "!" — concept.md "Manual edits": "a `!`
 // namespace always has at least one `!` or `?` entry underneath it". The
 // catalogue walk (repo.Namespaces) is skipped for a repository when "="
@@ -84,6 +79,12 @@ func namespaceListing(repos []manifest.Repo, opts listOptions) ([]ui.Entry, erro
 			if err != nil {
 				return nil, err
 			}
+			// A namespace declaring itself out of scope is invisible here,
+			// per concept.md "Namespace" — the same rule as a folder with
+			// no .dots at all.
+			if m.Ignore {
+				continue
+			}
 			row, err := namespaceRow(s, r.Name, n, nsDir, m.Entries)
 			if err != nil {
 				return nil, err
@@ -105,9 +106,17 @@ func namespaceListing(repos []manifest.Repo, opts listOptions) ([]ui.Entry, erro
 			return nil, err
 		}
 		for _, n := range catalogue {
-			if !localSet[n] {
-				rows = append(rows, ui.Entry{Marker: ui.MarkerAbsent, Name: n})
+			if localSet[n] {
+				continue
 			}
+			ignored, err := catalogueNamespaceIgnored(repoDir, n)
+			if err != nil {
+				return nil, err
+			}
+			if ignored {
+				continue
+			}
+			rows = append(rows, ui.Entry{Marker: ui.MarkerAbsent, Name: n})
 		}
 	}
 	sortNamespaceRows(rows)
@@ -136,6 +145,26 @@ func namespaceRow(s state.State, repoName, nsName, namespaceDir string, entries 
 		}
 	}
 	return ui.Entry{Marker: marker, Name: nsName}, nil
+}
+
+// catalogueNamespaceIgnored reports whether a namespace not materialized
+// locally is nonetheless ignored, per its committed manifest. repo.Namespaces
+// only sees the git tree's shape (repo.RootEntries is tree-only), not blob
+// content, so the manifest itself has to be read from HEAD via git.ShowFile
+// — the same primitive self-heal's manifest recovery uses.
+func catalogueNamespaceIgnored(repoDir, name string) (bool, error) {
+	data, found, err := git.ShowFile(repoDir, "HEAD", filepath.Join(name, ".dots"))
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	m, err := manifest.Decode(data)
+	if err != nil {
+		return false, nil
+	}
+	return m.Ignore, nil
 }
 
 // repoListing enumerates registered repositories, marking one whose clone
@@ -172,66 +201,74 @@ func entryListing(namespaceDir string, entries []manifest.Entry, enabled bool) (
 	}
 	sortEntryRows(rows)
 	if len(orphans) == 1 && len(untracked) == 1 {
-		suggestion = fmt.Sprintf("%s looks renamed to %s — track it under its new name, then remove the old entry", orphans[0], untracked[0])
+		suggestion = fmt.Sprintf("%s looks renamed to %s, track it under its new name, then remove the old entry", orphans[0], untracked[0])
 	}
 	return rows, suggestion, nil
 }
 
 // namespaceProblems classifies namespace's tracked entries and finds any
-// untracked payload beside them, per concept.md "Manual edits". orphans and
-// untracked name the entries/payloads driving each half of the rename
-// suggestion; a caller that only needs the namespace-level "!" rollup
-// (namespaceRow) ignores them.
+// untracked payload beside them, per concept.md "Manual edits", from one
+// shared directory walk (namespace.Inspect) also used by self-heal's repair
+// warning. orphans and untracked name the entries/payloads driving each half
+// of the rename suggestion; a caller that only needs the namespace-level "!"
+// rollup (namespaceRow) ignores them.
 func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bool) (rows []ui.Entry, orphans, untracked []string, err error) {
-	tracked := make(map[string]bool, len(entries))
-	rows = make([]ui.Entry, 0, len(entries))
-	for _, e := range entries {
-		tracked[e.Name] = true
-		row, orphan := classifyEntry(e, namespaceDir, enabled)
-		rows = append(rows, row)
-		if orphan {
-			orphans = append(orphans, e.Name)
-		}
+	report, err := namespace.Inspect(namespaceDir, entries)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
-	dirEntries, readErr := os.ReadDir(namespaceDir)
-	if readErr != nil {
-		return nil, nil, nil, fmt.Errorf("read namespace directory %s: %w", namespaceDir, readErr)
+	invalid := toSet(report.Invalid)
+	orphaned := toSet(report.Orphans)
+
+	rows = make([]ui.Entry, 0, len(entries)+len(report.Untracked))
+	for _, e := range entries {
+		rows = append(rows, classifyEntry(e, namespaceDir, enabled, invalid, orphaned))
 	}
-	for _, de := range dirEntries {
-		name := de.Name()
-		if name == dotsManifestFile || tracked[name] {
-			continue
-		}
+	for _, name := range report.Untracked {
 		rows = append(rows, ui.Entry{Marker: ui.MarkerUntracked, Name: name})
-		untracked = append(untracked, name)
 	}
-	return rows, orphans, untracked, nil
+	return rows, report.Orphans, report.Untracked, nil
 }
 
 // classifyEntry decides one tracked entry's listing marker, per concept.md
 // "Manual edits": "?" for an entry with an empty destination — invalid, not
-// pending — "!" for an orphan (its payload is gone from the namespace) or a
-// destination self-heal already found occupied by something real, "+" for
-// a correctly linked entry in an enabled namespace, "-" otherwise. isOrphan
-// reports the orphan case specifically, for the rename suggestion.
-func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool) (row ui.Entry, isOrphan bool) {
-	if e.Dest == "" {
-		return ui.Entry{Marker: ui.MarkerUntracked, Name: e.Name}, false
+// pending — "!" for an orphan (its payload is gone from the namespace), "+"
+// for a correctly linked entry in an enabled namespace, "-" otherwise.
+// invalid and orphaned are namespaceProblems' sets from namespace.Inspect's
+// facts; this function only decides the marker, and additionally runs the
+// link-classification check Inspect deliberately leaves out (it needs
+// enabled, which is a listing/self-heal concern, not a directory fact) as a
+// safety net for drift within the same invocation, between self-heal's pass
+// and this one — self-heal itself now disables a namespace outright rather
+// than leaving a blocked destination "!" here, per concept.md
+// "Self-healing".
+func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, invalid, orphaned map[string]bool) ui.Entry {
+	if invalid[e.Name] {
+		return ui.Entry{Marker: ui.MarkerUntracked, Name: e.Name}
 	}
-
-	payload := filepath.Join(namespaceDir, e.Name)
-	if _, statErr := os.Lstat(payload); os.IsNotExist(statErr) {
-		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}, true
+	if orphaned[e.Name] {
+		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}
 	}
 
 	if !enabled {
-		return ui.Entry{Marker: ui.MarkerMaterialized, Name: e.Name}, false
+		return ui.Entry{Marker: ui.MarkerMaterialized, Name: e.Name}
 	}
+	payload := filepath.Join(namespaceDir, e.Name)
 	if st, classifyErr := link.Classify(e.Dest, payload); classifyErr != nil || st != link.CorrectSymlink {
-		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}, false
+		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}
 	}
-	return ui.Entry{Marker: ui.MarkerEnabled, Name: e.Name}, false
+	return ui.Entry{Marker: ui.MarkerEnabled, Name: e.Name}
+}
+
+// toSet turns a name slice into a membership set, for classifyEntry's O(1)
+// lookups against namespace.Inspect's Invalid/Orphans facts.
+func toSet(names []string) map[string]bool {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	return set
 }
 
 // renderListing prints rows through the shared renderer — the single sink

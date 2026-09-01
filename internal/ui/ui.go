@@ -14,7 +14,7 @@ import (
 const (
 	MarkerEnabled      = "+" // enabled
 	MarkerMaterialized = "-" // materialized, not linked
-	MarkerProblem      = "!" // drift, conflict, or unwritable destination
+	MarkerProblem      = "!" // manifest needs a human: orphan, invalid, or untracked entry
 	MarkerAbsent       = "=" // in the repository, not on this machine (dim)
 	MarkerUntracked    = "?" // payload with no manifest entry
 	// MarkerRemoved appears only in the output of a mutation, never in a
@@ -38,11 +38,16 @@ const (
 	reset       = "\033[0m"
 )
 
+// MarkerProblem shares warningTone with MarkerUntracked rather than
+// errorTone: "!" is most often a rollup of an underlying "?" (an untracked
+// file, an invalid entry) rather than something that actually failed, so
+// red is reserved for a marker that means an operation did not do what it
+// was asked — MarkerRemoved, and the arrow die() prints on a fatal error.
 var markerColor = map[string]string{
 	MarkerEnabled:      green,
 	MarkerMaterialized: purple,
 	MarkerAbsent:       dim,
-	MarkerProblem:      errorTone,
+	MarkerProblem:      warningTone,
 	MarkerUntracked:    warningTone,
 	MarkerRemoved:      errorTone,
 }

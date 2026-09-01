@@ -61,10 +61,15 @@ func HandleHelp(args []string) error {
 			gohelp.Item("namespace <ns> disable", "Remove symlinks, keep files"),
 			gohelp.Item("namespace <ns> install", "Put its files on disk, link nothing"),
 			gohelp.Item("namespace <ns> uninstall", "Take its files off disk, keep it tracked"),
+		).
+		Section("Out of scope",
+			gohelp.Item("namespace ignore", "List every ignored namespace"),
+			gohelp.Item("namespace ignore <ns>", "Declare it out of dots' scope; invisible to listing and self-heal"),
+			gohelp.Item("namespace unignore <ns>", "Undo namespace ignore"),
 		)
 
 	profilesPage := gohelp.NewPage("profiles", "Profile commands").
-		Text("A per-file overlay within a namespace; the active profile overrides base " +
+		Text("A per-file overlay within a namespace; the active profile overrides base "+
 			"on collision.").
 		Section("Manage profiles",
 			gohelp.Item("namespace <ns> profiles add <profile>", "Create a profile"),

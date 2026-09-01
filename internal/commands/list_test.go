@@ -12,6 +12,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
+	"github.com/DeprecatedLuar/dotz/internal/selfheal"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
@@ -129,6 +130,123 @@ func TestHandleList_MarksEnabledNamespacesWithPlus(t *testing.T) {
 	}
 	if stdout != "+ nixos\n- starship\n" {
 		t.Fatalf("unexpected listing: %q", stdout)
+	}
+}
+
+// TestHandleList_ShowsSelfHealAutoDisabledNamespaceAsMaterialized covers the
+// hand-off between self-heal and listing within one invocation: a namespace
+// self-heal cannot fully link is flipped to disabled and reported, per
+// concept.md "Self-healing", and the listing that follows shows the
+// resulting "-", never a mute "!".
+func TestHandleList_ShowsSelfHealAutoDisabledNamespaceAsMaterialized(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	reg := manifest.Registry{Repos: []manifest.Repo{{Name: "dotfiles"}}}
+	if err := manifest.WriteRegistry(reg); err != nil {
+		t.Fatal(err)
+	}
+	dataDir, err := paths.Data()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Join(dataDir, "dotfiles")
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", repoDir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+
+	nsDir := filepath.Join(repoDir, "akeyshually")
+	if err := os.MkdirAll(nsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nsDir, "akeyshually"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	dest := filepath.Join(home, ".config", "akeyshually")
+	if err := manifest.Write(nsDir, manifest.Manifest{Entries: []manifest.Entry{{Name: "akeyshually", Dest: dest}}}); err != nil {
+		t.Fatal(err)
+	}
+	// The destination is occupied by a real directory, as if some other
+	// tool recreated it — the exact shape self-heal cannot fix.
+	if err := os.MkdirAll(dest, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Write(state.State{Entries: map[state.Key]state.Entry{
+		{Repo: "dotfiles", Namespace: "akeyshually"}: {Enabled: true},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	findings, err := selfheal.Run()
+	if err != nil {
+		t.Fatalf("selfheal.Run: %v", err)
+	}
+	if len(findings.Disabled) != 1 || findings.Disabled[0].Namespace != "akeyshually" {
+		t.Fatalf("expected akeyshually to be auto-disabled, got %+v", findings.Disabled)
+	}
+
+	stdout, stderr := captureStdoutStderr(t, func() {
+		if err := HandleList(nil); err != nil {
+			t.Fatalf("HandleList: %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("unexpected stderr: %q", stderr)
+	}
+	if stdout != "- akeyshually\n" {
+		t.Fatalf("expected the auto-disabled namespace to list as materialized, got %q", stdout)
+	}
+}
+
+// TestHandleList_IgnoredNamespaceProducesNoRow covers concept.md
+// "Namespace": a namespace whose manifest carries ignore = true is invisible
+// to listing, the same as a folder with no .dots at all.
+func TestHandleList_IgnoredNamespaceProducesNoRow(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	reg := manifest.Registry{Repos: []manifest.Repo{{Name: "dotfiles"}}}
+	if err := manifest.WriteRegistry(reg); err != nil {
+		t.Fatal(err)
+	}
+	dataDir, err := paths.Data()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Join(dataDir, "dotfiles")
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", repoDir).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	for _, name := range []string{"nixos", "scratch"} {
+		nsDir := filepath.Join(repoDir, name)
+		if err := os.MkdirAll(nsDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := manifest.Write(nsDir, manifest.Manifest{Ignore: name == "scratch"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stdout, stderr := captureStdoutStderr(t, func() {
+		if err := HandleList(nil); err != nil {
+			t.Fatalf("HandleList: %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("unexpected stderr: %q", stderr)
+	}
+	if stdout != "- nixos\n" {
+		t.Fatalf("expected ignored namespace to be invisible, got %q", stdout)
 	}
 }
 
@@ -270,12 +388,10 @@ func TestHandleList_StatusAliasIsByteIdentical(t *testing.T) {
 // with an empty destination marks the entry "?" and is never enabled —
 // concept.md "Manual edits": invalid, not pending.
 func TestClassifyEntry_EmptyDestinationMarksUntracked(t *testing.T) {
-	row, orphan := classifyEntry(manifest.Entry{Name: "cfg", Dest: ""}, t.TempDir(), true)
+	invalid := map[string]bool{"cfg": true}
+	row := classifyEntry(manifest.Entry{Name: "cfg", Dest: ""}, t.TempDir(), true, invalid, nil)
 	if row.Marker != ui.MarkerUntracked {
 		t.Fatalf("expected marker %q, got %q", ui.MarkerUntracked, row.Marker)
-	}
-	if orphan {
-		t.Fatalf("an empty-destination entry is not an orphan")
 	}
 }
 
@@ -284,12 +400,10 @@ func TestClassifyEntry_EmptyDestinationMarksUntracked(t *testing.T) {
 // marked "!".
 func TestClassifyEntry_MissingPayloadIsOrphan(t *testing.T) {
 	nsDir := t.TempDir()
-	row, orphan := classifyEntry(manifest.Entry{Name: "gone", Dest: "/tmp/whatever"}, nsDir, true)
+	orphaned := map[string]bool{"gone": true}
+	row := classifyEntry(manifest.Entry{Name: "gone", Dest: "/tmp/whatever"}, nsDir, true, nil, orphaned)
 	if row.Marker != ui.MarkerProblem {
 		t.Fatalf("expected marker %q, got %q", ui.MarkerProblem, row.Marker)
-	}
-	if !orphan {
-		t.Fatalf("expected a missing payload to be reported as an orphan")
 	}
 }
 

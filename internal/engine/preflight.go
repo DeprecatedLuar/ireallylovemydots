@@ -67,7 +67,7 @@ func Preflight(key state.Key, namespaceDir string, entries []manifest.Entry, s s
 
 		if guarded[e.Dest] {
 			problems = append(problems, Problem{Kind: LinkGuard, Entry: e,
-				Message: fmt.Sprintf("%s: in-repo link guard — another entry in this namespace claims a destination that contains or is contained by this one", e.Dest)})
+				Message: fmt.Sprintf("%s: in-repo link guard, another entry in this namespace claims a destination that contains or is contained by this one", e.Dest)})
 			continue
 		}
 		inside, err := paths.InsideDataDir(filepath.Dir(e.Dest))
@@ -76,7 +76,7 @@ func Preflight(key state.Key, namespaceDir string, entries []manifest.Entry, s s
 		}
 		if inside {
 			problems = append(problems, Problem{Kind: LinkGuard, Entry: e,
-				Message: fmt.Sprintf("%s: in-repo link guard — its parent resolves inside the data directory", e.Dest)})
+				Message: fmt.Sprintf("%s: in-repo link guard, its parent resolves inside the data directory", e.Dest)})
 			continue
 		}
 

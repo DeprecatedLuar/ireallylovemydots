@@ -124,6 +124,17 @@ func TestRenderLines_ZeroCountEmitsNoParens(t *testing.T) {
 	}
 }
 
+// TestMarkerProblem_UsesWarningTone covers the deliberate choice that "!"
+// shares warningTone with "?": most "!" rows are a rollup of an underlying
+// "?", not a failure, so red stays reserved for MarkerRemoved. Asserted
+// directly against markerColor since the piped-output tests above cannot
+// observe an escape sequence at all (go test's stdout is never a terminal).
+func TestMarkerProblem_UsesWarningTone(t *testing.T) {
+	if markerColor[MarkerProblem] != warningTone {
+		t.Fatalf("markerColor[MarkerProblem] = %q, want warningTone %q", markerColor[MarkerProblem], warningTone)
+	}
+}
+
 func TestMarkerRemoved_UsesErrorTone(t *testing.T) {
 	// Piped output stays plain regardless of the tone table, but Operation
 	// must still recognize "x" as a known marker rather than silently

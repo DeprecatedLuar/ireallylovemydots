@@ -115,6 +115,32 @@ func TestRoundTrip_ByteIdentical(t *testing.T) {
 	}
 }
 
+func TestRoundTrip_PreservesIgnore(t *testing.T) {
+	dir := t.TempDir()
+	m := Manifest{Ignore: true, Entries: []Entry{
+		{Name: "nvim", Dest: "~/.config/nvim"},
+	}}
+	if err := Write(dir, m); err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+
+	got, err := Read(dir)
+	if err != nil {
+		t.Fatalf("Read error: %v", err)
+	}
+	if !got.Ignore {
+		t.Fatalf("Ignore did not round-trip: got %+v", got)
+	}
+
+	raw, err := os.ReadFile(Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "ignore = true") {
+		t.Fatalf("expected on-disk manifest to carry ignore = true, got: %s", raw)
+	}
+}
+
 func TestRead_ExpandsHome(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()

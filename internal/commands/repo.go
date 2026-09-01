@@ -176,7 +176,7 @@ func adoptRepo(name string) error {
 	}
 	dest := filepath.Join(dataDir, name)
 	if info, statErr := os.Stat(dest); statErr != nil || !info.IsDir() {
-		return fmt.Errorf("%s is not a directory in the data directory — nothing to adopt", dest)
+		return fmt.Errorf("%s is not a directory in the data directory, nothing to adopt", dest)
 	}
 
 	entries, err := repo.DiskEntries(dest)

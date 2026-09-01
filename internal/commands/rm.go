@@ -290,7 +290,7 @@ func checkGitSafety(repoName, repoDir string, flags shared.Flags) error {
 			repoName, st.Unpushed)
 	}
 	if !st.HasRemote {
-		return fmt.Errorf("%q has no remote; this clone is the only copy of its content — add one with `git remote add origin <url>`, or --force to override",
+		return fmt.Errorf("%q has no remote; this clone is the only copy of its content, add one with `git remote add origin <url>`, or --force to override",
 			repoName)
 	}
 	return nil

@@ -73,17 +73,18 @@ func main() {
 	}
 
 	// Self-heal runs once here, ahead of every dispatch target, so no
-	// command handler has to remember to call it — concept.md
+	// command handler has to remember to call it, per concept.md
 	// "Self-healing": it fires on every invocation. Its Problems feed
 	// listing's markers by rereading the filesystem there, not by being
-	// threaded through; self-heal itself never prints. Its other findings —
-	// evidence about the data directory as a whole, which no per-namespace
-	// listing can see — are rendered here instead.
+	// threaded through; self-heal itself never prints. Reconciliation
+	// happens now, before the command reads anything, but its own findings
+	// print after dispatch, once the command's own output is on the
+	// screen, so a warning about the data directory as a whole reads as a
+	// footer under the thing it explains rather than noise ahead of it.
 	findings, err := selfheal.Run()
 	if err != nil {
 		die(err)
 	}
-	commands.RenderSelfHealFindings(findings)
 
 	switch r.target {
 	case targetNamespace:
@@ -97,6 +98,7 @@ func main() {
 	case targetHelp:
 		err = commands.HandleHelp(r.args)
 	}
+	commands.RenderSelfHealFindings(findings)
 	if err != nil {
 		if errors.Is(err, commands.ErrSomeSkipped) {
 			os.Exit(1)

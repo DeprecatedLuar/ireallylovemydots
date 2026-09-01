@@ -22,12 +22,31 @@ type Entry struct {
 
 // Manifest is a namespace's full set of tracked entries.
 type Manifest struct {
+	// Ignore marks the namespace explicitly out of dots' scope — invisible
+	// to listing and self-healing, per concept.md "Namespace". Set and
+	// cleared by `namespace ignore`/`unignore`, never by hand-editing alone.
+	Ignore  bool    `toml:"ignore,omitempty"`
 	Entries []Entry `toml:"entries"`
 }
 
 // Path returns the manifest file path for a namespace directory.
 func Path(namespaceDir string) string {
 	return filepath.Join(namespaceDir, fileName)
+}
+
+// Exists reports whether a namespace directory has a manifest file at all —
+// the distinction Read deliberately erases (a missing file and an empty
+// manifest both read back as Manifest{}), needed wherever "no .dots" and
+// "a .dots with zero entries" must be told apart.
+func Exists(namespaceDir string) (bool, error) {
+	_, err := os.Stat(Path(namespaceDir))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stat manifest %s: %w", Path(namespaceDir), err)
+	}
+	return true, nil
 }
 
 // Read loads the manifest from a namespace directory. A missing file is not
@@ -86,7 +105,7 @@ func Encode(m Manifest) ([]byte, error) {
 	for i := range sorted {
 		sorted[i].Dest = contractHome(sorted[i].Dest)
 	}
-	return toml.Marshal(Manifest{Entries: sorted})
+	return toml.Marshal(Manifest{Ignore: m.Ignore, Entries: sorted})
 }
 
 func expandHome(dest string) string {
