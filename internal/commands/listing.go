@@ -250,6 +250,12 @@ func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, invalid,
 	if orphaned[e.Name] {
 		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}
 	}
+	if e.Dest == manifest.DestNone {
+		// Deliberately unlinked — nothing to classify against the
+		// filesystem, so it reads the same whether the namespace is
+		// enabled or not.
+		return ui.Entry{Marker: ui.MarkerMaterialized, Name: e.Name}
+	}
 
 	if !enabled {
 		return ui.Entry{Marker: ui.MarkerMaterialized, Name: e.Name}

@@ -38,6 +38,14 @@ func Add(namespaceDir, path string) error {
 		return fmt.Errorf("refusing to track %s: protected roots (~, /, and the XDG roots) cannot be destinations", dest)
 	}
 
+	inside, err := paths.InsideDataDir(filepath.Dir(dest))
+	if err != nil {
+		return err
+	}
+	if inside {
+		return fmt.Errorf("refusing to track %s: it resolves inside dots' own data directory", dest)
+	}
+
 	name := filepath.Base(dest)
 	m, err := manifest.Read(namespaceDir)
 	if err != nil {

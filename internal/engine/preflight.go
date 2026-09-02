@@ -55,6 +55,13 @@ func Preflight(key state.Key, namespaceDir string, entries []manifest.Entry, s s
 
 	var problems []Problem
 	for _, e := range entries {
+		if !e.HasDestination() {
+			// An empty destination or manifest.DestNone names nothing to
+			// link — neither is this pass's problem to raise; an empty one
+			// is a listing/repair concern (concept.md "Manual edits") and
+			// DestNone is not a problem at all.
+			continue
+		}
 		protected, err := paths.IsProtectedRoot(e.Dest)
 		if err != nil {
 			return nil, err

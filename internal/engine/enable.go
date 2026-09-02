@@ -85,13 +85,6 @@ type absorbedEntry struct {
 	target     string // only meaningful when wasSymlink
 }
 
-func (a absorbedEntry) detail() string {
-	if a.wasSymlink {
-		return "symlink"
-	}
-	return "empty directory"
-}
-
 // clearAbsorbable removes dest when pre-flight's occupancy test would have
 // absorbed it silently — a symlink, dangling or not, or an empty directory —
 // and reports what it removed so Enable can recreate it on rollback. Nothing
@@ -199,6 +192,11 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 	}
 
 	for _, e := range sorted {
+		if !e.HasDestination() {
+			// An empty destination or manifest.DestNone names nothing to
+			// link — there is no symlink to create for it.
+			continue
+		}
 		if detail, ok := occupiedDetail[e.Dest]; ok {
 			trashedName, err := trash.Move(e.Dest)
 			if err != nil {
@@ -212,13 +210,10 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 			return nil, fmt.Errorf("clear %s: %w", e.Dest, err)
 		} else if cleared != nil {
 			absorbed = append(absorbed, *cleared)
-			if cleared.wasSymlink {
-				// concept.md "Occupied destinations": an absorbed symlink is
-				// still reported, since it may have been placed by hand or
-				// by another tool. An absorbed empty directory held nothing
-				// and is absorbed as silently as an absent destination.
-				replaced = append(replaced, ReplacedDestination{Dest: e.Dest, Detail: cleared.detail() + " -> relinked"})
-			}
+			// concept.md "Occupied destinations": an absorbed symlink or
+			// empty directory held nothing of the user's, so it's absorbed
+			// as silently as an absent destination — only real files/dirs
+			// (handled above via the trash path) are worth reporting.
 		}
 		if err := os.MkdirAll(filepath.Dir(e.Dest), dirPerm); err != nil {
 			rollback()
@@ -232,9 +227,11 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 		created = append(created, e.Dest)
 	}
 
-	dests := make([]string, len(sorted))
-	for i, e := range sorted {
-		dests[i] = e.Dest
+	var dests []string
+	for _, e := range sorted {
+		if e.HasDestination() {
+			dests = append(dests, e.Dest)
+		}
 	}
 	s.Entries[key] = state.Entry{Enabled: true, LinkedDests: dests}
 	if err := state.Write(s); err != nil {

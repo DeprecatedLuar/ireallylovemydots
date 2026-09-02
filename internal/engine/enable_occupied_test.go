@@ -115,15 +115,11 @@ func TestEnable_AbsorbsDanglingSymlinkEmptyDirAndLiveSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
-	// Absorbing a symlink is reported — dangling or not, it may have been
-	// placed by hand or by another tool — but an absorbed empty directory
-	// held nothing and stays silent, per concept.md "Occupied destinations".
-	reportedDests := map[string]bool{}
-	for _, r := range replaced {
-		reportedDests[r.Dest] = true
-	}
-	if len(replaced) != 2 || !reportedDests[danglingDest] || !reportedDests[liveDest] {
-		t.Fatalf("expected exactly danglingDest and liveDest reported, got %+v", replaced)
+	// Absorbing a symlink or an empty directory holds nothing of the user's
+	// and stays silent, per concept.md "Occupied destinations" — only real
+	// files/directories routed through the trash path are reported.
+	if len(replaced) != 0 {
+		t.Fatalf("expected nothing reported, got %+v", replaced)
 	}
 
 	for _, e := range entries {

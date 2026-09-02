@@ -350,27 +350,25 @@ func editNamespace(name string, flags shared.Flags) error {
 // prepareEditBuffer returns the bytes to seed namespace <ns> edit's buffer
 // with: every entry already in the manifest, plus an empty-destination
 // entry for every payload materialized in the namespace but absent from it.
+// Untracked payloads come from namespace.Inspect — the same classification
+// self-heal and listing use — rather than a second directory walk here, so
+// a dotfile like ".profiled" is never silently excluded from the buffer
+// just because its name happens to start with a dot; only the two names
+// Inspect itself treats as plumbing (the manifest and its .gitignore) are
+// skipped.
 func prepareEditBuffer(namespaceDir string) ([]byte, error) {
 	m, err := manifest.Read(namespaceDir)
 	if err != nil {
 		return nil, err
 	}
-	tracked := make(map[string]bool, len(m.Entries))
-	for _, e := range m.Entries {
-		tracked[e.Name] = true
-	}
 
-	dirEntries, err := os.ReadDir(namespaceDir)
+	report, err := namespace.Inspect(namespaceDir, m.Entries)
 	if err != nil {
-		return nil, fmt.Errorf("read namespace directory %s: %w", namespaceDir, err)
+		return nil, err
 	}
 
 	augmented := append([]manifest.Entry{}, m.Entries...)
-	for _, e := range dirEntries {
-		n := e.Name()
-		if strings.HasPrefix(n, ".") || tracked[n] {
-			continue
-		}
+	for _, n := range report.Untracked {
 		augmented = append(augmented, manifest.Entry{Name: n, Dest: ""})
 	}
 

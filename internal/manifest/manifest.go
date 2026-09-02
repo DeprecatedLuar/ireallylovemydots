@@ -14,10 +14,26 @@ import (
 
 const fileName = ".dots"
 
+// DestNone is the literal destination value marking an entry deliberately
+// out of scope for linking: still tracked and still checked for its payload
+// (namespace.Inspect's orphan check applies to it like any other entry), but
+// never symlinked and never reported invalid — unlike an empty Dest, which
+// concept.md "Manual edits" treats as an unfinished entry that must be given
+// a real destination or removed.
+const DestNone = "none"
+
 // Entry is one tracked file or directory within a namespace.
 type Entry struct {
 	Name string `toml:"name"`
 	Dest string `toml:"dest"`
+}
+
+// HasDestination reports whether e names a real destination to link — false
+// for an empty Dest (invalid, concept.md "Manual edits") and for DestNone
+// (deliberately unlinked), the two cases every linking path must treat
+// alike: nothing to create, repoint, or count toward "every entry linked."
+func (e Entry) HasDestination() bool {
+	return e.Dest != "" && e.Dest != DestNone
 }
 
 // Manifest is a namespace's full set of tracked entries.

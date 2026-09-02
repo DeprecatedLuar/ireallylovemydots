@@ -310,7 +310,7 @@ func Run() (Findings, error) {
 		// disable` uses, rather than left half-true.
 		want := 0
 		for _, e := range m.Entries {
-			if e.Dest != "" {
+			if e.HasDestination() {
 				want++
 			}
 		}
@@ -469,7 +469,7 @@ func cleanStrandedLinks(dataDir string, key state.Key, dests []string) []Problem
 func reconcileNamespace(key state.Key, namespaceDir string, entries []manifest.Entry, recorded []string, skipStaleRemoval bool) ([]string, []Problem, error) {
 	current := make(map[string]bool, len(entries))
 	for _, e := range entries {
-		if e.Dest != "" {
+		if e.HasDestination() {
 			current[e.Dest] = true
 		}
 	}
@@ -492,9 +492,30 @@ func reconcileNamespace(key state.Key, namespaceDir string, entries []manifest.E
 
 	var linked []string
 	for _, e := range entries {
-		if e.Dest == "" {
+		if !e.HasDestination() {
 			continue
 		}
+
+		// A destination whose parent resolves inside dots' own data
+		// directory never reaches this point through `namespace add`
+		// (guarded at track time), but a manifest can still carry one —
+		// hand-edited, pulled from another machine, or rebuilt by
+		// recoverManifest — and reconcileNamespace is the only path that
+		// actually creates links for it, since it runs independently of
+		// engine.Preflight. Checked on the parent, not e.Dest itself: a
+		// correctly linked entry's Dest is a symlink whose target already
+		// lives inside the data directory by design, so resolving e.Dest
+		// itself would flag every healthy link. Reported and left alone,
+		// same as an occupied destination: never linked, never destroyed.
+		inside, err := paths.InsideDataDir(filepath.Dir(e.Dest))
+		if err != nil {
+			return nil, nil, err
+		}
+		if inside {
+			problems = append(problems, Problem{Repo: key.Repo, Namespace: key.Namespace, Entry: e.Name, Dest: e.Dest, Detail: "destination resolves inside dots' own data directory"})
+			continue
+		}
+
 		target := filepath.Join(namespaceDir, e.Name)
 
 		st, err := link.Classify(e.Dest, target)
