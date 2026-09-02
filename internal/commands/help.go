@@ -89,6 +89,13 @@ func HandleHelp(args []string) error {
 			gohelp.Item("namespace <ns> profiles <profile> add <entry>", "Override this entry here"),
 			gohelp.Item("namespace <ns> profiles <profile> rm <entry>", "Drop the override, back to main"),
 			gohelp.Item("namespace <ns> profiles <profile> list", "List what this profile overrides"),
+		).
+		Section("Shorthand",
+			gohelp.Item("<ns> p, <ns> profile", "Same as <ns> profiles"),
+			gohelp.Item("<ns> <profile>", "Switch to it"),
+			gohelp.Item("<ns> <profile> ls", "What this profile overrides"),
+			gohelp.Item("<ns> <profile> add|rm <entry>", "Override or drop the override"),
+			gohelp.Item("<ns> <profile> disable, <ns> main", "Back to main"),
 		)
 
 	gohelp.Run(append([]string{"help"}, args...), root, namespacePage, profilesPage)

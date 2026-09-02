@@ -33,9 +33,9 @@ func handleProfiles(namespace string, args []string, flags shared.Flags) error {
 	rest := args[1:]
 	if len(rest) == 0 {
 		if name == profile.Main {
-			return fmt.Errorf("usage: namespace %s profiles main <list|add|rm>", namespace)
+			return returnToMain(namespace, flags)
 		}
-		return fmt.Errorf("usage: namespace %s profiles %s <enable|disable|add|rm|list>", namespace, name)
+		return enableProfile(namespace, name, flags)
 	}
 
 	if name == profile.Main {
@@ -299,6 +299,26 @@ func disableProfile(namespaceName, name string, flags shared.Flags) error {
 		return err
 	}
 	reportProfile(ui.MarkerMaterialized, name, relinked)
+	return nil
+}
+
+// returnToMain implements bare `<ns> main`, the second spelling of
+// `profiles <profile> disable`: it names the layer being returned to rather
+// than the profile being left (concept.md "main"), and is a no-op, not an
+// error, when no profile is active.
+func returnToMain(namespaceName string, flags shared.Flags) error {
+	sc, err := scopeFor(namespaceName, flags)
+	if err != nil {
+		return err
+	}
+	if sc.active == "" {
+		return nil
+	}
+	relinked, err := sc.relink("")
+	if err != nil {
+		return err
+	}
+	reportProfile(ui.MarkerMaterialized, profile.Main, relinked)
 	return nil
 }
 

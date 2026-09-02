@@ -28,6 +28,14 @@ var VerbAliases = map[string]string{
 // Nouns introduce a subtree explicitly.
 var Nouns = []string{"namespace", "repo", "profiles"}
 
+// NounAliases maps a short or alternate spelling to its canonical noun. See
+// concept.md "Profile level": profiles is the one noun with short spellings,
+// since dots <ns> <profile> is the profile operation typed most often.
+var NounAliases = map[string]string{
+	"p":       "profiles",
+	"profile": "profiles",
+}
+
 // TopOnly are reserved words that are neither verbs nor nouns but still
 // occupy the top level: status aliases to list, sync has no target.
 var TopOnly = []string{"status", "sync"}
@@ -79,15 +87,29 @@ func Canonical(tok string) string {
 	return tok
 }
 
-// IsNoun reports whether tok explicitly introduces a subtree.
+// IsNoun reports whether tok explicitly introduces a subtree, in either its
+// canonical or aliased spelling.
 func IsNoun(tok string) bool {
-	return slices.Contains(Nouns, tok)
+	if slices.Contains(Nouns, tok) {
+		return true
+	}
+	_, ok := NounAliases[tok]
+	return ok
+}
+
+// CanonicalNoun returns tok's canonical noun spelling if tok is an alias,
+// otherwise tok unchanged.
+func CanonicalNoun(tok string) string {
+	if canon, ok := NounAliases[tok]; ok {
+		return canon
+	}
+	return tok
 }
 
 // IsReserved reports whether tok is any reserved word: a verb, a verb
-// alias, a noun, a repo-only verb, or a top-only word. Reserved words cannot
-// be used as namespace, repository, or profile names, because a name in
-// verb position descends the grammar.
+// alias, a noun, a noun alias, a repo-only verb, or a top-only word.
+// Reserved words cannot be used as namespace, repository, or profile names,
+// because a name in verb position descends the grammar.
 func IsReserved(tok string) bool {
 	return IsVerb(tok) || IsNoun(tok) || slices.Contains(RepoOnlyVerbs, tok) ||
 		slices.Contains(NamespaceOnlyVerbs, tok) || tok == "status" || tok == "sync"
@@ -113,6 +135,9 @@ func Reserved() []string {
 		all = append(all, alias)
 	}
 	all = append(all, Nouns...)
+	for alias := range NounAliases {
+		all = append(all, alias)
+	}
 	all = append(all, RepoOnlyVerbs...)
 	all = append(all, NamespaceOnlyVerbs...)
 	all = append(all, TopOnly...)

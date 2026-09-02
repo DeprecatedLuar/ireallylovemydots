@@ -40,14 +40,23 @@ func HandleNamespace(args []string, flags shared.Flags) error {
 		return renderNamespaceEntries(name, flags)
 	}
 
-	if rest[0] == "profiles" {
+	if grammar.CanonicalNoun(rest[0]) == "profiles" {
 		return handleProfiles(name, rest[1:], flags)
 	}
 
-	if !grammar.IsNamespaceVerb(rest[0]) {
-		return fmt.Errorf("unknown token %q after namespace %q", rest[0], name)
+	if grammar.IsNamespaceVerb(rest[0]) {
+		return handleNamespaceVerb(name, grammar.Canonical(rest[0]), rest[1:], flags)
 	}
-	return handleNamespaceVerb(name, grammar.Canonical(rest[0]), rest[1:], flags)
+
+	// Neither a namespace verb nor the profiles noun: the token can only be a
+	// profile name (concept.md "Profile level" shorthand, `dots <ns> <profile>`).
+	// handleProfiles already treats args[0] as a profile name, so the fallback
+	// is a plain handoff; a token that names no profile surfaces from there as
+	// an unknown name rather than an unknown token.
+	if err := refuseIfIgnored(name, flags); err != nil {
+		return err
+	}
+	return handleProfiles(name, rest, flags)
 }
 
 func handleNamespaceNounVerb(verb string, args []string, flags shared.Flags) error {
