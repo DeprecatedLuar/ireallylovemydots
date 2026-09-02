@@ -12,6 +12,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/namespace"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
+	"github.com/DeprecatedLuar/dotz/internal/profile"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
@@ -134,7 +135,7 @@ func namespaceRow(s state.State, repoName, nsName, namespaceDir string, entries 
 		marker = ui.MarkerEnabled
 	}
 
-	rows, _, _, err := namespaceProblems(namespaceDir, entries, stateEntry.Enabled)
+	rows, _, _, err := namespaceProblems(namespaceDir, entries, stateEntry.Enabled, stateEntry.ActiveProfile)
 	if err != nil {
 		return ui.Entry{}, err
 	}
@@ -194,8 +195,8 @@ func repoListing(repos []manifest.Repo) ([]ui.Entry, error) {
 // almost certainly a rename. Listing may suggest it — the one place a
 // listing prints more than a marker and a name." The suggestion is a plain
 // string for the caller to print as a tip; entryListing never prints.
-func entryListing(namespaceDir string, entries []manifest.Entry, enabled bool) (rows []ui.Entry, suggestion string, err error) {
-	rows, orphans, untracked, err := namespaceProblems(namespaceDir, entries, enabled)
+func entryListing(namespaceDir string, entries []manifest.Entry, enabled bool, activeProfile string) (rows []ui.Entry, suggestion string, err error) {
+	rows, orphans, untracked, err := namespaceProblems(namespaceDir, entries, enabled, activeProfile)
 	if err != nil {
 		return nil, "", err
 	}
@@ -212,7 +213,7 @@ func entryListing(namespaceDir string, entries []manifest.Entry, enabled bool) (
 // warning. orphans and untracked name the entries/payloads driving each half
 // of the rename suggestion; a caller that only needs the namespace-level "!"
 // rollup (namespaceRow) ignores them.
-func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bool) (rows []ui.Entry, orphans, untracked []string, err error) {
+func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bool, activeProfile string) (rows []ui.Entry, orphans, untracked []string, err error) {
 	report, err := namespace.Inspect(namespaceDir, entries)
 	if err != nil {
 		return nil, nil, nil, err
@@ -223,7 +224,7 @@ func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bo
 
 	rows = make([]ui.Entry, 0, len(entries)+len(report.Untracked))
 	for _, e := range entries {
-		rows = append(rows, classifyEntry(e, namespaceDir, enabled, invalid, orphaned))
+		rows = append(rows, classifyEntry(e, namespaceDir, enabled, activeProfile, invalid, orphaned))
 	}
 	for _, name := range report.Untracked {
 		rows = append(rows, ui.Entry{Marker: ui.MarkerUntracked, Name: name})
@@ -243,7 +244,7 @@ func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bo
 // and this one — self-heal itself now disables a namespace outright rather
 // than leaving a blocked destination "!" here, per concept.md
 // "Self-healing".
-func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, invalid, orphaned map[string]bool) ui.Entry {
+func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, activeProfile string, invalid, orphaned map[string]bool) ui.Entry {
 	if invalid[e.Name] {
 		return ui.Entry{Marker: ui.MarkerUntracked, Name: e.Name}
 	}
@@ -260,7 +261,10 @@ func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, invalid,
 	if !enabled {
 		return ui.Entry{Marker: ui.MarkerMaterialized, Name: e.Name}
 	}
-	payload := filepath.Join(namespaceDir, e.Name)
+	payload, sourceErr := profile.Source(namespaceDir, e.Name, activeProfile)
+	if sourceErr != nil {
+		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}
+	}
 	if st, classifyErr := link.Classify(e.Dest, payload); classifyErr != nil || st != link.CorrectSymlink {
 		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}
 	}

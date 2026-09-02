@@ -25,10 +25,6 @@ import (
 // namespace first (add, rm, list, edit, enable, disable, profiles). `add`
 // does not flip: its collection-level meaning (create) and member-level
 // meaning (track) are distinguished only by position.
-//
-// Enable, disable, and removal are built in later phases; here each such
-// verb validates what phase 2 owns (reserved names, argument shape) and
-// reports itself as not yet implemented.
 func HandleNamespace(args []string, flags shared.Flags) error {
 	if len(args) == 0 {
 		return renderNamespaceList()
@@ -517,9 +513,9 @@ func renderNamespaceEntries(name string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
-	enabled := s.Entries[state.Key{Repo: loc.Repo.Name, Namespace: name}].Enabled
+	stateEntry := s.Entries[state.Key{Repo: loc.Repo.Name, Namespace: name}]
 
-	rows, suggestion, err := entryListing(loc.Dir, m.Entries, enabled)
+	rows, suggestion, err := entryListing(loc.Dir, m.Entries, stateEntry.Enabled, stateEntry.ActiveProfile)
 	if err != nil {
 		return err
 	}
@@ -552,8 +548,4 @@ func NamespaceNames() ([]string, error) {
 		names = append(names, local...)
 	}
 	return names, nil
-}
-
-func errNotImplemented(what string) error {
-	return fmt.Errorf("%s: not yet implemented", what)
 }

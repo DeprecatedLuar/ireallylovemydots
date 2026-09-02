@@ -13,6 +13,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/namespace"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
+	"github.com/DeprecatedLuar/dotz/internal/profile"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/trash"
@@ -52,6 +53,10 @@ func rmEntry(name, path string, flags shared.Flags) error {
 		return fmt.Errorf("%s is not tracked in namespace %q", dest, name)
 	}
 
+	if err := clearProfileMembership(loc.Dir, name, entry.Name, flags); err != nil {
+		return err
+	}
+
 	if proceed, err := confirmRemoval("file", []ui.Entry{{Marker: ui.MarkerMaterialized, Name: entry.Name}}, flags); err != nil {
 		return err
 	} else if !proceed {
@@ -62,6 +67,36 @@ func rmEntry(name, path string, flags shared.Flags) error {
 	}
 	fmt.Print(ui.Report([]string{ui.Operation(ui.MarkerRemoved, entry.Name, "")}, ""))
 	return nil
+}
+
+// clearProfileMembership is the top of concept.md "Teardown"'s bottom-up
+// chain: an entry declared profiled cannot be untracked while the profile
+// layer still names it, so removal errors naming the step below it.
+// --force collapses the chain, dropping every override to the trash and
+// undeclaring the entry before the removal proceeds.
+func clearProfileMembership(namespaceDir, namespaceName, entryName string, flags shared.Flags) error {
+	pm, err := profile.Read(namespaceDir)
+	if err != nil {
+		return err
+	}
+	if !pm.HasEntry(entryName) {
+		return nil
+	}
+	if !flags.Force {
+		return fmt.Errorf("%q is profiled; run `dots namespace %s profiles main rm %s` first, or --force to collapse it",
+			entryName, namespaceName, entryName)
+	}
+
+	holding, err := profile.OverridingProfiles(namespaceDir, entryName)
+	if err != nil {
+		return err
+	}
+	for _, p := range holding {
+		if err := profile.DropOverride(namespaceDir, p, entryName); err != nil {
+			return err
+		}
+	}
+	return profile.Undeclare(namespaceDir, entryName)
 }
 
 // rmNamespaces implements `namespace rm <ns>...`: every named namespace is

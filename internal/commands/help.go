@@ -69,17 +69,25 @@ func HandleHelp(args []string) error {
 		)
 
 	profilesPage := gohelp.NewPage("profiles", "Profile commands").
-		Text("A per-file overlay within a namespace; the active profile overrides base "+
-			"on collision.").
+		Text("Per-entry variants within a namespace: main is the namespace root, and the "+
+			"active profile's overrides sit on top of it, one entry at a time.").
 		Section("Manage profiles",
-			gohelp.Item("namespace <ns> profiles add <profile>", "Create a profile"),
+			gohelp.Item("namespace <ns> profiles list", "List all profiles, active marked"),
+			gohelp.Item("namespace <ns> profiles add <profile>", "Create a profile, empty"),
+			gohelp.Item("namespace <ns> profiles add <profile> --from <source>", "Create it seeded from main or another profile"),
 			gohelp.Item("namespace <ns> profiles rm <profile>", "Remove a profile"),
-			gohelp.Item("namespace <ns> profiles list", "List all profiles"),
+			gohelp.Item("namespace <ns> profiles mv <profile> <new>", "Rename a profile"),
 			gohelp.Item("namespace <ns> profiles <profile> enable", "Switch to a profile"),
+			gohelp.Item("namespace <ns> profiles <profile> disable", "Back to main"),
+		).
+		Section("Membership",
+			gohelp.Item("namespace <ns> profiles main list", "Entries allowed to have overrides"),
+			gohelp.Item("namespace <ns> profiles main add <entry>", "Declare an entry profiled"),
+			gohelp.Item("namespace <ns> profiles main rm <entry>", "Undeclare it"),
 		).
 		Section("Profile contents",
-			gohelp.Item("namespace <ns> profiles <profile> add <file>", "Give a file a profile-specific variant"),
-			gohelp.Item("namespace <ns> profiles <profile> rm <file>", "Drop the variant, falls back to base"),
+			gohelp.Item("namespace <ns> profiles <profile> add <entry>", "Override this entry here"),
+			gohelp.Item("namespace <ns> profiles <profile> rm <entry>", "Drop the override, back to main"),
 			gohelp.Item("namespace <ns> profiles <profile> list", "List what this profile overrides"),
 		)
 

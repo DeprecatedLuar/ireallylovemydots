@@ -39,6 +39,38 @@ func RenderSelfHealFindings(f selfheal.Findings) {
 	}
 	renderDisabledBlock(f.Disabled)
 	renderRepairBlock(f.NeedsRepair)
+	renderProfileFindings(f.ProfileProblems, f.ProfileFallbacks)
+}
+
+// renderProfileFindings prints the .profiles/ reconciliation, per concept.md
+// "Self-healing" under Profiles: the drift cases are warnings in the "?"
+// tone, since both files involved are committed and neither side is at
+// fault, while a fallback to main is reported with the destinations it
+// relinked — it silently changes what sits at a destination, which is the
+// only reason it is worth a line at all.
+func renderProfileFindings(problems []selfheal.ProfileProblem, fallbacks []selfheal.ProfileFallback) {
+	for _, p := range problems {
+		fmt.Fprintln(os.Stderr, ui.WarningTone(fmt.Sprintf("? %s  %s", profileSubject(p), p.Detail)))
+	}
+	for _, f := range fallbacks {
+		fmt.Fprintln(os.Stderr, ui.WarningTone(fmt.Sprintf("! %s  profile %q no longer exists, fell back to main", f.Namespace, f.Profile)))
+		for _, dest := range f.Relinked {
+			fmt.Fprint(os.Stderr, ui.Sub(ui.MarkerEnabled, dest, "relinked"))
+		}
+	}
+}
+
+// profileSubject names what a profile problem is about, narrowing from the
+// namespace down to the exact override where the case has one.
+func profileSubject(p selfheal.ProfileProblem) string {
+	parts := []string{p.Namespace}
+	if p.Profile != "" {
+		parts = append(parts, p.Profile)
+	}
+	if p.Entry != "" {
+		parts = append(parts, p.Entry)
+	}
+	return strings.Join(parts, "/")
 }
 
 // renderDisabledBlock names every namespace Run auto-disabled this pass

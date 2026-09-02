@@ -160,6 +160,14 @@ func extractGlobalFlags(args []string) ([]string, shared.Flags, error) {
 			skipNext = true
 		case strings.HasPrefix(arg, "--repo="):
 			flags.Repo = strings.TrimPrefix(arg, "--repo=")
+		case arg == "--from":
+			if i+1 >= len(args) {
+				return nil, shared.Flags{}, fmt.Errorf("%s requires a value", arg)
+			}
+			flags.From = args[i+1]
+			skipNext = true
+		case strings.HasPrefix(arg, "--from="):
+			flags.From = strings.TrimPrefix(arg, "--from=")
 		case len(arg) > 1 && arg[0] == '-' && arg[1] != '-':
 			if err := applyShortCluster(arg[1:], &flags); err != nil {
 				return nil, shared.Flags{}, err

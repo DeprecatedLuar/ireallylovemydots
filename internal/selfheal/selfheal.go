@@ -19,6 +19,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/namespace"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
+	"github.com/DeprecatedLuar/dotz/internal/profile"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 )
 
@@ -114,6 +115,39 @@ type Findings struct {
 	// concept.md "Self-healing": "enabled means every entry's symlink is
 	// correct and healthy — nothing less."
 	Disabled []Disabled
+	// ProfileProblems names every .profiles/ inconsistency found this pass.
+	// Report-only: both .profiles/.dots and the namespace manifest are
+	// committed files, so a merge can leave them disagreeing with nobody at
+	// fault, and rewriting either one would be dots picking a side.
+	ProfileProblems []ProfileProblem
+	// ProfileFallbacks names every namespace whose active profile is no
+	// longer declared — the one .profiles/ case that acts rather than
+	// reports, since the alternative is leaving a destination linked to a
+	// profile that no longer exists.
+	ProfileFallbacks []ProfileFallback
+}
+
+// ProfileProblem is one .profiles/ inconsistency, per concept.md
+// "Self-healing" under Profiles. Profile and Entry are set only where the
+// case names one.
+type ProfileProblem struct {
+	Repo      string
+	Namespace string
+	Profile   string
+	Entry     string
+	Detail    string
+}
+
+// ProfileFallback records that a namespace's active profile is no longer
+// listed in its profile manifest — deleted on another machine and synced
+// here — so the namespace fell back to main. Relinked names the destinations
+// whose content the fallback changed, since that is what makes it worth
+// reporting at all.
+type ProfileFallback struct {
+	Repo      string
+	Namespace string
+	Profile   string
+	Relinked  []string
 }
 
 // Disabled records one namespace Run flipped to disabled this pass, by
@@ -210,6 +244,8 @@ func Run() (Findings, error) {
 	var recovered []Recovery
 	var repairs []Repair
 	var disabled []Disabled
+	var profileFindings []ProfileProblem
+	var fallbacks []ProfileFallback
 	changed := false
 	for key, entry := range s.Entries {
 		if !entry.Enabled {
@@ -282,6 +318,23 @@ func Run() (Findings, error) {
 			continue
 		}
 
+		profileProblems, fallback, profileErr := reconcileProfiles(key, namespaceDir, m.Entries, entry.ActiveProfile)
+		if profileErr != nil {
+			return Findings{}, profileErr
+		}
+		profileFindings = append(profileFindings, profileProblems...)
+		if fallback != nil {
+			// The active profile is gone from the manifest, so the entries it
+			// overrode must come back to main. Clearing it here, ahead of
+			// reconcileNamespace below, is what makes that pass compute the
+			// root payload as every destination's target and repoint the
+			// links that changed.
+			entry.ActiveProfile = ""
+			s.Entries[key] = entry
+			fallbacks = append(fallbacks, *fallback)
+			changed = true
+		}
+
 		report, inspectErr := namespace.Inspect(namespaceDir, m.Entries)
 		if inspectErr != nil {
 			return Findings{}, inspectErr
@@ -295,7 +348,7 @@ func Run() (Findings, error) {
 		// stale-link removal half of reconciliation is skipped for it this
 		// one run. Everything else (creating or repointing a link for an
 		// entry the recovered manifest does name) still runs normally.
-		linkedDests, nsProblems, reconcileErr := reconcileNamespace(key, namespaceDir, m.Entries, entry.LinkedDests, !exists)
+		linkedDests, nsProblems, reconcileErr := reconcileNamespace(key, namespaceDir, m.Entries, entry.LinkedDests, entry.ActiveProfile, !exists)
 		if reconcileErr != nil {
 			return Findings{}, reconcileErr
 		}
@@ -370,14 +423,114 @@ func Run() (Findings, error) {
 		}
 		return disabled[i].Namespace < disabled[j].Namespace
 	})
+	sort.Slice(profileFindings, func(i, j int) bool {
+		if profileFindings[i].Namespace != profileFindings[j].Namespace {
+			return profileFindings[i].Namespace < profileFindings[j].Namespace
+		}
+		return profileFindings[i].Detail < profileFindings[j].Detail
+	})
+	sort.Slice(fallbacks, func(i, j int) bool {
+		if fallbacks[i].Repo != fallbacks[j].Repo {
+			return fallbacks[i].Repo < fallbacks[j].Repo
+		}
+		return fallbacks[i].Namespace < fallbacks[j].Namespace
+	})
 	return Findings{
-		Problems:     problems,
-		Unregistered: unregistered,
-		Dropped:      dropped,
-		Recovered:    recovered,
-		NeedsRepair:  repairs,
-		Disabled:     disabled,
+		Problems:         problems,
+		Unregistered:     unregistered,
+		Dropped:          dropped,
+		Recovered:        recovered,
+		NeedsRepair:      repairs,
+		Disabled:         disabled,
+		ProfileProblems:  profileFindings,
+		ProfileFallbacks: fallbacks,
 	}, nil
+}
+
+// reconcileProfiles cross-checks one namespace's .profiles/ against its
+// namespace manifest and its active profile, per concept.md "Self-healing"
+// under Profiles. Five of the six cases are facts about two committed files
+// disagreeing, so they are reported and never written back; only a
+// no-longer-declared active profile is acted on, by falling back to main —
+// and even that touches nothing inside .profiles/, it only changes which
+// version this machine links.
+//
+// The two silent cases (a declared profile with no folder, a declared entry
+// no profile overrides) are normal and produce nothing at all.
+func reconcileProfiles(key state.Key, namespaceDir string, entries []manifest.Entry, activeProfile string) ([]ProfileProblem, *ProfileFallback, error) {
+	pm, err := profile.Read(namespaceDir)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tracked := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		tracked[e.Name] = true
+	}
+
+	var problems []ProfileProblem
+	for _, name := range pm.Entries {
+		if !tracked[name] {
+			problems = append(problems, ProfileProblem{Repo: key.Repo, Namespace: key.Namespace, Entry: name,
+				Detail: "declared profiled but not tracked by the namespace manifest"})
+		}
+	}
+
+	folders, err := profile.Folders(namespaceDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, folder := range folders {
+		if !pm.HasProfile(folder) {
+			problems = append(problems, ProfileProblem{Repo: key.Repo, Namespace: key.Namespace, Profile: folder,
+				Detail: "profile folder not declared in .profiles/.dots"})
+		}
+		overrides, err := profile.Overrides(namespaceDir, folder)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, name := range overrides {
+			if !pm.HasEntry(name) {
+				problems = append(problems, ProfileProblem{Repo: key.Repo, Namespace: key.Namespace, Profile: folder, Entry: name,
+					Detail: "override for an entry that is not declared profiled"})
+			}
+		}
+	}
+
+	if activeProfile == "" || pm.HasProfile(activeProfile) {
+		return problems, nil, nil
+	}
+
+	relinked, err := changedDestinations(namespaceDir, entries, activeProfile)
+	if err != nil {
+		return nil, nil, err
+	}
+	return problems, &ProfileFallback{Repo: key.Repo, Namespace: key.Namespace, Profile: activeProfile, Relinked: relinked}, nil
+}
+
+// changedDestinations names the destinations whose link target differs
+// between an active profile and main — what a fallback to main actually
+// changes on disk, as opposed to the entries that resolve to the root copy
+// either way.
+func changedDestinations(namespaceDir string, entries []manifest.Entry, activeProfile string) ([]string, error) {
+	var changed []string
+	for _, e := range entries {
+		if !e.HasDestination() {
+			continue
+		}
+		was, err := profile.Source(namespaceDir, e.Name, activeProfile)
+		if err != nil {
+			return nil, err
+		}
+		now, err := profile.Source(namespaceDir, e.Name, "")
+		if err != nil {
+			return nil, err
+		}
+		if was != now {
+			changed = append(changed, e.Dest)
+		}
+	}
+	return changed, nil
 }
 
 // recoverManifest rebuilds a namespace's manifest when its .dots file is
@@ -466,7 +619,7 @@ func cleanStrandedLinks(dataDir string, key state.Key, dests []string) []Problem
 // missing an entry the previous one had, and "not named by the manifest" is
 // only trustworthy evidence of a real removal when the manifest itself was
 // never in doubt.
-func reconcileNamespace(key state.Key, namespaceDir string, entries []manifest.Entry, recorded []string, skipStaleRemoval bool) ([]string, []Problem, error) {
+func reconcileNamespace(key state.Key, namespaceDir string, entries []manifest.Entry, recorded []string, activeProfile string, skipStaleRemoval bool) ([]string, []Problem, error) {
 	current := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		if e.HasDestination() {
@@ -516,7 +669,10 @@ func reconcileNamespace(key state.Key, namespaceDir string, entries []manifest.E
 			continue
 		}
 
-		target := filepath.Join(namespaceDir, e.Name)
+		target, err := profile.Source(namespaceDir, e.Name, activeProfile)
+		if err != nil {
+			return nil, nil, err
+		}
 
 		st, err := link.Classify(e.Dest, target)
 		if err != nil {

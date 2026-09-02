@@ -93,6 +93,19 @@ func IsReserved(tok string) bool {
 		slices.Contains(NamespaceOnlyVerbs, tok) || tok == "status" || tok == "sync"
 }
 
+// ProfileMain is the name of the unprofiled layer — the namespace root. It
+// is reserved at the profile level only: it takes the membership verbs and
+// serves as a --from source, but no profile may be called it (concept.md
+// "main"). A namespace or repository named "main" stays legal, since the
+// name means nothing at those levels.
+const ProfileMain = "main"
+
+// IsReservedProfile reports whether tok is reserved as a profile name: every
+// ordinary reserved word, plus main.
+func IsReservedProfile(tok string) bool {
+	return IsReserved(tok) || tok == ProfileMain
+}
+
 // Reserved returns every reserved word, sorted, for error messages.
 func Reserved() []string {
 	all := append([]string{}, Verbs...)

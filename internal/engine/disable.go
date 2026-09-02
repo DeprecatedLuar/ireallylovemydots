@@ -35,6 +35,9 @@ func Disable(key state.Key, s state.State) error {
 		}
 	}
 
-	s.Entries[key] = state.Entry{Enabled: false}
+	// The active profile is kept: disable removes symlinks, it does not
+	// forget which version of an entry belongs at a destination, so
+	// re-enabling puts back exactly what was linked before.
+	s.Entries[key] = state.Entry{Enabled: false, ActiveProfile: entry.ActiveProfile}
 	return state.Write(s)
 }

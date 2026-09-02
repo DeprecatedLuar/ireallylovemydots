@@ -10,6 +10,7 @@ import (
 
 	"github.com/DeprecatedLuar/dotz/internal/link"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
+	"github.com/DeprecatedLuar/dotz/internal/profile"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/trash"
@@ -219,7 +220,11 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 			rollback()
 			return nil, fmt.Errorf("create parent directory for %s: %w", e.Dest, err)
 		}
-		payload := filepath.Join(namespaceDir, e.Name)
+		payload, err := profile.Source(namespaceDir, e.Name, s.Entries[key].ActiveProfile)
+		if err != nil {
+			rollback()
+			return nil, err
+		}
 		if err := link.Create(e.Dest, payload); err != nil {
 			rollback()
 			return nil, err
@@ -233,7 +238,10 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 			dests = append(dests, e.Dest)
 		}
 	}
-	s.Entries[key] = state.Entry{Enabled: true, LinkedDests: dests}
+	// The active profile survives enable and disable alike: it says which
+	// version of an entry belongs at a destination, not whether anything is
+	// linked, so re-enabling a namespace must put back what was there before.
+	s.Entries[key] = state.Entry{Enabled: true, ActiveProfile: s.Entries[key].ActiveProfile, LinkedDests: dests}
 	if err := state.Write(s); err != nil {
 		rollback()
 		return nil, err

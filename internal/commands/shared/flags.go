@@ -14,4 +14,7 @@ type Flags struct {
 	Bootstrap bool
 	Install   bool
 	Restore   bool
+	// From is --from's value: the profile (or main) a new profile is seeded
+	// from, per concept.md "Profile level". Empty means an empty profile.
+	From string
 }

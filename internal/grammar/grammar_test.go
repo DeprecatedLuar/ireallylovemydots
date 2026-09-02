@@ -84,3 +84,17 @@ func TestInstallUninstallAreReserved(t *testing.T) {
 		}
 	}
 }
+
+// main is reserved for profiles only: it names the namespace root there, but
+// means nothing at the namespace or repository level.
+func TestIsReservedProfile_MainOnlyAtTheProfileLevel(t *testing.T) {
+	if !IsReservedProfile("main") {
+		t.Fatal("main should be reserved as a profile name")
+	}
+	if IsReserved("main") {
+		t.Fatal("main should stay legal as a namespace or repository name")
+	}
+	if !IsReservedProfile("enable") {
+		t.Fatal("ordinary reserved words stay reserved at the profile level")
+	}
+}

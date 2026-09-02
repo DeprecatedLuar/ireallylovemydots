@@ -16,9 +16,14 @@ import (
 // constant is unexported, and internal/repo/catalogue.go keeps its own copy
 // of ".dots" for the same reason: not worth a cross-package export for one
 // string each.
+// profilesDir is the third: a namespace's profile layer is dots' own
+// plumbing, not tracked content — concept.md reserves the dot-prefixed names
+// .dots and .profiles inside a namespace. Its own contents are reconciled by
+// self-heal's profile pass, not by this walk.
 const (
 	dotsManifestFile = ".dots"
 	gitignoreFile    = ".gitignore"
+	profilesDir      = ".profiles"
 )
 
 // Report is what one namespace folder holds, checked against its manifest —
@@ -73,7 +78,7 @@ func Inspect(nsDir string, entries []manifest.Entry) (Report, error) {
 	var untracked []string
 	for _, de := range dirEntries {
 		name := de.Name()
-		if name == dotsManifestFile || name == gitignoreFile || tracked[name] {
+		if name == dotsManifestFile || name == gitignoreFile || name == profilesDir || tracked[name] {
 			continue
 		}
 		untracked = append(untracked, name)

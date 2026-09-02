@@ -389,7 +389,7 @@ func TestHandleList_StatusAliasIsByteIdentical(t *testing.T) {
 // concept.md "Manual edits": invalid, not pending.
 func TestClassifyEntry_EmptyDestinationMarksUntracked(t *testing.T) {
 	invalid := map[string]bool{"cfg": true}
-	row := classifyEntry(manifest.Entry{Name: "cfg", Dest: ""}, t.TempDir(), true, invalid, nil)
+	row := classifyEntry(manifest.Entry{Name: "cfg", Dest: ""}, t.TempDir(), true, "", invalid, nil)
 	if row.Marker != ui.MarkerUntracked {
 		t.Fatalf("expected marker %q, got %q", ui.MarkerUntracked, row.Marker)
 	}
@@ -401,7 +401,7 @@ func TestClassifyEntry_EmptyDestinationMarksUntracked(t *testing.T) {
 func TestClassifyEntry_MissingPayloadIsOrphan(t *testing.T) {
 	nsDir := t.TempDir()
 	orphaned := map[string]bool{"gone": true}
-	row := classifyEntry(manifest.Entry{Name: "gone", Dest: "/tmp/whatever"}, nsDir, true, nil, orphaned)
+	row := classifyEntry(manifest.Entry{Name: "gone", Dest: "/tmp/whatever"}, nsDir, true, "", nil, orphaned)
 	if row.Marker != ui.MarkerProblem {
 		t.Fatalf("expected marker %q, got %q", ui.MarkerProblem, row.Marker)
 	}
@@ -415,7 +415,7 @@ func TestEntryListing_UntrackedPayloadMarked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows, _, err := entryListing(nsDir, nil, false)
+	rows, _, err := entryListing(nsDir, nil, false, "")
 	if err != nil {
 		t.Fatalf("entryListing: %v", err)
 	}
@@ -434,7 +434,7 @@ func TestEntryListing_OrphanAndUntrackedSuggestRename(t *testing.T) {
 	}
 	entries := []manifest.Entry{{Name: "oldname", Dest: "/tmp/oldname-dest"}}
 
-	rows, suggestion, err := entryListing(nsDir, entries, false)
+	rows, suggestion, err := entryListing(nsDir, entries, false, "")
 	if err != nil {
 		t.Fatalf("entryListing: %v", err)
 	}
