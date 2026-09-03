@@ -248,7 +248,7 @@ func TestRmEntry_ProfiledEntry_NamesMainRm(t *testing.T) {
 		}
 	})
 
-	err := rmEntry("editors", entries[0].Dest, shared.Flags{Yes: true})
+	err := rmEntry("editors", []string{entries[0].Name}, shared.Flags{Yes: true})
 	if err == nil {
 		t.Fatal("expected an error for a profiled entry")
 	}

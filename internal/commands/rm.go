@@ -28,44 +28,60 @@ const (
 	choiceCancel = "c"
 )
 
-// rmEntry implements `namespace <ns> rm <path>`, per concept.md "Removal":
-// the entry leaves the manifest and its symlink comes down. By default the
-// payload goes to the trash and nothing is written to the home directory;
-// --restore writes it back to its destination as a real file first;
-// --purge erases instead of trashing, after a successful --restore when
-// both are given.
-func rmEntry(name, path string, flags shared.Flags) error {
+// rmEntry implements `namespace <ns> rm <name>...`, per concept.md
+// "Removal": each entry leaves the manifest and its symlink comes down. By
+// default the payload goes to the trash and nothing is written to the home
+// directory; --restore writes it back to its destination as a real file
+// first; --purge erases instead of trashing, after a successful --restore
+// when both are given.
+//
+// names are matched against manifest.Entry.Name — the identifier every
+// listing (`dots <ns>`) already shows — not resolved as filesystem paths.
+// An entry's Dest can be manifest.DestNone (deliberately never linked
+// anywhere), which has no filesystem path at all, so name is the only
+// identifier that works for every entry, not just linked ones.
+func rmEntry(name string, names []string, flags shared.Flags) error {
 	loc, err := resolveNamespace(name, flags)
 	if err != nil {
 		return err
-	}
-	dest, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("resolve absolute path for %s: %w", path, err)
 	}
 
 	m, err := manifest.Read(loc.Dir)
 	if err != nil {
 		return err
 	}
-	entry, ok := entryByDest(m, dest)
-	if !ok {
-		return fmt.Errorf("%s is not tracked in namespace %q", dest, name)
+	entries := make([]manifest.Entry, 0, len(names))
+	for _, n := range names {
+		entry, ok := entryByName(m, n)
+		if !ok {
+			return fmt.Errorf("%q is not tracked in namespace %q", n, name)
+		}
+		entries = append(entries, entry)
 	}
 
-	if err := clearProfileMembership(loc.Dir, name, entry.Name, flags); err != nil {
-		return err
+	for _, entry := range entries {
+		if err := clearProfileMembership(loc.Dir, name, entry.Name, flags); err != nil {
+			return err
+		}
 	}
 
-	if proceed, err := confirmRemoval("file", []ui.Entry{{Marker: ui.MarkerMaterialized, Name: entry.Name}}, flags); err != nil {
+	rows := make([]ui.Entry, len(entries))
+	for i, entry := range entries {
+		rows[i] = ui.Entry{Marker: ui.MarkerMaterialized, Name: entry.Name}
+	}
+	if proceed, err := confirmRemoval("file", rows, flags); err != nil {
 		return err
 	} else if !proceed {
 		return nil
 	}
-	if err := removeEntries(loc, name, []manifest.Entry{entry}, flags); err != nil {
+	if err := removeEntries(loc, name, entries, flags); err != nil {
 		return err
 	}
-	fmt.Print(ui.Report([]string{ui.Operation(ui.MarkerRemoved, entry.Name, "")}, ""))
+	lines := make([]string, len(entries))
+	for i, entry := range entries {
+		lines[i] = ui.Operation(ui.MarkerRemoved, entry.Name, "")
+	}
+	fmt.Print(ui.Report(lines, ""))
 	return nil
 }
 
@@ -278,6 +294,24 @@ func rmNamespaceAt(loc namespace.Located, nsName string, flags shared.Flags) err
 	if err != nil {
 		return fmt.Errorf("trash namespace %s: %w", loc.Dir, err)
 	}
+
+	// Stage the removal in the index right away — see git.StagePath's doc
+	// comment for why this can't wait for the next `sync`. This only
+	// records the removal locally; `sync` is still the verb that commits
+	// and pushes it, per concept.md "Git safety on removal": "Removal
+	// never commits or pushes on the user's behalf." A repository that is
+	// not actually a git repository has no index to stage anything into —
+	// out of scope here exactly as it is for git.Status, which treats that
+	// case as nothing to report rather than an error.
+	repoDir := filepath.Dir(loc.Dir)
+	if isRepo, err := repo.IsGitRepo(repoDir); err != nil {
+		return err
+	} else if isRepo {
+		if err := git.StagePath(repoDir, nsName); err != nil {
+			return err
+		}
+	}
+
 	if flags.Purge {
 		return trash.Purge(trashName)
 	}
@@ -553,9 +587,9 @@ func renderRestoreProblems(problems []engine.RestoreProblem) string {
 	return strings.Join(lines, "\n")
 }
 
-func entryByDest(m manifest.Manifest, dest string) (manifest.Entry, bool) {
+func entryByName(m manifest.Manifest, name string) (manifest.Entry, bool) {
 	for _, e := range m.Entries {
-		if e.Dest == dest {
+		if e.Name == name {
 			return e, true
 		}
 	}

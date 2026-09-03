@@ -153,7 +153,15 @@ func fetch(dir, branch string) error {
 // per concept.md "Sync": "Committing everything is safe on a partially
 // installed repository. Under a cone sparse checkout the uninstalled
 // namespaces are marked skip-worktree, and `git add -A` does not stage
-// deletions for them." A clean tree is a no-op, not an empty commit.
+// deletions for them." That guarantee covers a namespace correctly
+// excluded from the cone — it does not extend to a working tree that has
+// drifted from the cone (a namespace folder present but outside it, or a
+// name in the cone with no folder on disk): `git add -A` exits nonzero for
+// the former and would otherwise stage the latter's namespace as a
+// deletion to commit. Sync relies on self-heal's cone reconciliation
+// (internal/repo.ReconcileCone, run ahead of every invocation) to have
+// already settled that before this ever runs. A clean tree is a no-op, not
+// an empty commit.
 func commitTrackedChanges(dir string) error {
 	if out, err := gitCmd(dir, "add", "-A"); err != nil {
 		return fmt.Errorf("stage changes in %s: %s", dir, strings.TrimSpace(out))

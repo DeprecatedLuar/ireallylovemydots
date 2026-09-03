@@ -49,6 +49,27 @@ func isRebaseInProgress(dir string) bool {
 	return false
 }
 
+// StagePath stages every change under path within dir's index — additions,
+// edits, and deletions alike — scoped so it never touches unrelated
+// uncommitted work elsewhere in the repository. `namespace rm` uses this to
+// record a namespace's removal in the index immediately, at trash time,
+// rather than leaving its absence to be discovered — and possibly
+// misread — by a later pass: self-heal's sparse-checkout cone
+// reconciliation runs ahead of every subsequent invocation and would
+// otherwise have no way to tell an explicit removal apart from a namespace
+// folder deleted by hand, which concept.md's "Sparse checkout" says must
+// read as merely uninstalled. An already-staged deletion settles that
+// ahead of time: reconciling the cone around it — even before the next
+// `sync` commits it — never disturbs a staged change, verified in
+// repo.ReconcileCone's own tests.
+func StagePath(dir, path string) error {
+	out, err := gitCmd(dir, "add", "-A", "--", path)
+	if err != nil {
+		return fmt.Errorf("stage %s in %s: %s", path, dir, strings.TrimSpace(out))
+	}
+	return nil
+}
+
 // resolveRef resolves ref to its commit hash in dir.
 func resolveRef(dir, ref string) (string, error) {
 	out, err := gitCmd(dir, "rev-parse", "--verify", ref)

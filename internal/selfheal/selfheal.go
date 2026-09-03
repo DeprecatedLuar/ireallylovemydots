@@ -20,6 +20,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/namespace"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
 	"github.com/DeprecatedLuar/dotz/internal/profile"
+	"github.com/DeprecatedLuar/dotz/internal/repo"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 )
 
@@ -125,6 +126,27 @@ type Findings struct {
 	// reports, since the alternative is leaving a destination linked to a
 	// profile that no longer exists.
 	ProfileFallbacks []ProfileFallback
+	// ConeRepaired lists every repository whose sparse-checkout cone Run
+	// brought back in line with what is actually on disk this pass — see
+	// ConeRepaired's doc comment. Reported, not silent: it is the
+	// correction that stands between an ordinary `sync` and staging a
+	// namespace's removal from the repository by mistake.
+	ConeRepaired []ConeRepaired
+}
+
+// ConeRepaired records that one repository's sparse-checkout cone was
+// reconciled against its working tree this pass, via repo.ReconcileCone:
+// a namespace folder created or renamed straight on the worktree
+// (namespace.Create, namespace.Rename never extend the cone themselves)
+// added to the cone so it can finally be staged, or a namespace removed by
+// hand added its name back to Removed so its absence reads as "not
+// installed here" rather than a deletion to commit — concept.md "Sparse
+// checkout": an unconverted repository "stages the removal of everything
+// the user has not installed."
+type ConeRepaired struct {
+	Repo    string
+	Added   []string
+	Removed []string
 }
 
 // ProfileProblem is one .profiles/ inconsistency, per concept.md
@@ -238,6 +260,41 @@ func Run() (Findings, error) {
 		}
 	}
 	sort.Strings(unregistered)
+
+	// Repository manifest corrects the working tree, one level above any
+	// single namespace: a registered repository's cone must match what is
+	// actually on disk, or git either refuses to stage a namespace created
+	// straight on the worktree or reads one removed by hand as a deletion
+	// to commit. Runs for every registered repository still present,
+	// independent of any namespace's enabled state — see ConeRepaired. A
+	// registered directory that is not actually a git repository has no
+	// cone to reconcile at all; left alone exactly like an unregistered
+	// directory above, since nothing else in this pass validates that
+	// either — it reads manifests and state through plain file ops, never
+	// through git.
+	var coneRepairs []ConeRepaired
+	repoNames := make([]string, 0, len(reg.Repos))
+	for _, r := range reg.Repos {
+		repoNames = append(repoNames, r.Name)
+	}
+	sort.Strings(repoNames)
+	for _, name := range repoNames {
+		if !present[name] {
+			continue
+		}
+		if isRepo, err := repo.IsGitRepo(registered[name]); err != nil {
+			return Findings{}, err
+		} else if !isRepo {
+			continue
+		}
+		added, removed, err := repo.ReconcileCone(registered[name])
+		if err != nil {
+			return Findings{}, err
+		}
+		if len(added) > 0 || len(removed) > 0 {
+			coneRepairs = append(coneRepairs, ConeRepaired{Repo: name, Added: added, Removed: removed})
+		}
+	}
 
 	var problems []Problem
 	var dropped []state.Key
@@ -444,6 +501,7 @@ func Run() (Findings, error) {
 		Disabled:         disabled,
 		ProfileProblems:  profileFindings,
 		ProfileFallbacks: fallbacks,
+		ConeRepaired:     coneRepairs,
 	}, nil
 }
 

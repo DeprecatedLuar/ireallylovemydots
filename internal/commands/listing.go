@@ -267,7 +267,10 @@ func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bo
 // classifyEntry decides one tracked entry's listing marker, per concept.md
 // "Manual edits": "?" for an entry with an empty destination — invalid, not
 // pending — "!" for an orphan (its payload is gone from the namespace), "+"
-// for a correctly linked entry in an enabled namespace, "-" otherwise.
+// for a correctly linked entry in an enabled namespace, "-" otherwise. The
+// invalid and orphan rows carry a detail suffix (ui.DetailSep, the same
+// "<name>    <detail>" shape blockedEntry below uses) naming what's actually
+// wrong, since neither is diagnosable from the bare marker alone.
 // invalid and orphaned are namespaceProblems' sets from namespace.Inspect's
 // facts; this function only decides the marker, and additionally runs the
 // link-classification check Inspect deliberately leaves out (it needs
@@ -288,10 +291,10 @@ func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bo
 // untracked entry, not an occupied destination on an ordinary disabled one.
 func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, activeProfile string, invalid, orphaned map[string]bool, diagnoseOccupancy bool) ui.Entry {
 	if invalid[e.Name] {
-		return ui.Entry{Marker: ui.MarkerUntracked, Name: e.Name}
+		return ui.Entry{Marker: ui.MarkerUntracked, Name: e.Name + ui.DetailSep + "destination not set"}
 	}
 	if orphaned[e.Name] {
-		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}
+		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name + ui.DetailSep + "payload missing from repo"}
 	}
 	if e.Dest == manifest.DestNone {
 		// Deliberately unlinked — nothing to classify against the

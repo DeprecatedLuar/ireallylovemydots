@@ -253,25 +253,15 @@ func bootstrapAdd(dest, url string, entries []repo.RootEntry) (converted bool, s
 	// CheckoutAll materialized the whole tree, undoing Clone's empty sparse
 	// cone; the newly created namespace folders are exactly what belongs in
 	// the cone now that they exist, per concept.md "Sparse checkout":
-	// everything present is installed by definition.
-	if err := repo.EnsureSparse(dest, namespaceNames(postEntries)); err != nil {
+	// everything present is installed by definition. ReconcileCone reads
+	// the cone from disk itself rather than trusting postEntries' HasDots
+	// filter, which is what left krita-config's cone empty in the field —
+	// a directory without a manifest still needs to be in the cone for git
+	// to stage around it.
+	if _, _, err := repo.ReconcileCone(dest); err != nil {
 		return false, repo.StateIncompatible, err
 	}
 	return true, state, nil
-}
-
-// namespaceNames returns the names of every root entry that holds a .dots
-// manifest, per concept.md "Namespace" — the set repo init and bootstrap
-// pass to EnsureSparse as the cone, since everything already on disk after
-// their conversion is installed by definition.
-func namespaceNames(entries []repo.RootEntry) []string {
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if e.HasDots {
-			names = append(names, e.Name)
-		}
-	}
-	return names
 }
 
 // planBootstrap builds and previews a --bootstrap conversion of entries
@@ -430,7 +420,6 @@ func initRepo(pathArg string, flags shared.Flags) error {
 		return err
 	}
 
-	cone := namespaceNames(entries)
 	if plan != nil {
 		if err := repo.Apply(dest, plan); err != nil {
 			return err
@@ -446,14 +435,13 @@ func initRepo(pathArg string, flags shared.Flags) error {
 		if state != repo.StateNamespaces {
 			return fmt.Errorf("--bootstrap conversion of %s produced no usable namespaces", srcPath)
 		}
-		cone = namespaceNames(postEntries)
 	}
 
 	// repo init takes a folder whose content is already on disk in full, so
-	// its cone is set to every namespace present — everything present is
-	// installed by definition, per concept.md "Sparse checkout".
+	// its cone is set to every top-level directory present — everything
+	// present is installed by definition, per concept.md "Sparse checkout".
 	if state == repo.StateNamespaces {
-		if err := repo.EnsureSparse(dest, cone); err != nil {
+		if _, _, err := repo.ReconcileCone(dest); err != nil {
 			return err
 		}
 	}

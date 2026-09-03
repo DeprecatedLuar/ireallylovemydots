@@ -148,10 +148,10 @@ func handleNamespaceVerb(name, verb string, args []string, flags shared.Flags) e
 	case "add":
 		return trackPaths(name, args, flags)
 	case "rm":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: namespace %s rm <path>", name)
+		if len(args) == 0 {
+			return fmt.Errorf("usage: namespace %s rm <name>...", name)
 		}
-		return rmEntry(name, args[0], flags)
+		return rmEntry(name, args, flags)
 	case "list":
 		return renderNamespaceEntries(name, flags)
 	case "edit":

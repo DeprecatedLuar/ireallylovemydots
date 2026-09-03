@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/DeprecatedLuar/dotz/internal/grammar"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
 )
@@ -47,6 +48,9 @@ func Add(namespaceDir, path string) error {
 	}
 
 	name := filepath.Base(dest)
+	if grammar.IsReserved(name) {
+		return fmt.Errorf("refusing to track %s: %q is a reserved word and cannot be an entry name", dest, name)
+	}
 	m, err := manifest.Read(namespaceDir)
 	if err != nil {
 		return err

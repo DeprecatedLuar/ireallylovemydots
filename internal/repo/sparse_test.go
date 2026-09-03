@@ -2,9 +2,31 @@ package repo
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// runGit runs a git command in dir and returns its combined output without
+// failing the test — for assertions that need to see a command's error
+// rather than treat it as fatal, unlike gitRun.
+func runGit(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// runGitOK runs a git command expected to succeed, failing the test with
+// its output if it does not.
+func runGitOK(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
+	out, err := runGit(dir, args...)
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+	return out, nil
+}
 
 // newMultiNamespaceRepo builds a source repository with count namespace
 // folders (ns1, ns2, ...), each holding a .dots manifest and one file, plus
@@ -242,5 +264,232 @@ func TestList_ReflectsAddedNamespaces(t *testing.T) {
 	}
 	if !got["ns1"] || !got["ns3"] || got["ns2"] {
 		t.Fatalf("List = %v, want exactly [ns1 ns3]", cone)
+	}
+}
+
+// TestReconcileCone_AddsDirCreatedOutsideTheCone covers the internal
+// namespace.Create/Rename bug: a directory materialized straight on the
+// worktree, never through Add, is outside the cone and git refuses to
+// stage it at all until the cone catches up.
+func TestReconcileCone_AddsDirCreatedOutsideTheCone(t *testing.T) {
+	source := newMultiNamespaceRepo(t, 1)
+	dest := sparseClone(t, source)
+	if err := Add(dest, "ns1"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// Namespace created straight on the worktree, bypassing Add — the
+	// namespace.Create bug this reproduces.
+	newNS := filepath.Join(dest, "ns2")
+	if err := os.MkdirAll(newNS, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(newNS, ".dots"), []byte("[]"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runGit(dest, "add", "-A"); err == nil {
+		t.Fatalf("expected git add -A to refuse ns2 outside the cone before reconciling, got clean: %s", out)
+	}
+
+	added, removed, err := ReconcileCone(dest)
+	if err != nil {
+		t.Fatalf("ReconcileCone: %v", err)
+	}
+	if len(added) != 1 || added[0] != "ns2" {
+		t.Fatalf("added = %v, want [ns2]", added)
+	}
+	if len(removed) != 0 {
+		t.Fatalf("removed = %v, want none", removed)
+	}
+
+	if _, err := runGit(dest, "add", "-A"); err != nil {
+		t.Fatalf("git add -A after ReconcileCone should succeed: %v", err)
+	}
+	status := gitStatusPorcelain(t, dest)
+	if !strings.Contains(status, "ns2/.dots") {
+		t.Fatalf("status = %q, want ns2/.dots staged", status)
+	}
+}
+
+// TestReconcileCone_DropsHandDeletedNamespace covers a namespace installed
+// on this machine (in the cone) whose folder was then removed by hand,
+// outside dots — the exact shape that staged 191 deletions in the field.
+// Per the accepted design, a hand-deleted folder reads as "uninstalled,"
+// never "removed from the repository": ReconcileCone drops it from the
+// cone so its absence stops reading as a deletion, and the repository's
+// copy is untouched.
+func TestReconcileCone_DropsHandDeletedNamespace(t *testing.T) {
+	source := newMultiNamespaceRepo(t, 2)
+	dest := sparseClone(t, source)
+	if err := Add(dest, "ns1", "ns2"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	if err := os.RemoveAll(filepath.Join(dest, "ns2")); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runGit(dest, "add", "-A"); err != nil {
+		t.Fatalf("git add -A before reconciling: %v: %s", err, out)
+	}
+	if status := gitStatusPorcelain(t, dest); status == "" {
+		t.Fatal("expected the hand-deleted namespace to stage as a deletion before ReconcileCone runs")
+	}
+	if out, err := runGit(dest, "reset"); err != nil {
+		t.Fatalf("git reset: %v: %s", err, out)
+	}
+
+	added, removed, err := ReconcileCone(dest)
+	if err != nil {
+		t.Fatalf("ReconcileCone: %v", err)
+	}
+	if len(added) != 0 {
+		t.Fatalf("added = %v, want none", added)
+	}
+	if len(removed) != 1 || removed[0] != "ns2" {
+		t.Fatalf("removed = %v, want [ns2]", removed)
+	}
+
+	if out, err := runGit(dest, "add", "-A"); err != nil {
+		t.Fatalf("git add -A after ReconcileCone: %v: %s", err, out)
+	}
+	if status := gitStatusPorcelain(t, dest); status != "" {
+		t.Fatalf("status after ReconcileCone = %q, want clean (no staged deletion)", status)
+	}
+	if out, err := runGit(dest, "ls-tree", "HEAD", "ns2"); err != nil || out == "" {
+		t.Fatalf("expected ns2 to remain in HEAD after the cone drop, ls-tree = %q, err = %v", out, err)
+	}
+}
+
+// TestReconcileCone_StagedRemovalSurvives covers namespace rm's mechanism:
+// once a namespace's deletion is already staged (git add -A on that path
+// alone, before ReconcileCone ever runs), shrinking the cone around it
+// must not disturb the staged deletion or touch any other namespace's
+// uncommitted work.
+func TestReconcileCone_StagedRemovalSurvives(t *testing.T) {
+	source := newMultiNamespaceRepo(t, 2)
+	dest := sparseClone(t, source)
+	if err := Add(dest, "ns1", "ns2"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// Unrelated dirt in ns1 that must never be touched by ns2's removal.
+	if err := os.WriteFile(filepath.Join(dest, "ns1", "file.txt"), []byte("dirty\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.RemoveAll(filepath.Join(dest, "ns2")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runGit(dest, "add", "-A", "--", "ns2"); err != nil {
+		t.Fatalf("stage ns2 removal: %v", err)
+	}
+
+	added, removed, err := ReconcileCone(dest)
+	if err != nil {
+		t.Fatalf("ReconcileCone: %v", err)
+	}
+	_ = added
+
+	staged, err := runGitOK(t, dest, "diff", "--cached", "--name-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(staged, "ns2/file.txt") {
+		t.Fatalf("staged = %q, want ns2's staged deletion preserved", staged)
+	}
+	if strings.Contains(staged, "ns1") {
+		t.Fatalf("staged = %q, want ns1 untouched by ns2's removal", staged)
+	}
+	unstaged, err := runGitOK(t, dest, "diff", "--name-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(unstaged, "ns1/file.txt") {
+		t.Fatalf("unstaged = %q, want ns1's dirt left unstaged", unstaged)
+	}
+	_ = removed
+
+	if out, err := runGit(dest, "commit", "-q", "-m", "rm ns2"); err != nil {
+		t.Fatalf("commit: %v: %s", err, out)
+	}
+	if out, _ := runGit(dest, "ls-tree", "HEAD", "ns2"); out != "" {
+		t.Fatalf("expected ns2 fully removed from HEAD, ls-tree = %q", out)
+	}
+	content, err := os.ReadFile(filepath.Join(dest, "ns1", "file.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "dirty\n" {
+		t.Fatalf("ns1/file.txt = %q, want unrelated dirt preserved", content)
+	}
+}
+
+// TestReconcileCone_NoOpWhenAlreadyMatched covers the common case: an
+// already-sparse repository whose cone matches disk exactly reports no
+// change and does not touch the working tree.
+func TestReconcileCone_NoOpWhenAlreadyMatched(t *testing.T) {
+	source := newMultiNamespaceRepo(t, 2)
+	dest := sparseClone(t, source)
+	if err := Add(dest, "ns1"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	added, removed, err := ReconcileCone(dest)
+	if err != nil {
+		t.Fatalf("ReconcileCone: %v", err)
+	}
+	if added != nil || removed != nil {
+		t.Fatalf("added=%v removed=%v, want both nil when the cone already matches disk", added, removed)
+	}
+}
+
+// TestReconcileCone_ConvertsEmptyConeWithFullTree reproduces the
+// krita-config field bug: bootstrap's CheckoutAll materialized the whole
+// tree, but the cone it computed afterward came out empty (a directory
+// with uncommitted/untracked changes CheckoutAll's re-sparsify silently
+// failed to strip), leaving an active-but-empty cone alongside a fully
+// checked-out tree. ReconcileCone must read the cone from what is
+// actually on disk rather than trust an empty cone as correct.
+func TestReconcileCone_ConvertsEmptyConeWithFullTree(t *testing.T) {
+	source := newMultiNamespaceRepo(t, 1)
+	dest := t.TempDir()
+	gitRun(t, "", "clone", "file://"+source, dest)
+
+	// The condition that actually produced the field bug: uncommitted work
+	// in ns1 that blocks git's sparsify-on-init from stripping it away, so
+	// Init leaves the cone empty while ns1 stays fully on disk underneath
+	// it — an active-but-empty cone alongside a fully checked-out tree.
+	if err := os.WriteFile(filepath.Join(dest, "ns1", "untracked.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Init(dest); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	cone, err := List(dest)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(cone) != 0 {
+		t.Fatalf("List after Init = %v, want empty cone (precondition for this test)", cone)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "ns1")); err != nil {
+		t.Fatalf("expected ns1 still present on disk under the empty cone: %v", err)
+	}
+
+	added, removed, err := ReconcileCone(dest)
+	if err != nil {
+		t.Fatalf("ReconcileCone: %v", err)
+	}
+	if len(added) != 1 || added[0] != "ns1" {
+		t.Fatalf("added = %v, want [ns1]", added)
+	}
+	if len(removed) != 0 {
+		t.Fatalf("removed = %v, want none", removed)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "ns1")); err != nil {
+		t.Fatalf("expected ns1 to remain on disk after reconciling: %v", err)
 	}
 }

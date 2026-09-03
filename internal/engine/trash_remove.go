@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/DeprecatedLuar/dotz/internal/link"
@@ -58,6 +59,17 @@ func TrashEntries(key state.Key, namespaceDir string, targets []manifest.Entry, 
 				return nil, err
 			}
 			op.removedLink = true
+		}
+
+		// An orphan (concept.md "Manual edits"): the manifest still names
+		// this entry, but its payload is already gone from the namespace —
+		// nothing to trash. Fall through to the manifest cleanup below
+		// instead of failing the whole batch on a stat error.
+		if _, err := os.Lstat(payload); os.IsNotExist(err) {
+			if op.removedLink {
+				completed = append(completed, op)
+			}
+			continue
 		}
 
 		name, err := trash.Move(payload)

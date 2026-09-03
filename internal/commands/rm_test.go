@@ -2,12 +2,14 @@ package commands
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
+	"github.com/DeprecatedLuar/dotz/internal/repo"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 )
 
@@ -78,8 +80,8 @@ func TestRmEntry_Default_TrashesPayloadWritesNothingHome(t *testing.T) {
 	entries := []manifest.Entry{{Name: "nvim", Dest: dest}}
 	dataDir, _, nsDir := registerRepoWithNamespace(t, "editors", entries)
 
-	if err := HandleNamespace([]string{"editors", "rm", dest}, shared.Flags{Yes: true}); err != nil {
-		t.Fatalf("namespace editors rm %s: %v", dest, err)
+	if err := HandleNamespace([]string{"editors", "rm", "nvim"}, shared.Flags{Yes: true}); err != nil {
+		t.Fatalf("namespace editors rm nvim: %v", err)
 	}
 
 	if _, err := os.Lstat(dest); !os.IsNotExist(err) {
@@ -110,8 +112,8 @@ func TestRmEntry_Restore_WritesRealFileToDestination(t *testing.T) {
 	entries := []manifest.Entry{{Name: "nvim", Dest: dest}}
 	_, _, nsDir := registerRepoWithNamespace(t, "editors", entries)
 
-	if err := HandleNamespace([]string{"editors", "rm", dest}, shared.Flags{Yes: true, Restore: true}); err != nil {
-		t.Fatalf("namespace editors rm %s --restore: %v", dest, err)
+	if err := HandleNamespace([]string{"editors", "rm", "nvim"}, shared.Flags{Yes: true, Restore: true}); err != nil {
+		t.Fatalf("namespace editors rm nvim --restore: %v", err)
 	}
 
 	info, err := os.Lstat(dest)
@@ -330,7 +332,7 @@ func TestRestoreEntries_NonInteractiveOccupiedDestination_ErrorsNamingForce(t *t
 	entries := []manifest.Entry{{Name: "nvim", Dest: dest}}
 	registerRepoWithNamespace(t, "editors", entries)
 
-	err := HandleNamespace([]string{"editors", "rm", dest}, shared.Flags{Yes: true, Restore: true})
+	err := HandleNamespace([]string{"editors", "rm", "nvim"}, shared.Flags{Yes: true, Restore: true})
 	if err == nil {
 		t.Fatal("expected a non-interactive occupied-destination restore to fail")
 	}
@@ -363,8 +365,8 @@ func TestRmEntry_RestoreForce_TrashesOccupantAndRestoresOurs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := HandleNamespace([]string{"editors", "rm", dest}, shared.Flags{Force: true, Yes: true, Restore: true}); err != nil {
-		t.Fatalf("namespace editors rm %s --restore --force: %v", dest, err)
+	if err := HandleNamespace([]string{"editors", "rm", "nvim"}, shared.Flags{Force: true, Yes: true, Restore: true}); err != nil {
+		t.Fatalf("namespace editors rm nvim --restore --force: %v", err)
 	}
 
 	if _, err := os.Stat(filepath.Join(dest, "seed")); err != nil {
@@ -440,5 +442,90 @@ func TestRm_NonInteractiveWithoutYes_HardErrorsChangesNothing(t *testing.T) {
 	}
 	if len(m.Entries) != 1 {
 		t.Fatalf("expected the manifest untouched, got %+v", m.Entries)
+	}
+}
+
+// TestRmNamespace_StagesRemovalImmediately covers the fix for the gap
+// namespace rm's git-safety mechanism opened: trashing a namespace folder
+// used to leave its removal to be discovered by the next `sync`, but
+// self-heal's sparse-checkout cone reconciliation (which runs ahead of
+// every invocation, including the very next one after this rm) has no way
+// to tell that apart from a namespace folder deleted by hand — which
+// concept.md says must read as merely uninstalled, not removed from the
+// repository. Staging the removal immediately, at rm time, is what settles
+// that ahead of time. This exercises the whole path against a real git
+// repository: rm, then a simulated next-invocation cone reconciliation,
+// then commit, then verifies the namespace is actually gone from HEAD.
+func TestRmNamespace_StagesRemovalImmediately(t *testing.T) {
+	home := t.TempDir()
+	destA := filepath.Join(home, ".config", "aaa")
+	destB := filepath.Join(home, ".config", "bbb")
+	entries := []manifest.Entry{{Name: "aaa", Dest: destA}}
+	_, repoDir, nsDir := registerRepoWithNamespace(t, "editors", entries)
+	// registerRepoWithNamespace leaves "aaa" an empty directory; git never
+	// tracks an empty directory, so give it real content to commit.
+	if err := os.WriteFile(filepath.Join(nsDir, "aaa", "seed"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A second namespace, left alone by this rm, to confirm the staged
+	// removal is scoped and never touches it.
+	otherDir := filepath.Join(repoDir, "other")
+	if err := os.MkdirAll(filepath.Join(otherDir, "bbb"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(otherDir, "bbb", "seed"), []byte("y"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := manifest.Write(otherDir, manifest.Manifest{Entries: []manifest.Entry{{Name: "bbb", Dest: destB}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, repoDir, "init", "-q", ".")
+	runGit(t, repoDir, "add", "-A")
+	runGit(t, repoDir, "commit", "-q", "-m", "init")
+	runGit(t, repoDir, "remote", "add", "origin", "https://example.com/someone/dotfiles")
+	runGit(t, repoDir, "sparse-checkout", "init", "--cone")
+	runGit(t, repoDir, "sparse-checkout", "set", "editors", "other")
+
+	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true}); err != nil {
+		t.Fatalf("namespace rm editors: %v", err)
+	}
+
+	staged, err := exec.Command("git", "-C", repoDir, "diff", "--cached", "--name-status").CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(staged), "editors/") {
+		t.Fatalf("staged = %q, want editors' removal already staged", staged)
+	}
+	if strings.Contains(string(staged), "other/") {
+		t.Fatalf("staged = %q, want other/ untouched by editors' removal", staged)
+	}
+
+	// Simulate the very next invocation's self-heal cone reconciliation,
+	// which runs before sync ever gets a chance to commit this removal.
+	if _, _, err := repo.ReconcileCone(repoDir); err != nil {
+		t.Fatalf("ReconcileCone: %v", err)
+	}
+
+	stagedAfter, err := exec.Command("git", "-C", repoDir, "diff", "--cached", "--name-status").CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stagedAfter) != string(staged) {
+		t.Fatalf("cone reconciliation changed the staged removal: before %q, after %q", staged, stagedAfter)
+	}
+
+	runGit(t, repoDir, "commit", "-q", "-m", "rm editors")
+	out, err := exec.Command("git", "-C", repoDir, "ls-tree", "HEAD", "editors").CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 0 {
+		t.Fatalf("expected editors fully removed from HEAD, ls-tree = %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "other", "bbb")); err != nil {
+		t.Fatalf("expected other's payload untouched: %v", err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -158,6 +159,80 @@ func EnsureSparse(repoDir string, cone []string) error {
 		}
 	}
 	return nil
+}
+
+// ReconcileCone brings repoDir's sparse-checkout cone into line with what
+// is actually materialized on disk, per concept.md "Sparse checkout":
+// "everything present is installed by definition." Nothing that creates a
+// namespace folder directly on the worktree — namespace.Create,
+// namespace.Rename — extends the cone itself, so without this the cone and
+// the working tree can permanently disagree in both directions:
+//
+//   - a top-level directory on disk but missing from the cone (created or
+//     renamed straight on the worktree) can never be staged: git refuses
+//     `add -A` outright for any path outside the cone.
+//   - a name in the cone with no matching directory on disk (removed by
+//     hand, outside dots) reads to git as a deletion — the exact failure
+//     mode concept.md's "Sparse checkout" describes for an unconverted
+//     repository, staging the removal of everything not installed here.
+//
+// Both directions are corrected the same non-destructive way EnsureSparse
+// already guarantees for the one-time repo-init/bootstrap conversion: the
+// desired cone is read from what is on disk, never invented, so adding a
+// name has a directory to check out against and dropping one has nothing
+// on disk to remove — EnsureSparse only ever changes the skip-worktree
+// bit, never the working tree or the index.
+//
+// added and removed report what changed, sorted, for a caller to surface
+// (self-heal's cone-repair finding) — both nil when the cone already
+// matched disk.
+func ReconcileCone(repoDir string) (added, removed []string, err error) {
+	entries, err := DiskEntries(repoDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	onDisk := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir && !strings.HasPrefix(e.Name, ".") {
+			onDisk = append(onDisk, e.Name)
+		}
+	}
+	sort.Strings(onDisk)
+
+	sparse, err := IsSparse(repoDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	var current []string
+	if sparse {
+		current, err = List(repoDir)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	onDiskSet := stringSet(onDisk)
+	for _, name := range current {
+		if !onDiskSet[name] {
+			removed = append(removed, name)
+		}
+	}
+	currentSet := stringSet(current)
+	for _, name := range onDisk {
+		if !currentSet[name] {
+			added = append(added, name)
+		}
+	}
+	if sparse && len(added) == 0 && len(removed) == 0 {
+		return nil, nil, nil
+	}
+	sort.Strings(added)
+	sort.Strings(removed)
+
+	if err := EnsureSparse(repoDir, onDisk); err != nil {
+		return nil, nil, err
+	}
+	return added, removed, nil
 }
 
 // setCone replaces the repository's entire sparse-checkout cone with

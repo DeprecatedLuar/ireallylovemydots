@@ -37,6 +37,9 @@ func RenderSelfHealFindings(f selfheal.Findings) {
 	for _, key := range f.Dropped {
 		fmt.Fprintln(os.Stderr, ui.Tip(fmt.Sprintf("dropped stale state for %s/%s, its repository no longer exists", key.Repo, key.Namespace)))
 	}
+	for _, r := range f.ConeRepaired {
+		fmt.Fprintln(os.Stderr, ui.Tip(fmt.Sprintf("%s: %s", r.Repo, coneRepairDetail(r))))
+	}
 	renderDisabledBlock(f.Disabled)
 	renderRepairBlock(f.NeedsRepair)
 	renderProfileFindings(f.ProfileProblems, f.ProfileFallbacks)
@@ -71,6 +74,22 @@ func profileSubject(p selfheal.ProfileProblem) string {
 		parts = append(parts, p.Entry)
 	}
 	return strings.Join(parts, "/")
+}
+
+// coneRepairDetail phrases one repository's cone correction, per
+// selfheal.ConeRepaired: a namespace added because it existed on disk
+// outside the cone (uncommittable until now), a namespace dropped because
+// its folder is gone (its absence now reads as "not installed here"
+// rather than a deletion to commit), or both.
+func coneRepairDetail(r selfheal.ConeRepaired) string {
+	var parts []string
+	if len(r.Added) > 0 {
+		parts = append(parts, fmt.Sprintf("cone caught up with %s", strings.Join(r.Added, ", ")))
+	}
+	if len(r.Removed) > 0 {
+		parts = append(parts, fmt.Sprintf("%s no longer installed here, dropped from the cone", strings.Join(r.Removed, ", ")))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // renderDisabledBlock names every namespace Run auto-disabled this pass

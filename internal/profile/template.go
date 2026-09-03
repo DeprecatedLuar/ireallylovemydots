@@ -37,7 +37,7 @@ func EditBuffer(m Manifest, trackedEntries []string) []byte {
 		fmt.Fprintf(&b, "  %q,\n", name)
 	}
 	for _, name := range candidates {
-		fmt.Fprintf(&b, "  # %q,          # tracked by this namespace, not declared profiled\n", name)
+		fmt.Fprintf(&b, "  # %q,\n", name)
 	}
 	b.WriteString("]\n")
 	return []byte(b.String())

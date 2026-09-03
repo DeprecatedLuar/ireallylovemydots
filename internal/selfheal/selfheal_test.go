@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,21 +16,44 @@ import (
 // initGitRepo turns dir into a git repository with everything currently in
 // it committed, so a test can delete a file from the working tree afterward
 // and still have git.ShowFile recover it from HEAD — exactly the situation
-// self-heal's manifest recovery exists for.
+// self-heal's manifest recovery exists for. It also converts to cone-mode
+// sparse checkout with everything already on disk in the cone, matching
+// the shape every real registered repository already has by the time
+// self-heal's cone-reconciliation pass reaches it (repo add, repo init,
+// and bootstrap all sparsify before registering) — a fixture left
+// non-sparse would instead exercise that pass's one-time conversion of an
+// unconverted repository (concept.md "Sparse checkout"), which is
+// unrelated to what this test is about and races with an uncommitted
+// deletion in ways this fixture never intends to test.
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
-	run := func(args ...string) {
+	run := func(args ...string) string {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
+		out, err := cmd.CombinedOutput()
+		if err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
+		return string(out)
 	}
 	run("init", "-q", ".")
 	run("config", "user.email", "test@example.com")
 	run("config", "user.name", "test")
 	run("add", "-A")
 	run("commit", "-q", "-m", "initial")
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cone []string
+	for _, e := range entries {
+		if e.IsDir() && e.Name()[0] != '.' {
+			cone = append(cone, e.Name())
+		}
+	}
+	run("sparse-checkout", "init", "--cone")
+	run(append([]string{"sparse-checkout", "set"}, cone...)...)
 }
 
 // setupNamespace registers one repository with one namespace holding a
@@ -980,5 +1004,108 @@ func TestRun_MissingManifest_ScaffoldOnly(t *testing.T) {
 	}
 	if len(m.Entries) != 1 || m.Entries[0].Name != "cfg" || m.Entries[0].Dest != "" {
 		t.Fatalf("expected cfg scaffolded with a blank destination, got %+v", m.Entries)
+	}
+}
+
+// TestRun_ConeRepaired_AddsNamespaceCreatedOutsideTheCone reproduces the
+// field bug end to end through Run(): a namespace folder created directly
+// on the worktree (namespace.Create never extends the cone itself) is
+// invisible to git's `add -A` until self-heal's cone reconciliation
+// catches up, and Run() must report the correction rather than silently
+// leaving the next `sync` to hit the same staging error.
+func TestRun_ConeRepaired_AddsNamespaceCreatedOutsideTheCone(t *testing.T) {
+	home := t.TempDir()
+	dest := filepath.Join(home, ".config", "cfg")
+	namespaceDir, _ := setupNamespace(t, dest)
+	repoDir := filepath.Dir(namespaceDir)
+	initGitRepo(t, repoDir)
+
+	// namespace.Create's own bug, reproduced directly: a second namespace
+	// materialized straight on the worktree, bypassing repo.Add.
+	newNS := filepath.Join(repoDir, "extra-ns")
+	if err := os.MkdirAll(newNS, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(newNS, ".dots"), []byte("entries = []\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := exec.Command("git", "-C", repoDir, "add", "-A").CombinedOutput(); err == nil {
+		t.Fatalf("expected git add -A to refuse extra-ns before Run reconciles the cone, got clean: %s", out)
+	}
+
+	findings, err := Run()
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings.ConeRepaired) != 1 {
+		t.Fatalf("ConeRepaired = %+v, want exactly one repository reported", findings.ConeRepaired)
+	}
+	repaired := findings.ConeRepaired[0]
+	if repaired.Repo != "dotfiles" {
+		t.Fatalf("ConeRepaired.Repo = %q, want dotfiles", repaired.Repo)
+	}
+	if len(repaired.Added) != 1 || repaired.Added[0] != "extra-ns" {
+		t.Fatalf("ConeRepaired.Added = %v, want [extra-ns]", repaired.Added)
+	}
+	if len(repaired.Removed) != 0 {
+		t.Fatalf("ConeRepaired.Removed = %v, want none", repaired.Removed)
+	}
+
+	if out, err := exec.Command("git", "-C", repoDir, "add", "-A").CombinedOutput(); err != nil {
+		t.Fatalf("git add -A after Run should now succeed: %v: %s", err, out)
+	}
+	status, err := exec.Command("git", "-C", repoDir, "status", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(status), "extra-ns/.dots") {
+		t.Fatalf("status = %q, want extra-ns/.dots staged", status)
+	}
+}
+
+// TestRun_ConeRepaired_DropsHandRemovedNamespace covers the other
+// direction: a namespace installed on this machine (in the cone) whose
+// folder was removed by hand, outside dots. Per the accepted design this
+// reads as "uninstalled," never "removed from the repository" — Run drops
+// it from the cone so its absence stops reading as a deletion to commit.
+func TestRun_ConeRepaired_DropsHandRemovedNamespace(t *testing.T) {
+	home := t.TempDir()
+	dest := filepath.Join(home, ".config", "cfg")
+	namespaceDir, _ := setupNamespace(t, dest)
+	repoDir := filepath.Dir(namespaceDir)
+	initGitRepo(t, repoDir)
+
+	// Namespace enabled and in the cone (cfg-ns, from setupNamespace),
+	// removed by hand rather than through `namespace rm`.
+	if err := os.RemoveAll(namespaceDir); err != nil {
+		t.Fatal(err)
+	}
+
+	findings, err := Run()
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings.ConeRepaired) != 1 {
+		t.Fatalf("ConeRepaired = %+v, want exactly one repository reported", findings.ConeRepaired)
+	}
+	repaired := findings.ConeRepaired[0]
+	if len(repaired.Removed) != 1 || repaired.Removed[0] != "cfg-ns" {
+		t.Fatalf("ConeRepaired.Removed = %v, want [cfg-ns]", repaired.Removed)
+	}
+
+	if out, err := exec.Command("git", "-C", repoDir, "add", "-A").CombinedOutput(); err != nil {
+		t.Fatalf("git add -A after Run: %v: %s", err, out)
+	}
+	status, err := exec.Command("git", "-C", repoDir, "status", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(status)) != "" {
+		t.Fatalf("status = %q, want clean (no staged deletion of cfg-ns)", status)
+	}
+	out, err := exec.Command("git", "-C", repoDir, "ls-tree", "HEAD", "cfg-ns").CombinedOutput()
+	if err != nil || len(out) == 0 {
+		t.Fatalf("expected cfg-ns to remain in HEAD, ls-tree = %q, err = %v", out, err)
 	}
 }
