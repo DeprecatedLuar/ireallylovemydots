@@ -88,12 +88,20 @@ func renderDisabledBlock(disabled []selfheal.Disabled) {
 		return
 	}
 
+	// collapsed names every namespace whose reasons rendered as a count
+	// rather than inline, so the tip below can point at `dots <ns>` for
+	// exactly those — concept.md "Self-healing": "This report follows What
+	// enable reports exactly."
+	var collapsed []string
 	entries := make([]ui.Entry, 0, min(len(disabled), repairListCap))
 	for i, d := range disabled {
 		if i == repairListCap {
 			break
 		}
 		entries = append(entries, ui.Entry{Marker: ui.MarkerMaterialized, Name: d.Namespace + ui.DetailSep + disableReason(d.Reasons)})
+		if len(d.Reasons) > 1 {
+			collapsed = append(collapsed, d.Namespace)
+		}
 	}
 	lines := ui.RenderLines(entries, os.Stderr)
 	if len(disabled) > repairListCap {
@@ -101,18 +109,20 @@ func renderDisabledBlock(disabled []selfheal.Disabled) {
 	}
 
 	header := ui.WarningTone(fmt.Sprintf("%s disabled, their destination could not be linked:", ui.Plural(len(disabled), "namespace")))
-	fmt.Fprint(os.Stderr, ui.List(header, lines, "run `dots enable <namespace>` to retry, add --force to trash the occupant"))
+	tip := ui.BlockedTip(collapsed, "run `dots enable <namespace>` to retry, add --force to trash the occupant")
+	fmt.Fprint(os.Stderr, ui.List(header, lines, tip))
 }
 
-// disableReason joins a disabled namespace's blocking problems into one
-// summary line, naming each destination and what occupies it — the same
-// shape problemSummary in enable.go builds for a pre-flight skip.
+// disableReason reduces a disabled namespace's blocking problems to the one
+// line concept.md "What enable reports" gives it — the same ui.BlockedSummary
+// problemSummary in enable.go uses, so enable's and self-heal's reports
+// describe the same occupied destination identically.
 func disableReason(reasons []selfheal.Problem) string {
-	summaries := make([]string, len(reasons))
+	blocked := make([]ui.Blocked, len(reasons))
 	for i, p := range reasons {
-		summaries[i] = p.Dest + ui.DetailSep + p.Detail
+		blocked[i] = ui.Blocked{Dest: p.Dest, Detail: p.Detail}
 	}
-	return strings.Join(summaries, "; ")
+	return ui.BlockedSummary(blocked)
 }
 
 // renderRepairBlock prints the one line the user asked for after "I had no

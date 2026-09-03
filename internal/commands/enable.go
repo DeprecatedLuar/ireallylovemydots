@@ -116,10 +116,18 @@ func runEnableBatch(names []string, all bool, flags shared.Flags) error {
 
 	var lines []string
 	var enabled, skipped int
+	// collapsed names every namespace whose blocked destinations rendered as
+	// a count rather than inline, per concept.md "What enable reports": the
+	// count line's tip points at `dots <ns>` only for those, since a single
+	// blocked destination already has its detail on the report line.
+	var collapsed []string
 	for _, t := range targets {
 		if hardBlocked(t.problems) || (len(t.problems) > 0 && !flags.Force) {
 			skipped++
 			lines = append(lines, ui.Operation(ui.MarkerProblem, t.display, problemSummary(t.problems)))
+			if len(t.problems) > 1 {
+				collapsed = append(collapsed, t.display)
+			}
 			continue
 		}
 		replaced, err := engine.Enable(t.key, t.repoDir, t.nsDir, t.name, t.entries, s, t.problems)
@@ -137,10 +145,25 @@ func runEnableBatch(names []string, all bool, flags shared.Flags) error {
 
 	fmt.Print(ui.Report(lines, ""))
 	if skipped > 0 {
-		fmt.Fprintf(os.Stderr, "%d enabled, %d skipped. --force to override.\n", enabled, skipped)
+		fmt.Fprintln(os.Stderr, enableFooter(enabled, skipped, collapsed))
 		return ErrSomeSkipped
 	}
 	return nil
+}
+
+// enableFooter builds the count line concept.md "What enable reports"
+// requires whenever a batch skips at least one namespace: the totals, plus
+// — only for a namespace whose report line collapsed to a count — the tip
+// naming the `dots <ns>` that expands it back into per-entry detail.
+func enableFooter(enabled, skipped int, collapsed []string) string {
+	tip := ui.BlockedTip(collapsed, "--force to override.")
+	if len(collapsed) > 0 {
+		// BlockedTip's clause always starts lowercase ("run `dots ...`"),
+		// meant for embedding after a "Tip: " prefix elsewhere; here it
+		// opens a new sentence of its own.
+		tip = strings.ToUpper(tip[:1]) + tip[1:]
+	}
+	return fmt.Sprintf("%d enabled, %d skipped. %s", enabled, skipped, tip)
 }
 
 // discoverAllTargets finds every namespace, across every registered
@@ -232,25 +255,34 @@ func resolveExplicitTargets(dataDir string, reg manifest.Registry, names []strin
 	return targets, nil
 }
 
-// problemSummary joins each problem into one skip reason, naming the
-// destination and what currently occupies it, in the same clean
-// "<dest>    <detail>" column shape the force-trashed sub-line already uses
-// (concept.md "What enable reports": "! nvim     ~/.config/nvim    real
-// directory, 340 files") — rather than an Occupied problem's raw pre-flight
-// sentence, which also carries a remedy paragraph meant for that other
-// context. One line per namespace, per concept.md "What enable reports":
-// "Reasons joined onto a single run-on line are unreadable at twenty-six
-// namespaces."
+// problemSummary reduces a namespace's pre-flight problems to the one line
+// concept.md "What enable reports" gives it: exactly one blocked destination
+// prints inline with what occupies it; more than one collapses to a count
+// (ui.BlockedSummary), because concatenating N reasons onto a single line
+// rebuilds the run-on the cap exists to prevent.
 func problemSummary(problems []engine.Problem) string {
-	summaries := make([]string, len(problems))
+	blocked := make([]ui.Blocked, len(problems))
 	for i, p := range problems {
-		if p.Kind == engine.Occupied {
-			summaries[i] = p.Entry.Dest + ui.DetailSep + engine.OccupancyDetail(p.Message)
-			continue
-		}
-		summaries[i] = strings.SplitN(p.Message, "\n", 2)[0]
+		blocked[i] = ui.Blocked{Dest: p.Entry.Dest, Detail: problemDetail(p)}
 	}
-	return strings.Join(summaries, "; ")
+	return ui.BlockedSummary(blocked)
+}
+
+// problemDetail extracts one pre-flight problem's reason with its own
+// destination stripped back off — pre-flight's messages all lead with it
+// ("<dest>: ...", "<dest> already exists (...)", "<dest> is already claimed
+// ...") — since ui.BlockedSummary supplies the destination itself, already
+// ~-contracted. Occupied uses OccupancyDetail's clean parenthesised text
+// rather than the raw sentence, which also carries a remedy paragraph meant
+// for pre-flight's own context, not a report line.
+func problemDetail(p engine.Problem) string {
+	if p.Kind == engine.Occupied {
+		return engine.OccupancyDetail(p.Message)
+	}
+	reason := strings.SplitN(p.Message, "\n", 2)[0]
+	reason = strings.TrimPrefix(reason, p.Entry.Dest)
+	reason = strings.TrimPrefix(reason, ":")
+	return strings.TrimSpace(reason)
 }
 
 // namespaceInstalled reports whether a namespace is materialized on disk —

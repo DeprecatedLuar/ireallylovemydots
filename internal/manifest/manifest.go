@@ -119,7 +119,7 @@ func Encode(m Manifest) ([]byte, error) {
 	copy(sorted, m.Entries)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	for i := range sorted {
-		sorted[i].Dest = contractHome(sorted[i].Dest)
+		sorted[i].Dest = ContractHome(sorted[i].Dest)
 	}
 	return toml.Marshal(Manifest{Ignore: m.Ignore, Entries: sorted})
 }
@@ -142,7 +142,13 @@ func expandHome(dest string) string {
 	return dest
 }
 
-func contractHome(dest string) string {
+// ContractHome rewrites an absolute destination under the user's home
+// directory to its ~-relative form — the portable form manifests are always
+// written in (see Encode), and, more generally, the form dots must print
+// wherever it shows a destination to the user (concept.md "What enable
+// reports": "Destinations print ~-contracted, everywhere dots prints one.").
+// A destination outside the home directory is returned unchanged.
+func ContractHome(dest string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return dest

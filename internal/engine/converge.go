@@ -120,10 +120,22 @@ func converge(namespaceDir string, entries []manifest.Entry, activeProfile strin
 			linked = append(linked, e.Dest)
 			continue
 		case link.RealFile, link.RealDir:
-			failures = append(failures, LinkFailure{Entry: e, Dest: e.Dest, Detail: "real file or directory occupies the destination"})
+			// Detail matches pre-flight's own wording for the same
+			// occupied destination (occupancyDetailText via
+			// occupancyDetail), per concept.md "Self-healing": enable's
+			// report and self-heal's report must describe the same
+			// occupancy identically.
+			detail, detailErr := occupancyDetail(e.Dest, st)
+			if detailErr != nil {
+				if transactional {
+					rollback()
+				}
+				return nil, nil, nil, detailErr
+			}
+			failures = append(failures, LinkFailure{Entry: e, Dest: e.Dest, Detail: detail})
 			if transactional {
 				rollback()
-				return nil, nil, nil, fmt.Errorf("%s: a real file or directory occupies the destination", e.Dest)
+				return nil, nil, nil, fmt.Errorf("%s: %s occupies the destination", e.Dest, detail)
 			}
 			continue
 		}

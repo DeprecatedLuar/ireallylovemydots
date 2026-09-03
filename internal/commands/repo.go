@@ -351,7 +351,7 @@ func renderGitignorePreview(changes []repo.GitignoreChange) string {
 func bootstrapPreviewEntries(plan []repo.PlannedNamespace) []ui.Pair {
 	pairs := make([]ui.Pair, 0, len(plan))
 	for _, p := range plan {
-		pairs = append(pairs, ui.Pair{Name: p.Namespace, Value: p.Dest})
+		pairs = append(pairs, ui.Pair{Name: p.Namespace, Value: manifest.ContractHome(p.Dest)})
 	}
 	return pairs
 }
@@ -676,7 +676,7 @@ func reportRelinkFailures(failures []engine.LinkFailure) {
 		return
 	}
 	for _, f := range failures {
-		fmt.Fprintln(os.Stderr, ui.WarningTone(fmt.Sprintf("! %s%s%s", f.Dest, ui.DetailSep, f.Detail)))
+		fmt.Fprintln(os.Stderr, ui.WarningTone(fmt.Sprintf("! %s%s%s", manifest.ContractHome(f.Dest), ui.DetailSep, f.Detail)))
 	}
 	fmt.Fprintln(os.Stderr, ui.Tip("run `dots enable <namespace>` to retry, add --force to trash the occupant"))
 }

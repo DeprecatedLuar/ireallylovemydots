@@ -36,9 +36,14 @@ func RestorePreflight(namespaceDir, namespaceName string, entries []manifest.Ent
 		if occupied {
 			problems = append(problems, RestoreProblem{
 				Entry: e,
+				// e.Dest is contracted for display here — concept.md "What
+				// enable reports": "Destinations print ~-contracted,
+				// everywhere dots prints one" — while Restore itself keys
+				// off Entry.Dest, the absolute form, so this never touches
+				// anything but the printed message.
 				Message: fmt.Sprintf(
 					"%s already exists (%s)\n  [t] trash it and restore %s's copy\n  [s] skip this entry, leave the occupant alone\n  [c] cancel",
-					e.Dest, detail, namespaceName),
+					manifest.ContractHome(e.Dest), detail, namespaceName),
 			})
 		}
 	}

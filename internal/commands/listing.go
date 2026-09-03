@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/DeprecatedLuar/dotz/internal/engine"
 	"github.com/DeprecatedLuar/dotz/internal/git"
 	"github.com/DeprecatedLuar/dotz/internal/link"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
@@ -149,7 +150,11 @@ func qualifyCollisions(rows []ui.Entry) {
 // namespaceRow is the one place a namespace's listing marker is decided:
 // enabled materialized namespaces are "+", every other materialized
 // namespace is "-", unless namespaceProblems finds a "!" or "?" entry
-// underneath it, which promotes the namespace itself to "!".
+// underneath it, which promotes the namespace itself to "!". diagnoseOccupancy
+// is false here: concept.md "Listing output" promotes a namespace to "!"
+// only for an orphaned, invalid, or untracked entry, never for an occupied
+// destination on an otherwise-ordinary disabled namespace — that diagnostic
+// belongs to entryListing (`dots <ns>`), one command away, not the overview.
 func namespaceRow(s state.State, repoName, nsName, namespaceDir string, entries []manifest.Entry) (ui.Entry, error) {
 	stateEntry := s.Entries[state.Key{Repo: repoName, Namespace: nsName}]
 	marker := ui.MarkerMaterialized
@@ -157,7 +162,7 @@ func namespaceRow(s state.State, repoName, nsName, namespaceDir string, entries 
 		marker = ui.MarkerEnabled
 	}
 
-	rows, _, _, err := namespaceProblems(namespaceDir, entries, stateEntry.Enabled, stateEntry.ActiveProfile)
+	rows, _, _, err := namespaceProblems(namespaceDir, entries, stateEntry.Enabled, stateEntry.ActiveProfile, false)
 	if err != nil {
 		return ui.Entry{}, err
 	}
@@ -218,7 +223,12 @@ func repoListing(repos []manifest.Repo) ([]ui.Entry, error) {
 // listing prints more than a marker and a name." The suggestion is a plain
 // string for the caller to print as a tip; entryListing never prints.
 func entryListing(namespaceDir string, entries []manifest.Entry, enabled bool, activeProfile string) (rows []ui.Entry, suggestion string, err error) {
-	rows, orphans, untracked, err := namespaceProblems(namespaceDir, entries, enabled, activeProfile)
+	// diagnoseOccupancy is true here: concept.md "What enable reports",
+	// "Listing one namespace is what that pointer resolves to" — the "!"
+	// entries in this one namespace's own listing must carry the destination
+	// and what occupies it, so `dots <ns>` after a collapsed count on the
+	// overview is a complete diagnostic path.
+	rows, orphans, untracked, err := namespaceProblems(namespaceDir, entries, enabled, activeProfile, true)
 	if err != nil {
 		return nil, "", err
 	}
@@ -235,7 +245,7 @@ func entryListing(namespaceDir string, entries []manifest.Entry, enabled bool, a
 // warning. orphans and untracked name the entries/payloads driving each half
 // of the rename suggestion; a caller that only needs the namespace-level "!"
 // rollup (namespaceRow) ignores them.
-func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bool, activeProfile string) (rows []ui.Entry, orphans, untracked []string, err error) {
+func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bool, activeProfile string, diagnoseOccupancy bool) (rows []ui.Entry, orphans, untracked []string, err error) {
 	report, err := namespace.Inspect(namespaceDir, entries)
 	if err != nil {
 		return nil, nil, nil, err
@@ -246,7 +256,7 @@ func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bo
 
 	rows = make([]ui.Entry, 0, len(entries)+len(report.Untracked))
 	for _, e := range entries {
-		rows = append(rows, classifyEntry(e, namespaceDir, enabled, activeProfile, invalid, orphaned))
+		rows = append(rows, classifyEntry(e, namespaceDir, enabled, activeProfile, invalid, orphaned, diagnoseOccupancy))
 	}
 	for _, name := range report.Untracked {
 		rows = append(rows, ui.Entry{Marker: ui.MarkerUntracked, Name: name})
@@ -266,7 +276,17 @@ func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bo
 // and this one — self-heal itself now disables a namespace outright rather
 // than leaving a blocked destination "!" here, per concept.md
 // "Self-healing".
-func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, activeProfile string, invalid, orphaned map[string]bool) ui.Entry {
+//
+// Either way — disabled, or the enabled safety net above finding drift —
+// diagnoseOccupancy (true only from entryListing, `dots <ns>`) additionally
+// gives an occupied destination blockedEntry's "!" row naming it and what
+// occupies it, so `dots <ns>` after a `dots` overview showing a namespace's
+// blocked-destination count is a complete diagnostic path, per concept.md
+// "What enable reports": "Listing one namespace is what that pointer
+// resolves to." namespaceRow's overview never sets it: concept.md "Listing
+// output" promotes a namespace to "!" only for an orphaned, invalid, or
+// untracked entry, not an occupied destination on an ordinary disabled one.
+func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, activeProfile string, invalid, orphaned map[string]bool, diagnoseOccupancy bool) ui.Entry {
 	if invalid[e.Name] {
 		return ui.Entry{Marker: ui.MarkerUntracked, Name: e.Name}
 	}
@@ -280,17 +300,45 @@ func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, activePr
 		return ui.Entry{Marker: ui.MarkerMaterialized, Name: e.Name}
 	}
 
-	if !enabled {
-		return ui.Entry{Marker: ui.MarkerMaterialized, Name: e.Name}
-	}
 	payload, sourceErr := profile.Source(namespaceDir, e.Name, activeProfile)
 	if sourceErr != nil {
 		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}
 	}
+
+	if !enabled {
+		// A disabled namespace's destinations are not dots' responsibility —
+		// absent, or holding someone else's file, is ordinary. Occupied,
+		// the same test pre-flight applies, is not.
+		if diagnoseOccupancy {
+			if entry, ok := blockedEntry(e.Dest, payload); ok {
+				return entry
+			}
+		}
+		return ui.Entry{Marker: ui.MarkerMaterialized, Name: e.Name}
+	}
 	if st, classifyErr := link.Classify(e.Dest, payload); classifyErr != nil || st != link.CorrectSymlink {
+		if diagnoseOccupancy {
+			if entry, ok := blockedEntry(e.Dest, payload); ok {
+				return entry
+			}
+		}
 		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}
 	}
 	return ui.Entry{Marker: ui.MarkerEnabled, Name: e.Name}
+}
+
+// blockedEntry reports the "!" row an occupied destination gets — a real
+// file or non-empty directory, engine.Occupancy's pre-flight test — in the
+// same "<dest>    <detail>" columns a namespace row uses (ui.BlockedSummary),
+// so self-heal's and enable's wording for the same occupied destination
+// matches what a listing shows too. ok is false when dest is not occupied,
+// so the caller falls through to its ordinary marker.
+func blockedEntry(dest, payload string) (ui.Entry, bool) {
+	occupied, detail, err := engine.Occupancy(dest, payload)
+	if err != nil || !occupied {
+		return ui.Entry{}, false
+	}
+	return ui.Entry{Marker: ui.MarkerProblem, Name: ui.BlockedSummary([]ui.Blocked{{Dest: dest, Detail: detail}})}, true
 }
 
 // toSet turns a name slice into a membership set, for classifyEntry's O(1)

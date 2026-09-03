@@ -161,10 +161,51 @@ func occupancy(dest, wantTarget string) (occupied bool, detail string, err error
 		if len(dirEntries) == 0 {
 			return false, "", nil
 		}
-		return true, fmt.Sprintf("real directory, %d entries", len(dirEntries)), nil
+		return true, occupancyDetailText(link.RealDir, len(dirEntries)), nil
 	default: // link.RealFile
-		return true, "real file", nil
+		return true, occupancyDetailText(link.RealFile, 0), nil
 	}
+}
+
+// occupancyDetailText renders the exact wording an occupied destination gets
+// everywhere dots reports one — pre-flight's Occupied problem, Enable's
+// force-trashed sub-line, and converge's LinkFailure (self-heal's report) —
+// so the two reports concept.md "Self-healing" requires to agree ("Self-heal
+// has more reason to obey the cap than enable does, not less") describe the
+// same occupied destination identically rather than in independently
+// maintained phrasing. count is ignored for link.RealFile.
+func occupancyDetailText(st link.State, count int) string {
+	if st == link.RealDir {
+		return fmt.Sprintf("real directory, %d entries", count)
+	}
+	return "real file"
+}
+
+// occupancyDetail describes what currently occupies dest, in the same
+// wording occupancyDetailText produces from pre-flight's own classification
+// — used by callers (converge) that already know dest is a real file or
+// non-empty directory from their own link.Classify result and only need the
+// human-readable detail, not the occupied/absorbable decision itself.
+func occupancyDetail(dest string, st link.State) (string, error) {
+	if st == link.RealDir {
+		dirEntries, err := os.ReadDir(dest)
+		if err != nil {
+			return "", fmt.Errorf("read directory %s: %w", dest, err)
+		}
+		return occupancyDetailText(link.RealDir, len(dirEntries)), nil
+	}
+	return occupancyDetailText(link.RealFile, 0), nil
+}
+
+// Occupancy is occupancy's exported form, for a caller outside pre-flight
+// that needs the same occupied/absorbable test against an arbitrary
+// destination — namely classifyEntry (internal/commands/listing.go), so a
+// disabled namespace's "!" row in `dots <ns>` can name the same destination
+// and detail pre-flight would report if the namespace were re-enabled, per
+// concept.md "What enable reports": "a `!` entry there carries the
+// destination and what occupies it."
+func Occupancy(dest, wantTarget string) (occupied bool, detail string, err error) {
+	return occupancy(dest, wantTarget)
 }
 
 // ancestorWritable reports whether dest's parent — or its nearest existing

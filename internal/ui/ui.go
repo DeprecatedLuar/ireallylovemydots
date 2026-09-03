@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/DeprecatedLuar/dotz/internal/manifest"
 )
 
 // Markers used by the listing renderer. One character of state per line,
@@ -208,6 +210,48 @@ func Operation(marker, name, detail string) string {
 	return colorLine(marker, line, os.Stdout) + "\n"
 }
 
+// Blocked is one destination a mutation could not act on and why — the pair
+// every caller-specific problem type (engine.Problem, selfheal.Problem)
+// reduces to before handing it to BlockedSummary, so that function needs no
+// knowledge of either package.
+type Blocked struct {
+	Dest   string
+	Detail string
+}
+
+// BlockedSummary renders a namespace's blocked destinations onto the one
+// line a mutation report gives that namespace, per concept.md "What enable
+// reports": "the line carries the destination and the occupant only while
+// the namespace has exactly one blocked destination. Past that it carries a
+// count" — joining every reason onto one line rebuilds the run-on the cap
+// exists to prevent. Dest is contracted for display; callers pass the
+// absolute path, the same as Sub. Shared by enable's problemSummary and
+// self-heal's disableReason so the two reports describe the same occupied
+// destination identically (concept.md "Self-healing").
+func BlockedSummary(blocked []Blocked) string {
+	if len(blocked) == 1 {
+		return manifest.ContractHome(blocked[0].Dest) + DetailSep + blocked[0].Detail
+	}
+	return fmt.Sprintf("%s occupied", Plural(len(blocked), "destination"))
+}
+
+// BlockedTip prepends a "run `dots <namespace>`" clause for every namespace
+// named, ahead of base, per concept.md "What enable reports": "the tip
+// names `dots krita`" — the one command that expands a BlockedSummary count
+// back into the per-entry detail a listing already knows how to render.
+// Returns base unchanged when names is empty, so a caller can call this
+// unconditionally.
+func BlockedTip(names []string, base string) string {
+	if len(names) == 0 {
+		return base
+	}
+	cmds := make([]string, len(names))
+	for i, name := range names {
+		cmds[i] = fmt.Sprintf("`dots %s`", name)
+	}
+	return fmt.Sprintf("run %s to see them, %s", strings.Join(cmds, ", "), base)
+}
+
 // subIndent marks a Sub line as belonging to the Operation line above it —
 // paths are not namespaces and never take a marker line of their own, per
 // concept.md "What enable reports": "paths are not namespaces and do not
@@ -216,9 +260,12 @@ const subIndent = "  "
 
 // Sub formats an indented sub-line under an Operation line, reporting what
 // happened to a path underneath it — a trashed occupant, most commonly.
-// detail may be empty.
+// detail may be empty. path is always a destination, so this is where every
+// Sub caller's destination gets ~-contracted for display, per concept.md
+// "What enable reports": "Destinations print ~-contracted, everywhere dots
+// prints one."
 func Sub(marker, path, detail string) string {
-	line := subIndent + fmt.Sprintf("%s %s", marker, path)
+	line := subIndent + fmt.Sprintf("%s %s", marker, manifest.ContractHome(path))
 	if detail != "" {
 		line += DetailSep + detail
 	}

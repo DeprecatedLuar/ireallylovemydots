@@ -52,6 +52,11 @@ func registerRepoWithNamespace(t *testing.T, nsName string, entries []manifest.E
 	return dataDir, repoDir, nsDir
 }
 
+// TestEnableNamespace_NonInteractive_SkipsAndReportsEveryOccupiedDestination
+// covers concept.md "What enable reports"'s cap: a namespace with more than
+// one blocked destination collapses to a count on its report line — joining
+// every reason onto one line "rebuilds the run-on the rule exists to
+// prevent" — with a tip naming `dots <ns>` to see them individually.
 func TestEnableNamespace_NonInteractive_SkipsAndReportsEveryOccupiedDestination(t *testing.T) {
 	home := t.TempDir()
 
@@ -74,16 +79,17 @@ func TestEnableNamespace_NonInteractive_SkipsAndReportsEveryOccupiedDestination(
 	registerRepoWithNamespace(t, "editors", entries)
 
 	var err error
-	stdout, _ := captureStdoutStderr(t, func() {
+	stdout, stderr := captureStdoutStderr(t, func() {
 		err = enableNamespace("editors", shared.Flags{})
 	})
 	if !errors.Is(err, ErrSomeSkipped) {
 		t.Fatalf("expected a non-interactive enable with occupied destinations and no --force to skip and report, got %v", err)
 	}
-	for _, dest := range occupiedDests {
-		if !strings.Contains(stdout, dest) {
-			t.Fatalf("expected the report to name every occupied destination, missing %s in: %s", dest, stdout)
-		}
+	if !strings.Contains(stdout, "4 destinations occupied") {
+		t.Fatalf("expected the report to collapse more than one blocked destination to a count, got: %s", stdout)
+	}
+	if !strings.Contains(stderr, "dots editors") {
+		t.Fatalf("expected the count line's tip to name `dots editors`, got: %s", stderr)
 	}
 
 	for _, dest := range occupiedDests {
