@@ -298,9 +298,26 @@ func contains(list []string, name string) bool {
 	return false
 }
 
-// ambiguityChooser prompts interactively, or errors listing both
-// candidates when not connected to a terminal.
+// ambiguityChooser resolves a token that matches both a namespace and a
+// repository. This is a different layer of ambiguity than
+// namespace.Resolve's: here the token itself is read two ways (as a
+// namespace or as a repository name), not one namespace name held by
+// several repositories. That second kind can still be nested inside the
+// first — the token might match a namespace that itself exists in more
+// than one repository — and per concept.md "Name resolution" a name
+// matching more than one existing thing always errors, naming every
+// candidate, and never prompts even interactively; so that case is checked
+// first and short-circuits the namespace/repository choice entirely.
+// Otherwise it prompts interactively, or errors listing both readings when
+// not connected to a terminal.
 func ambiguityChooser(name string) (string, error) {
+	nsRepos, err := commands.NamespaceRepoCandidates(name)
+	if err != nil {
+		return "", err
+	}
+	if len(nsRepos) > 1 {
+		return "", fmt.Errorf("namespace %q exists in multiple repositories (%s); disambiguate with --repo", name, strings.Join(nsRepos, ", "))
+	}
 	if !ui.Interactive() {
 		return "", fmt.Errorf("%q matches both a namespace and a repository; use --repo to disambiguate or rename one", name)
 	}

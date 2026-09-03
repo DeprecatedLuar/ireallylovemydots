@@ -96,6 +96,7 @@ func namespaceListing(repos []manifest.Repo, opts listOptions) ([]ui.Entry, erro
 			if opts.Counts {
 				row.Count = len(m.Entries)
 			}
+			row.Repo = r.Name
 			rows = append(rows, row)
 		}
 
@@ -117,11 +118,32 @@ func namespaceListing(repos []manifest.Repo, opts listOptions) ([]ui.Entry, erro
 			if ignored {
 				continue
 			}
-			rows = append(rows, ui.Entry{Marker: ui.MarkerAbsent, Name: n})
+			rows = append(rows, ui.Entry{Marker: ui.MarkerAbsent, Name: n, Repo: r.Name})
 		}
 	}
+	qualifyCollisions(rows)
 	sortNamespaceRows(rows)
 	return rows, nil
+}
+
+// qualifyCollisions sets Entry.Repo only on rows whose Name appears more
+// than once among rows, per concept.md "Listing output": "A name carried by
+// two repositories is qualified, and only then." Every row already carries
+// its own repository name (set by the two walks above); this clears it back
+// off wherever the name is unique in this specific rendered set, so a
+// listing narrowed to one repository (--repo, or `repo <name> list`) shows
+// no qualifiers even when the same name collides elsewhere in the
+// registry — the rule is per rendered set, not per registry.
+func qualifyCollisions(rows []ui.Entry) {
+	counts := make(map[string]int, len(rows))
+	for _, r := range rows {
+		counts[r.Name]++
+	}
+	for i := range rows {
+		if counts[rows[i].Name] <= 1 {
+			rows[i].Repo = ""
+		}
+	}
 }
 
 // namespaceRow is the one place a namespace's listing marker is decided:

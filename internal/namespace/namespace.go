@@ -14,7 +14,6 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/repo"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/trash"
-	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
 
 const dirPerm = 0755
@@ -77,8 +76,10 @@ type Located struct {
 // repoSpec, when non-empty, disambiguates directly by repository spec
 // instead of searching, checking that repository's catalogue the same way
 // rather than deciding existence with a bare stat. Ambiguity across
-// repositories prompts when interactive, and errors naming every candidate
-// otherwise, per concept.md "Name resolution".
+// repositories is a name the user typed matching more than one existing
+// thing, per concept.md "Name resolution": it errors, naming every
+// candidate and the repository it comes from, and never prompts, even
+// interactively.
 func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Located, error) {
 	if repoSpec != "" {
 		r, err := repo.Resolve(repos, repoSpec)
@@ -99,11 +100,32 @@ func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Loca
 		return Located{}, fmt.Errorf("namespace %q not found in repository %q", name, r.Name)
 	}
 
+	candidates, err := findCandidates(dataDir, repos, name)
+	if err != nil {
+		return Located{}, err
+	}
+
+	switch len(candidates) {
+	case 0:
+		return Located{}, fmt.Errorf("no namespace named %q found in any registered repository", name)
+	case 1:
+		return candidates[0], nil
+	}
+
+	return Located{}, ambiguityError(name, candidates)
+}
+
+// findCandidates locates every repository that holds a namespace called
+// name, rooted under dataDir: locally materialized folders first, falling
+// back to every repository's git catalogue only when nothing is
+// materialized anywhere — the same two-pass search Resolve uses when no
+// repoSpec pins the search to one repository.
+func findCandidates(dataDir string, repos []manifest.Repo, name string) ([]Located, error) {
 	var candidates []Located
 	for _, r := range repos {
 		names, err := LocalNames(filepath.Join(dataDir, r.Name))
 		if err != nil {
-			return Located{}, err
+			return nil, err
 		}
 		for _, n := range names {
 			if n == name {
@@ -119,7 +141,7 @@ func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Loca
 		for _, r := range repos {
 			names, err := repo.Namespaces(filepath.Join(dataDir, r.Name))
 			if err != nil {
-				return Located{}, err
+				return nil, err
 			}
 			for _, n := range names {
 				if n == name {
@@ -128,32 +150,33 @@ func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Loca
 			}
 		}
 	}
+	return candidates, nil
+}
 
-	switch len(candidates) {
-	case 0:
-		return Located{}, fmt.Errorf("no namespace named %q found in any registered repository", name)
-	case 1:
-		return candidates[0], nil
+// Candidates reports the repositories holding a namespace called name,
+// rooted under dataDir, for a caller (the router's ambiguity handling) that
+// only needs to know whether the name is ambiguous by itself, before it
+// decides anything else.
+func Candidates(dataDir string, repos []manifest.Repo, name string) ([]manifest.Repo, error) {
+	located, err := findCandidates(dataDir, repos, name)
+	if err != nil {
+		return nil, err
 	}
+	out := make([]manifest.Repo, len(located))
+	for i, c := range located {
+		out[i] = c.Repo
+	}
+	return out, nil
+}
 
+// ambiguityError names every candidate repository and the --repo flag to
+// disambiguate, per concept.md "Name resolution".
+func ambiguityError(name string, candidates []Located) error {
 	repoNames := make([]string, 0, len(candidates))
 	for _, c := range candidates {
 		repoNames = append(repoNames, c.Repo.Name)
 	}
-	if !ui.Interactive() {
-		return Located{}, fmt.Errorf("namespace %q exists in multiple repositories (%s); disambiguate with --repo", name, strings.Join(repoNames, ", "))
-	}
-
-	choice, err := ui.Prompt("", fmt.Sprintf("namespace %q exists in multiple repositories. Choose one:", name), repoNames)
-	if err != nil {
-		return Located{}, err
-	}
-	for _, c := range candidates {
-		if strings.EqualFold(c.Repo.Name, choice) {
-			return c, nil
-		}
-	}
-	return Located{}, fmt.Errorf("no repository named %q", choice)
+	return fmt.Errorf("namespace %q exists in multiple repositories (%s); disambiguate with --repo", name, strings.Join(repoNames, ", "))
 }
 
 // Delete trashes a namespace's folder, unconditionally. Callers are

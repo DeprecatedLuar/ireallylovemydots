@@ -632,3 +632,30 @@ func NamespaceNames() ([]string, error) {
 	}
 	return names, nil
 }
+
+// NamespaceRepoCandidates returns the names of every repository holding a
+// namespace called name, mirroring namespace.Resolve's own candidate
+// search. It exists for the router's ambiguity handling
+// (cmd/dotz/main.go's ambiguityChooser), which needs to know — ahead of
+// asking whether a token means the namespace or the repository — whether
+// the namespace reading is already ambiguous by itself across
+// repositories.
+func NamespaceRepoCandidates(name string) ([]string, error) {
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		return nil, err
+	}
+	dataDir, err := paths.Data()
+	if err != nil {
+		return nil, err
+	}
+	candidates, err := namespace.Candidates(dataDir, reg.Repos, name)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(candidates))
+	for i, r := range candidates {
+		names[i] = r.Name
+	}
+	return names, nil
+}
