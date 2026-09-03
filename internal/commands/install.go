@@ -10,6 +10,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
 	"github.com/DeprecatedLuar/dotz/internal/engine"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
+	"github.com/DeprecatedLuar/dotz/internal/namespace"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
 	"github.com/DeprecatedLuar/dotz/internal/state"
@@ -38,11 +39,12 @@ func installNamespaces(names []string, flags shared.Flags) error {
 	var lines []string
 	defer func() { fmt.Print(ui.Report(lines, "")) }()
 	for _, name := range names {
-		_, repoDir, nsDir, err := locateNamespaceForEnable(dataDir, reg, name, flags)
+		loc, err := namespace.Resolve(dataDir, reg.Repos, name, flags.Repo)
 		if err != nil {
 			return err
 		}
-		if err := engine.Materialize(repoDir, nsDir, name); err != nil {
+		repoDir := filepath.Dir(loc.Dir)
+		if err := engine.Materialize(repoDir, loc.Dir, name); err != nil {
 			return err
 		}
 		lines = append(lines, ui.Operation(ui.MarkerMaterialized, name, ""))

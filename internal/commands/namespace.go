@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
+	"github.com/DeprecatedLuar/dotz/internal/engine"
 	"github.com/DeprecatedLuar/dotz/internal/grammar"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/namespace"
@@ -53,7 +54,11 @@ func HandleNamespace(args []string, flags shared.Flags) error {
 	// handleProfiles already treats args[0] as a profile name, so the fallback
 	// is a plain handoff; a token that names no profile surfaces from there as
 	// an unknown name rather than an unknown token.
-	if err := refuseIfIgnored(name, flags); err != nil {
+	loc, err := resolveNamespace(name, flags)
+	if err != nil {
+		return err
+	}
+	if err := refuseIfIgnored(loc); err != nil {
 		return err
 	}
 	return handleProfiles(name, rest, flags)
@@ -133,7 +138,11 @@ var namespaceVerbsIgnoredMayUse = map[string]bool{"ignore": true, "unignore": tr
 
 func handleNamespaceVerb(name, verb string, args []string, flags shared.Flags) error {
 	if !namespaceVerbsIgnoredMayUse[verb] {
-		if err := refuseIfIgnored(name, flags); err != nil {
+		loc, err := resolveNamespace(name, flags)
+		if err != nil {
+			return err
+		}
+		if err := refuseIfIgnored(loc); err != nil {
 			return err
 		}
 	}
@@ -177,18 +186,29 @@ func handleNamespaceVerb(name, verb string, args []string, flags shared.Flags) e
 // refuseIfIgnored is the one gate every namespace verb but ignore/unignore/
 // edit/list/mv passes through: a namespace whose manifest carries
 // `ignore = true` refuses by name, naming the flag, rather than acting on
-// it or reporting "not found".
-func refuseIfIgnored(name string, flags shared.Flags) error {
-	loc, err := resolveNamespace(name, flags)
-	if err != nil {
-		return err
+// it or reporting "not found". loc is already resolved by the caller — this
+// is purely the ignore check, not a resolution step. An installed
+// namespace's manifest is read straight off disk; a catalogue-only one
+// (Located.Installed == false) has no working-tree manifest yet, so its
+// committed manifest is read via git instead, through the same
+// catalogueNamespaceIgnored listing already uses for the same `=` case.
+func refuseIfIgnored(loc namespace.Located) error {
+	var ignore bool
+	if loc.Installed {
+		m, err := manifest.Read(loc.Dir)
+		if err != nil {
+			return err
+		}
+		ignore = m.Ignore
+	} else {
+		var err error
+		ignore, err = catalogueNamespaceIgnored(filepath.Dir(loc.Dir), filepath.Base(loc.Dir))
+		if err != nil {
+			return err
+		}
 	}
-	m, err := manifest.Read(loc.Dir)
-	if err != nil {
-		return err
-	}
-	if m.Ignore {
-		return fmt.Errorf("namespace %q is ignored (ignore = true in its .dots)", name)
+	if ignore {
+		return fmt.Errorf("namespace %q is ignored (ignore = true in its .dots)", filepath.Base(loc.Dir))
 	}
 	return nil
 }
@@ -252,6 +272,10 @@ func trackPaths(name string, args []string, flags shared.Flags) error {
 		return fmt.Errorf("usage: namespace %s add <path>...", name)
 	}
 	loc, err := resolveNamespace(name, flags)
+	if err != nil {
+		return err
+	}
+	loc, err = ensureInstalled(loc)
 	if err != nil {
 		return err
 	}
@@ -411,8 +435,9 @@ func applyEditedBuffer(namespaceDir string, original, edited []byte) error {
 	return manifest.Write(namespaceDir, m)
 }
 
-// resolveNamespace finds the locally materialized namespace called name,
-// disambiguating across repositories via flags.Repo when needed.
+// resolveNamespace finds the namespace called name, locally materialized or
+// catalogue-only, disambiguating across repositories via flags.Repo when
+// needed.
 func resolveNamespace(name string, flags shared.Flags) (namespace.Located, error) {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
@@ -423,6 +448,26 @@ func resolveNamespace(name string, flags shared.Flags) (namespace.Located, error
 		return namespace.Located{}, err
 	}
 	return namespace.Resolve(dataDir, reg.Repos, name, flags.Repo)
+}
+
+// ensureInstalled materializes loc's namespace via sparse checkout when it
+// is catalogue-only, so a member-level verb that needs real files on disk —
+// add, list — can act on a `=` namespace exactly as if `install` had been
+// run first, per concept.md "Install and uninstall". `enable` and `disable`
+// deliberately do not go through this: concept.md requires enabling an
+// uninstalled namespace to be a hard error answered only by explicit `-i`,
+// so they resolve and check Located.Installed themselves instead.
+func ensureInstalled(loc namespace.Located) (namespace.Located, error) {
+	if loc.Installed {
+		return loc, nil
+	}
+	repoDir := filepath.Dir(loc.Dir)
+	name := filepath.Base(loc.Dir)
+	if err := engine.Materialize(repoDir, loc.Dir, name); err != nil {
+		return namespace.Located{}, err
+	}
+	loc.Installed = true
+	return loc, nil
 }
 
 // ignoreNamespace implements `namespace ignore <name>`: writes
@@ -530,6 +575,10 @@ func renderNamespaceEntries(name string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	loc, err = ensureInstalled(loc)
+	if err != nil {
+		return err
+	}
 	m, err := manifest.Read(loc.Dir)
 	if err != nil {
 		return err
@@ -551,9 +600,12 @@ func renderNamespaceEntries(name string, flags shared.Flags) error {
 	return nil
 }
 
-// NamespaceNames returns every namespace name materialized locally across
-// every registered repository, used by the router to resolve a bare
-// top-level token against known namespaces.
+// NamespaceNames returns every namespace name across every registered
+// repository — locally materialized plus catalogue-only (concept.md
+// "Install and uninstall"'s `=` state) — used by the router to resolve a
+// bare top-level token against known namespaces, so a namespace never
+// checked out on this machine is still nameable by the commands that exist
+// to fetch it.
 func NamespaceNames() ([]string, error) {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
@@ -564,13 +616,19 @@ func NamespaceNames() ([]string, error) {
 		return nil, err
 	}
 
+	seen := make(map[string]bool)
 	var names []string
 	for _, r := range reg.Repos {
-		local, err := namespace.LocalNames(filepath.Join(dataDir, r.Name))
+		repoNames, err := allNamespaceNames(filepath.Join(dataDir, r.Name))
 		if err != nil {
 			return nil, err
 		}
-		names = append(names, local...)
+		for _, n := range repoNames {
+			if !seen[n] {
+				seen[n] = true
+				names = append(names, n)
+			}
+		}
 	}
 	return names, nil
 }

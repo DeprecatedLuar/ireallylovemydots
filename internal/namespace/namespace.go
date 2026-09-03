@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
@@ -60,18 +61,24 @@ func LocalNames(repoDir string) ([]string, error) {
 	return names, nil
 }
 
-// Located is one repository holding a locally materialized namespace by a
-// given name.
+// Located is one repository holding a namespace by a given name — either
+// materialized on disk (Installed) or known only through the repository's
+// git catalogue, per concept.md "Install and uninstall"'s `=` state.
 type Located struct {
-	Repo manifest.Repo
-	Dir  string
+	Repo      manifest.Repo
+	Dir       string
+	Installed bool
 }
 
-// Resolve finds the locally materialized namespace called name among repos,
-// rooted under dataDir. repoSpec, when non-empty, disambiguates directly by
-// repository spec instead of searching. Ambiguity across repositories
-// prompts when interactive, and errors naming every candidate otherwise, per
-// concept.md "Name resolution".
+// Resolve finds the namespace called name among repos, rooted under
+// dataDir: a locally materialized folder first, falling back to a
+// repository's git catalogue for a namespace that has never been checked
+// out on this machine — the `=` state install/enable -i exist to fetch.
+// repoSpec, when non-empty, disambiguates directly by repository spec
+// instead of searching, checking that repository's catalogue the same way
+// rather than deciding existence with a bare stat. Ambiguity across
+// repositories prompts when interactive, and errors naming every candidate
+// otherwise, per concept.md "Name resolution".
 func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Located, error) {
 	if repoSpec != "" {
 		r, err := repo.Resolve(repos, repoSpec)
@@ -79,10 +86,17 @@ func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Loca
 			return Located{}, err
 		}
 		dir := filepath.Join(dataDir, r.Name, name)
-		if _, err := os.Stat(dir); err != nil {
-			return Located{}, fmt.Errorf("namespace %q not found in repository %q", name, r.Name)
+		if _, err := os.Stat(dir); err == nil {
+			return Located{Repo: r, Dir: dir, Installed: true}, nil
 		}
-		return Located{Repo: r, Dir: dir}, nil
+		catalogue, err := repo.Namespaces(filepath.Join(dataDir, r.Name))
+		if err != nil {
+			return Located{}, err
+		}
+		if slices.Contains(catalogue, name) {
+			return Located{Repo: r, Dir: dir}, nil
+		}
+		return Located{}, fmt.Errorf("namespace %q not found in repository %q", name, r.Name)
 	}
 
 	var candidates []Located
@@ -93,7 +107,24 @@ func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Loca
 		}
 		for _, n := range names {
 			if n == name {
-				candidates = append(candidates, Located{Repo: r, Dir: filepath.Join(dataDir, r.Name, name)})
+				candidates = append(candidates, Located{Repo: r, Dir: filepath.Join(dataDir, r.Name, name), Installed: true})
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		// No locally materialized folder anywhere: fall back to every
+		// repository's git catalogue for a namespace that has never been
+		// checked out on this machine.
+		for _, r := range repos {
+			names, err := repo.Namespaces(filepath.Join(dataDir, r.Name))
+			if err != nil {
+				return Located{}, err
+			}
+			for _, n := range names {
+				if n == name {
+					candidates = append(candidates, Located{Repo: r, Dir: filepath.Join(dataDir, r.Name, name)})
+				}
 			}
 		}
 	}

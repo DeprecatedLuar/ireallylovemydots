@@ -232,28 +232,21 @@ func resolveRoute(args []string, namespaces, repos []string, ambiguous func(name
 		return route{target: targetHelp, args: args[1:]}, nil
 	}
 
-	// Verb-first alias: `dots enable neovim` -> `namespace neovim enable`.
+	// Verb-first alias: `dots enable neovim` -> `namespace enable neovim`.
 	// This alias only ever targets the namespace subtree — repo has its
-	// own explicit `repo add`/`repo rm`, never a bare verb form.
+	// own explicit `repo add`/`repo rm`, never a bare verb form. Per
+	// concept.md "Aliases", "the verb-first alias always resolves to the
+	// collection level, whatever follows it" — the collection level is
+	// where a namespace not yet on this machine is still nameable, which is
+	// what makes `dots install <ns>` and `dots enable <ns> -i` reach the
+	// namespaces they exist to fetch. `add` is the sole verb whose
+	// collection meaning takes exactly one name; routing it here the same
+	// way as every other verb still produces the right usage error for
+	// `dots add <ns> <path>`, via handleNamespaceNounVerb's own arity
+	// check — no special case needed.
 	if grammar.IsVerb(tok0) || slices.Contains(grammar.NamespaceOnlyVerbs, tok0) {
 		canon := grammar.Canonical(tok0)
-		// enable, install, and uninstall all accept more than one namespace
-		// name (concept.md "Any verb that takes a namespace takes several");
-		// every other verb stays single-name, so only these three are
-		// routed to the noun-level batch form here.
-		batchable := canon == "enable" || canon == "install" || canon == "uninstall"
-		if batchable && len(args) == 1 {
-			return route{target: targetNamespace, args: []string{canon}}, nil
-		}
-		if batchable && len(args) > 2 {
-			return route{target: targetNamespace, args: append([]string{canon}, args[1:]...)}, nil
-		}
-		if len(args) < 2 {
-			return route{}, fmt.Errorf("usage: %s <namespace> [args]", tok0)
-		}
-		name := args[1]
-		rewritten := append([]string{name, canon}, args[2:]...)
-		return route{target: targetNamespace, args: rewritten}, nil
+		return route{target: targetNamespace, args: append([]string{canon}, args[1:]...)}, nil
 	}
 
 	// Bare name: namespace-first alias, or the equivalent repo shortcut.

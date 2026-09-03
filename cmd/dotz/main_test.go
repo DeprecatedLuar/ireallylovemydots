@@ -27,7 +27,7 @@ func TestResolveRoute_Aliases(t *testing.T) {
 		{
 			name: "verb-first",
 			args: []string{"enable", "neovim"},
-			want: route{target: targetNamespace, args: []string{"neovim", "enable"}},
+			want: route{target: targetNamespace, args: []string{"enable", "neovim"}},
 		},
 		{
 			name: "namespace-first",
@@ -184,7 +184,7 @@ func TestResolveRoute_LinkUnlinkAliases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := route{target: targetNamespace, args: []string{"neovim", "enable"}}
+	want := route{target: targetNamespace, args: []string{"enable", "neovim"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("resolveRoute(link) = %+v, want %+v", got, want)
 	}
@@ -193,7 +193,7 @@ func TestResolveRoute_LinkUnlinkAliases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want2 := route{target: targetNamespace, args: []string{"neovim", "disable"}}
+	want2 := route{target: targetNamespace, args: []string{"disable", "neovim"}}
 	if !reflect.DeepEqual(got2, want2) {
 		t.Fatalf("resolveRoute(unlink) = %+v, want %+v", got2, want2)
 	}

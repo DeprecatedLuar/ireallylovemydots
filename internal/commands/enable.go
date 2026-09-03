@@ -212,20 +212,21 @@ func discoverAllTargets(dataDir string, reg manifest.Registry, s state.State, fl
 func resolveExplicitTargets(dataDir string, reg manifest.Registry, names []string, flags shared.Flags) ([]enableTarget, error) {
 	targets := make([]enableTarget, 0, len(names))
 	for _, name := range names {
-		r, repoDir, nsDir, err := locateNamespaceForEnable(dataDir, reg, name, flags)
+		loc, err := namespace.Resolve(dataDir, reg.Repos, name, flags.Repo)
 		if err != nil {
 			return nil, err
 		}
-		if !namespaceInstalled(nsDir) && !flags.Install {
+		if !namespaceInstalled(loc) && !flags.Install {
 			return nil, fmt.Errorf("namespace %q is not installed; rerun with -i to install and enable it", name)
 		}
-		entries, _, err := engine.ManifestEntries(repoDir, nsDir, name)
+		repoDir := filepath.Dir(loc.Dir)
+		entries, _, err := engine.ManifestEntries(repoDir, loc.Dir, name)
 		if err != nil {
 			return nil, err
 		}
 		targets = append(targets, enableTarget{
-			repo: r, repoDir: repoDir, nsDir: nsDir, name: name, display: name,
-			key: state.Key{Repo: r.Name, Namespace: name}, entries: entries,
+			repo: loc.Repo, repoDir: repoDir, nsDir: loc.Dir, name: name, display: name,
+			key: state.Key{Repo: loc.Repo.Name, Namespace: name}, entries: entries,
 		})
 	}
 	return targets, nil
@@ -252,13 +253,13 @@ func problemSummary(problems []engine.Problem) string {
 	return strings.Join(summaries, "; ")
 }
 
-// namespaceInstalled reports whether a namespace's folder is materialized
-// on disk — concept.md "Install and uninstall"'s middle state — without
+// namespaceInstalled reports whether a namespace is materialized on disk —
+// concept.md "Install and uninstall"'s middle state — reading it off the
+// already-resolved Located rather than re-stat'ing the filesystem, without
 // consulting machine state, which records enabled/disabled but not
 // installed/not-installed.
-func namespaceInstalled(nsDir string) bool {
-	_, err := os.Stat(nsDir)
-	return err == nil
+func namespaceInstalled(loc namespace.Located) bool {
+	return loc.Installed
 }
 
 func allNamespaceNames(repoDir string) ([]string, error) {
@@ -292,66 +293,4 @@ func hardBlocked(problems []engine.Problem) bool {
 		}
 	}
 	return false
-}
-
-// locateNamespaceForEnable finds the namespace named name across every
-// registered repository: a locally materialized folder first
-// (namespace.Resolve's ordinary case), falling back to a repository's git
-// catalogue for a namespace that has never been checked out on this
-// machine — enable is what performs that checkout.
-func locateNamespaceForEnable(dataDir string, reg manifest.Registry, name string, flags shared.Flags) (manifest.Repo, string, string, error) {
-	if loc, err := namespace.Resolve(dataDir, reg.Repos, name, flags.Repo); err == nil {
-		return loc.Repo, filepath.Dir(loc.Dir), loc.Dir, nil
-	}
-
-	repos := reg.Repos
-	if flags.Repo != "" {
-		r, err := repo.Resolve(reg.Repos, flags.Repo)
-		if err != nil {
-			return manifest.Repo{}, "", "", err
-		}
-		repos = []manifest.Repo{r}
-	}
-
-	var candidates []manifest.Repo
-	for _, r := range repos {
-		names, err := repo.Namespaces(filepath.Join(dataDir, r.Name))
-		if err != nil {
-			return manifest.Repo{}, "", "", err
-		}
-		for _, n := range names {
-			if n == name {
-				candidates = append(candidates, r)
-				break
-			}
-		}
-	}
-
-	switch len(candidates) {
-	case 0:
-		return manifest.Repo{}, "", "", fmt.Errorf("no namespace named %q found in any registered repository", name)
-	case 1:
-		r := candidates[0]
-		repoDir := filepath.Join(dataDir, r.Name)
-		return r, repoDir, filepath.Join(repoDir, name), nil
-	}
-
-	repoNames := make([]string, 0, len(candidates))
-	for _, r := range candidates {
-		repoNames = append(repoNames, r.Name)
-	}
-	if !ui.Interactive() {
-		return manifest.Repo{}, "", "", fmt.Errorf("namespace %q exists in multiple repositories (%s); disambiguate with --repo", name, strings.Join(repoNames, ", "))
-	}
-	choice, err := ui.Prompt("", fmt.Sprintf("namespace %q exists in multiple repositories. Choose one:", name), repoNames)
-	if err != nil {
-		return manifest.Repo{}, "", "", err
-	}
-	for _, r := range candidates {
-		if strings.EqualFold(r.Name, choice) {
-			repoDir := filepath.Join(dataDir, r.Name)
-			return r, repoDir, filepath.Join(repoDir, name), nil
-		}
-	}
-	return manifest.Repo{}, "", "", fmt.Errorf("no repository named %q", choice)
 }
