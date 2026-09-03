@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
 	"github.com/DeprecatedLuar/dotz/internal/engine"
@@ -330,66 +328,20 @@ func editNamespace(name string, flags shared.Flags) error {
 		return err
 	}
 
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		return fmt.Errorf("$EDITOR is not set")
-	}
-
 	original, err := prepareEditBuffer(loc.Dir)
 	if err != nil {
 		return err
 	}
 
-	tmp, err := os.CreateTemp("", "dots-namespace-edit-*.toml")
-	if err != nil {
-		return fmt.Errorf("create edit buffer: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmp.Write(original); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write edit buffer: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close edit buffer: %w", err)
-	}
-
-	for {
-		cmd := exec.Command(editor, tmpPath)
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("run %s: %w", editor, err)
-		}
-
-		edited, err := os.ReadFile(tmpPath)
-		if err != nil {
-			return fmt.Errorf("read edit buffer: %w", err)
-		}
-
-		if bytes.Equal(original, edited) {
-			return nil
-		}
-
-		if _, decodeErr := manifest.Decode(edited); decodeErr != nil {
-			if !ui.Interactive() {
-				return fmt.Errorf("%s does not parse: %w (edit discarded)", manifest.Path(loc.Dir), decodeErr)
-			}
-			choice, promptErr := ui.Prompt(
-				"",
-				fmt.Sprintf("%s does not parse: %v\n  [r] reopen at the error\n  [d] discard the edit", manifest.Path(loc.Dir), decodeErr),
-				[]string{"r", "d"},
-			)
-			if promptErr != nil {
-				return promptErr
-			}
-			if strings.EqualFold(strings.TrimSpace(choice), "r") {
-				continue
-			}
-			return nil
-		}
-
-		return applyEditedBuffer(loc.Dir, original, edited)
-	}
+	return editBuffer(original, manifest.Path(loc.Dir),
+		func(edited []byte) error {
+			_, err := manifest.Decode(edited)
+			return err
+		},
+		func(seed, edited []byte) error {
+			return applyEditedBuffer(loc.Dir, seed, edited)
+		},
+	)
 }
 
 // prepareEditBuffer returns the bytes to seed namespace <ns> edit's buffer

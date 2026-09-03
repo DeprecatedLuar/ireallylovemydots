@@ -72,6 +72,7 @@ func HandleHelp(args []string) error {
 		Text("Per-entry variants within a namespace: main is the namespace root, and the "+
 			"active profile's overrides sit on top of it, one entry at a time.").
 		Section("Manage profiles",
+			gohelp.Item("namespace <ns> profiles edit", "Open the profile manifest in $EDITOR; creates it if absent"),
 			gohelp.Item("namespace <ns> profiles list", "List all profiles, active marked"),
 			gohelp.Item("namespace <ns> profiles add <profile>", "Create a profile, empty"),
 			gohelp.Item("namespace <ns> profiles add <profile> --from <source>", "Create it seeded from main or another profile"),

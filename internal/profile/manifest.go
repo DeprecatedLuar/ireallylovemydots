@@ -66,9 +66,30 @@ func ProfileDir(namespaceDir, name string) string {
 	return filepath.Join(Dir(namespaceDir), name)
 }
 
-// Read loads a namespace's profile manifest. A missing file is not an error:
-// it reads as an empty manifest, the same convention internal/manifest uses,
-// since a namespace with no profiles has no .profiles folder at all.
+// Exists reports whether a namespace has a profile layer at all — the
+// manifest's presence, not its content. Only `profiles edit` creates the
+// file (concept.md "The profile manifest > Creating it"); every other
+// profile verb must gate on this, not on Read returning an empty Manifest,
+// because an absent file and a manifest saved with empty arrays are not the
+// same fact — the latter is a namespace that opted in and has nothing
+// declared yet.
+func Exists(namespaceDir string) (bool, error) {
+	_, err := os.Lstat(Path(namespaceDir))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stat %s: %w", Path(namespaceDir), err)
+	}
+	return true, nil
+}
+
+// Read loads a namespace's profile manifest. A missing file reads as an
+// empty Manifest so callers that only need the two lists (seeding the edit
+// buffer, self-heal's cross-checks) don't have to special-case absence — but
+// that is a convenience for readers, not a claim that absence and emptiness
+// mean the same thing. A caller deciding whether the namespace has a profile
+// layer at all must call Exists instead.
 func Read(namespaceDir string) (Manifest, error) {
 	data, err := os.ReadFile(Path(namespaceDir))
 	if os.IsNotExist(err) {
@@ -80,6 +101,18 @@ func Read(namespaceDir string) (Manifest, error) {
 	var m Manifest
 	if err := toml.Unmarshal(data, &m); err != nil {
 		return Manifest{}, fmt.Errorf("parse profile manifest %s: %w", Path(namespaceDir), err)
+	}
+	return m, nil
+}
+
+// Decode parses profile manifest TOML data. Used both by Read and by callers
+// that hold manifest bytes off disk, such as profiles edit's buffer, where
+// the source text may still carry the edit buffer's commented-out
+// candidates — ordinary TOML comments, which toml.Unmarshal already ignores.
+func Decode(data []byte) (Manifest, error) {
+	var m Manifest
+	if err := toml.Unmarshal(data, &m); err != nil {
+		return Manifest{}, err
 	}
 	return m, nil
 }

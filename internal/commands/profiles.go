@@ -90,6 +90,8 @@ func handleProfilesNounVerb(namespace, verb string, args []string, flags shared.
 		return mvProfile(namespace, args[0], args[1], flags)
 	case "list":
 		return renderProfileList(namespace, flags)
+	case "edit":
+		return editProfiles(namespace, flags)
 	default:
 		return fmt.Errorf("namespace %s profiles %s: not valid without a profile name", namespace, verb)
 	}
@@ -131,11 +133,24 @@ type profileScope struct {
 }
 
 // scopeFor resolves one namespace and reads every manifest a profile verb
-// works against, so no verb below repeats the four-step lookup.
+// works against, so no verb below repeats the four-step lookup. Every
+// profile verb but `profiles edit` requires the profile manifest to already
+// exist: its presence is what says the namespace has opted into a profile
+// layer at all, and only `profiles edit` may create it (concept.md "The
+// profile manifest > Creating it"). editProfiles builds its own scope
+// instead of calling this, since it is the one path allowed to proceed
+// without the file.
 func scopeFor(namespaceName string, flags shared.Flags) (profileScope, error) {
 	loc, err := resolveNamespace(namespaceName, flags)
 	if err != nil {
 		return profileScope{}, err
+	}
+	exists, err := profile.Exists(loc.Dir)
+	if err != nil {
+		return profileScope{}, err
+	}
+	if !exists {
+		return profileScope{}, fmt.Errorf("namespace %q has no profile layer yet; run `dots namespace %s profiles edit` to create one", namespaceName, namespaceName)
 	}
 	m, err := manifest.Read(loc.Dir)
 	if err != nil {
@@ -197,6 +212,52 @@ func reportProfile(marker, name string, relinked []string) {
 	fmt.Print(ui.Report(lines, ""))
 }
 
+// editProfiles implements `namespace <ns> profiles edit`, the only thing
+// that brings .profiles/.dots into existence (concept.md "The profile
+// manifest > Creating it"). It builds its own scope rather than calling
+// scopeFor, since scopeFor refuses when the file is absent and this is the
+// one verb that must proceed anyway.
+func editProfiles(namespaceName string, flags shared.Flags) error {
+	loc, err := resolveNamespace(namespaceName, flags)
+	if err != nil {
+		return err
+	}
+	m, err := manifest.Read(loc.Dir)
+	if err != nil {
+		return err
+	}
+	pm, err := profile.Read(loc.Dir)
+	if err != nil {
+		return err
+	}
+
+	tracked := make([]string, len(m.Entries))
+	for i, e := range m.Entries {
+		tracked[i] = e.Name
+	}
+	seed := profile.EditBuffer(pm, tracked)
+
+	return editBuffer(seed, profile.Path(loc.Dir),
+		func(edited []byte) error {
+			_, err := profile.Decode(edited)
+			return err
+		},
+		func(seed, edited []byte) error {
+			decoded, err := profile.Decode(edited)
+			if err != nil {
+				return fmt.Errorf("parse edited profile manifest: %w", err)
+			}
+			return profile.Write(loc.Dir, decoded)
+		},
+	)
+}
+
+// addProfile implements `profiles add <profile>`. Its success line carries
+// a "created" detail rather than going through reportProfile bare: a bare
+// "- <name>" is exactly what renderProfileList prints for that same profile
+// once it exists, and a mutation that succeeds in silence — or that reads
+// like a listing row instead of an announcement — is indistinguishable from
+// one that did nothing (concept.md "Listing output").
 func addProfile(namespaceName, name string, flags shared.Flags) error {
 	sc, err := scopeFor(namespaceName, flags)
 	if err != nil {
@@ -205,7 +266,7 @@ func addProfile(namespaceName, name string, flags shared.Flags) error {
 	if err := profile.Create(sc.dir, name, flags.From); err != nil {
 		return err
 	}
-	reportProfile(ui.MarkerMaterialized, name, nil)
+	fmt.Print(ui.Report([]string{ui.Operation(ui.MarkerMaterialized, name, "created")}, ""))
 	return nil
 }
 

@@ -107,6 +107,9 @@ func TestProfilesAddOverride_UndeclaredEntry_ForceDeclaresIt(t *testing.T) {
 func TestProfilesRm_ActiveProfileReturnsToMainAndReportsRelinks(t *testing.T) {
 	nsDir, entries := registerNamespaceWithFiles(t, "editors", []string{"gitconfig", "plain"})
 	enableForProfiles(t, "editors")
+	if err := profile.Write(nsDir, profile.Manifest{}); err != nil {
+		t.Fatal(err)
+	}
 	captureStdoutStderr(t, func() {
 		if err := handleProfiles("editors", []string{"main", "add", "gitconfig"}, shared.Flags{}); err != nil {
 			t.Fatal(err)
@@ -153,6 +156,9 @@ func TestProfilesRm_ActiveProfileReturnsToMainAndReportsRelinks(t *testing.T) {
 func TestProfileOperations_WriteNothingMachineSpecificIntoTheRepository(t *testing.T) {
 	nsDir, _ := registerNamespaceWithFiles(t, "editors", []string{"gitconfig"})
 	enableForProfiles(t, "editors")
+	if err := profile.Write(nsDir, profile.Manifest{}); err != nil {
+		t.Fatal(err)
+	}
 	captureStdoutStderr(t, func() {
 		for _, args := range [][]string{
 			{"main", "add", "gitconfig"},
@@ -191,6 +197,9 @@ func TestProfileOperations_WriteNothingMachineSpecificIntoTheRepository(t *testi
 
 func TestProfilesMainRm_WithOverridesOutstanding_NamesTheProfileCommands(t *testing.T) {
 	nsDir, _ := registerNamespaceWithFiles(t, "editors", []string{"gitconfig"})
+	if err := profile.Write(nsDir, profile.Manifest{}); err != nil {
+		t.Fatal(err)
+	}
 	captureStdoutStderr(t, func() {
 		for _, args := range [][]string{
 			{"main", "add", "gitconfig"},
@@ -230,6 +239,9 @@ func TestProfilesMainRm_WithOverridesOutstanding_NamesTheProfileCommands(t *test
 
 func TestRmEntry_ProfiledEntry_NamesMainRm(t *testing.T) {
 	nsDir, entries := registerNamespaceWithFiles(t, "editors", []string{"gitconfig"})
+	if err := profile.Write(nsDir, profile.Manifest{}); err != nil {
+		t.Fatal(err)
+	}
 	captureStdoutStderr(t, func() {
 		if err := handleProfiles("editors", []string{"main", "add", "gitconfig"}, shared.Flags{}); err != nil {
 			t.Fatal(err)
@@ -284,6 +296,9 @@ func TestProfilesAdd_MainIsReserved(t *testing.T) {
 func TestProfilesMv_ActiveProfile_RepointsDestinations(t *testing.T) {
 	nsDir, entries := registerNamespaceWithFiles(t, "editors", []string{"gitconfig"})
 	enableForProfiles(t, "editors")
+	if err := profile.Write(nsDir, profile.Manifest{}); err != nil {
+		t.Fatal(err)
+	}
 	captureStdoutStderr(t, func() {
 		for _, args := range [][]string{
 			{"main", "add", "gitconfig"},
