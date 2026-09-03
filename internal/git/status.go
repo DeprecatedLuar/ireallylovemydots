@@ -62,20 +62,41 @@ func isGitRepo(repoDir string) bool {
 	return cmd.Run() == nil
 }
 
+// dirtyPaths shells out to `git status --porcelain -z` rather than the
+// line-based `--porcelain` format: in `-z` mode fields are NUL-separated and
+// paths are never C-quoted, so a filename with non-ASCII bytes (e.g.
+// "café.kpp") comes back literal instead of as `"caf\303\251.kpp"` — which
+// the line-based parser would split on the stray leading quote. A rename or
+// copy record carries two NUL-terminated fields — the destination path,
+// then the source path — instead of one, per `git help status`'s "-z"
+// section; both are reported dirty, since both namespaces hold uncommitted
+// work.
 func dirtyPaths(repoDir string) ([]string, error) {
-	cmd := exec.Command("git", "-C", repoDir, "status", "--porcelain")
+	cmd := exec.Command("git", "-C", repoDir, "status", "--porcelain", "-z")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("git status %s: %w", repoDir, err)
 	}
+	fields := strings.Split(string(out), "\x00")
 	var paths []string
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
-		if line == "" {
+	for i := 0; i < len(fields); i++ {
+		entry := fields[i]
+		if entry == "" {
 			continue
 		}
 		// Porcelain format: two status letters, a space, then the path.
-		if len(line) > 3 {
-			paths = append(paths, strings.TrimSpace(line[3:]))
+		if len(entry) <= 3 {
+			continue
+		}
+		x, y := entry[0], entry[1]
+		paths = append(paths, entry[3:])
+		if x == 'R' || x == 'C' || y == 'R' || y == 'C' {
+			// The source path is a second NUL-terminated field right after
+			// this one.
+			i++
+			if i < len(fields) && fields[i] != "" {
+				paths = append(paths, fields[i])
+			}
 		}
 	}
 	return paths, nil

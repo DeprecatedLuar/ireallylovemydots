@@ -63,38 +63,52 @@ func installNamespaces(names []string, flags shared.Flags) error {
 // declining rather than erroring, per concept.md "Install and uninstall":
 // "non-interactively the prompt defaults to no."
 func uninstallNamespaces(names []string, flags shared.Flags) error {
+	type resolved struct {
+		name string
+		loc  namespace.Located
+	}
+	targets := make([]resolved, 0, len(names))
+	repoNamespaces := map[string][]string{}
+	for _, name := range names {
+		loc, err := resolveNamespace(name, flags)
+		if err != nil {
+			return err
+		}
+		targets = append(targets, resolved{name: name, loc: loc})
+		repoNamespaces[loc.Repo.Name] = append(repoNamespaces[loc.Repo.Name], name)
+	}
+
 	checkedRepos := map[string]bool{}
 	// lines is printed via defer so a mid-batch failure still reports every
 	// namespace already uninstalled before the error, rather than silently
 	// dropping that partial progress on an early return.
 	var lines []string
 	defer func() { fmt.Print(ui.Report(lines, "")) }()
-	for _, name := range names {
-		loc, err := resolveNamespace(name, flags)
-		if err != nil {
-			return err
-		}
-		repoDir := filepath.Dir(loc.Dir)
+	for _, t := range targets {
+		repoDir := filepath.Dir(t.loc.Dir)
 
-		if !checkedRepos[loc.Repo.Name] {
-			if err := checkGitSafety(loc.Repo.Name, repoDir, flags); err != nil {
+		// Git safety is scoped to the namespace(s) being uninstalled from
+		// this repository, computed above before any change is made —
+		// uncommitted work elsewhere in the same clone doesn't block this.
+		if !checkedRepos[t.loc.Repo.Name] {
+			if err := checkGitSafety(t.loc.Repo.Name, repoDir, repoNamespaces[t.loc.Repo.Name], false, flags); err != nil {
 				return err
 			}
-			checkedRepos[loc.Repo.Name] = true
+			checkedRepos[t.loc.Repo.Name] = true
 		}
 
-		if _, err := os.Stat(loc.Dir); os.IsNotExist(err) {
+		if _, err := os.Stat(t.loc.Dir); os.IsNotExist(err) {
 			// Already uninstalled: nothing to do.
 			continue
 		}
 
-		key := state.Key{Repo: loc.Repo.Name, Namespace: name}
+		key := state.Key{Repo: t.loc.Repo.Name, Namespace: t.name}
 		s, err := state.Read()
 		if err != nil {
 			return err
 		}
 		if s.Entries[key].Enabled {
-			proceed, err := confirmUninstallEnabled(name, flags)
+			proceed, err := confirmUninstallEnabled(t.name, flags)
 			if err != nil {
 				return err
 			}
@@ -106,10 +120,10 @@ func uninstallNamespaces(names []string, flags shared.Flags) error {
 			}
 		}
 
-		if err := repo.Remove(repoDir, name); err != nil {
+		if err := repo.Remove(repoDir, t.name); err != nil {
 			return err
 		}
-		lines = append(lines, ui.Operation(ui.MarkerAbsent, name, ""))
+		lines = append(lines, ui.Operation(ui.MarkerAbsent, t.name, ""))
 	}
 	return nil
 }

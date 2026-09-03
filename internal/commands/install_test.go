@@ -182,7 +182,14 @@ func TestUninstallNamespaces_Enabled_DisablesAndUninstallsNoDanglingSymlink(t *t
 	}
 }
 
-func TestUninstallNamespaces_DirtyRepo_RefusesForceOverrides(t *testing.T) {
+// TestUninstallNamespaces_DirtyInsideNamespace_RefusesForceSkipsOurGate
+// covers the namespace-scoped git-safety gate: dirt inside the namespace
+// being uninstalled refuses, naming it and pointing at `dots sync`; --force
+// skips that gate specifically (a different, lower-level git protection —
+// git's own sparse-checkout refusal to discard a dirty tracked/untracked
+// path — is untouched by our --force and still applies, which is why the
+// --force attempt below still errors, just with a different message).
+func TestUninstallNamespaces_DirtyInsideNamespace_RefusesForceSkipsOurGate(t *testing.T) {
 	home := t.TempDir()
 	source := newCatalogueSourceRepo(t, home)
 	registerClonedCatalogue(t, source)
@@ -196,33 +203,54 @@ func TestUninstallNamespaces_DirtyRepo_RefusesForceOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	repoDir := filepath.Join(dataDir, "dotfiles")
-	// Make an uncommitted, untracked change elsewhere in the repo clone —
-	// dirty enough to trip the dots-level git-safety check, but outside the
-	// "editors" namespace's own tracked content, so --force's actual sparse-
-	// checkout removal of editors isn't independently blocked by git's own
-	// refusal to discard a dirty tracked file (a different, lower-level
-	// protection --force isn't meant to defeat).
-	if err := os.WriteFile(filepath.Join(repoDir, "untracked"), []byte("dirty"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(repoDir, "editors", "untracked"), []byte("dirty"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	err = uninstallNamespaces([]string{"editors"}, shared.Flags{Yes: true})
 	if err == nil {
-		t.Fatal("expected uninstall to refuse against a dirty repository")
+		t.Fatal("expected uninstall to refuse against a namespace with uncommitted changes")
 	}
-	if !strings.Contains(err.Error(), "sync") {
-		t.Fatalf("expected the error to point at `dots sync`, got: %v", err)
+	if !strings.Contains(err.Error(), "sync") || !strings.Contains(err.Error(), "editors") {
+		t.Fatalf("expected the error to point at `dots sync` and name editors, got: %v", err)
 	}
-
 	if _, statErr := os.Stat(filepath.Join(repoDir, "editors")); statErr != nil {
 		t.Fatalf("expected the namespace untouched after refusal, got err=%v", statErr)
 	}
 
-	if err := uninstallNamespaces([]string{"editors"}, shared.Flags{Force: true}); err != nil {
-		t.Fatalf("uninstall editors --force: %v", err)
+	err = uninstallNamespaces([]string{"editors"}, shared.Flags{Force: true})
+	if err == nil || strings.Contains(err.Error(), "sync") {
+		t.Fatalf("expected --force to skip our git-safety gate (a different error, from git's own sparse-checkout refusal), got: %v", err)
+	}
+}
+
+// TestUninstallNamespaces_DirtyOutsideNamespace_NotBlocked covers the other
+// half of the same scoping fix: uncommitted changes at the repository root
+// — outside any namespace folder — must never block uninstalling an
+// unrelated, clean namespace.
+func TestUninstallNamespaces_DirtyOutsideNamespace_NotBlocked(t *testing.T) {
+	home := t.TempDir()
+	source := newCatalogueSourceRepo(t, home)
+	registerClonedCatalogue(t, source)
+
+	if err := installNamespaces([]string{"editors"}, shared.Flags{}); err != nil {
+		t.Fatalf("install editors: %v", err)
+	}
+
+	dataDir, err := paths.Data()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Join(dataDir, "dotfiles")
+	if err := os.WriteFile(filepath.Join(repoDir, "untracked"), []byte("dirty"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := uninstallNamespaces([]string{"editors"}, shared.Flags{Yes: true}); err != nil {
+		t.Fatalf("expected repo-root dirt not to block uninstalling editors, got: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(repoDir, "editors")); !os.IsNotExist(statErr) {
-		t.Fatalf("expected --force to proceed with the uninstall, got err=%v", statErr)
+		t.Fatalf("expected editors uninstalled, got err=%v", statErr)
 	}
 }
 

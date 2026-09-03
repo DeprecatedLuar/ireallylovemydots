@@ -114,6 +114,7 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 	}
 	targets := make([]resolved, 0, len(names))
 	rows := make([]ui.Entry, 0, len(names))
+	repoNamespaces := map[string][]string{}
 	for _, name := range names {
 		loc, err := resolveNamespace(name, flags)
 		if err != nil {
@@ -130,30 +131,34 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 		}
 		row.Count = len(m.Entries)
 		rows = append(rows, row)
+		repoNamespaces[loc.Repo.Name] = append(repoNamespaces[loc.Repo.Name], name)
+	}
+
+	// Git safety is checked once per affected repository, scoped to just the
+	// namespace(s) being removed from it, and before the destructive
+	// confirmation prompt below — refusing after the user already confirmed
+	// would waste their answer. It's also never run inside the per-namespace
+	// removal loop further down: trashing a namespace uses a raw filesystem
+	// move (trash.Move), which is not git-aware and leaves the repo's git
+	// status dirty, so checking mid-loop would make an earlier namespace's
+	// own removal trip the safety check for a later namespace in the same
+	// repo, self-blocking a batch the user already confirmed once. `repo rm`
+	// follows this same shape.
+	checkedRepos := map[string]bool{}
+	for _, t := range targets {
+		if checkedRepos[t.loc.Repo.Name] {
+			continue
+		}
+		if err := checkGitSafety(t.loc.Repo.Name, filepath.Dir(t.loc.Dir), repoNamespaces[t.loc.Repo.Name], false, flags); err != nil {
+			return err
+		}
+		checkedRepos[t.loc.Repo.Name] = true
 	}
 
 	if proceed, err := confirmRemoval("namespace", rows, flags); err != nil {
 		return err
 	} else if !proceed {
 		return nil
-	}
-
-	// Git safety is checked once per affected repository, before anything is
-	// trashed — never inside the per-namespace loop below. Trashing a
-	// namespace uses a raw filesystem move (trash.Move), which is not
-	// git-aware and leaves the repo's git status dirty; checking mid-loop
-	// would make an earlier namespace's own removal trip the safety check
-	// for a later namespace in the same repo, self-blocking a batch the user
-	// already confirmed once. `repo rm` follows this same shape.
-	checkedRepos := map[string]bool{}
-	for _, t := range targets {
-		if checkedRepos[t.loc.Repo.Name] {
-			continue
-		}
-		if err := checkGitSafety(t.loc.Repo.Name, filepath.Dir(t.loc.Dir), flags); err != nil {
-			return err
-		}
-		checkedRepos[t.loc.Repo.Name] = true
 	}
 
 	// lines is printed via defer so a mid-batch failure still reports every
@@ -201,14 +206,19 @@ func rmRepo(name string, flags shared.Flags) error {
 		names[i] = row.Name
 	}
 
+	// Checked before the destructive confirmation below, per the same
+	// ordering as `namespace rm`: refusing after the user already confirmed
+	// would waste their answer. Unlike `namespace rm`, this passes the
+	// clone's whole namespace list and keeps the repo-root-file check
+	// active — a `repo rm` legitimately cares about the whole clone's state.
+	if err := checkGitSafety(r.Name, repoDir, names, true, flags); err != nil {
+		return err
+	}
+
 	if proceed, err := confirmRemoval("namespace", rows, flags); err != nil {
 		return err
 	} else if !proceed {
 		return nil
-	}
-
-	if err := checkGitSafety(r.Name, repoDir, flags); err != nil {
-		return err
 	}
 
 	// lines is printed via defer so a mid-batch failure — whether a later
@@ -298,12 +308,38 @@ func dirtyNamespaces(paths []string) (namespaces []string, rootFiles int) {
 	return namespaces, rootFiles
 }
 
+// namespacesIn reduces dirty to just the entries also present in scope,
+// preserving dirty's order (already sorted by dirtyNamespaces).
+func namespacesIn(dirty, scope []string) []string {
+	inScope := make(map[string]bool, len(scope))
+	for _, ns := range scope {
+		inScope[ns] = true
+	}
+	var out []string
+	for _, ns := range dirty {
+		if inScope[ns] {
+			out = append(out, ns)
+		}
+	}
+	return out
+}
+
 // checkGitSafety reads repoDir's git state and refuses removal when it
 // would destroy work that exists nowhere else, per concept.md "Git safety
 // on removal": uncommitted changes or unpushed commits point at `dots
 // sync`; no remote at all warns that the trash is the only safety net.
 // --force overrides all three.
-func checkGitSafety(repoName, repoDir string, flags shared.Flags) error {
+//
+// The dirty-working-tree check is scoped to namespaces: only dirt inside one
+// of those namespaces gates the operation, so uncommitted work in an
+// unrelated namespace of the same clone never blocks it. Repository-root
+// dirt (outside any namespace folder) only joins the gate when
+// blockRootFiles is true — `repo rm` cares about the whole clone's state
+// and sets it; `namespace rm` and `uninstall` scope to specific namespaces
+// and leave it false. Unpushed commits and a missing remote are never
+// scoped by namespaces — they describe the whole clone regardless of which
+// namespace triggered the check.
+func checkGitSafety(repoName, repoDir string, namespaces []string, blockRootFiles bool, flags shared.Flags) error {
 	if flags.Force {
 		return nil
 	}
@@ -312,13 +348,19 @@ func checkGitSafety(repoName, repoDir string, flags shared.Flags) error {
 		return err
 	}
 	if len(st.Dirty) > 0 {
-		namespaces, rootFiles := dirtyNamespaces(st.Dirty)
-		header := fmt.Sprintf("%q has uncommitted changes in %d namespace(s):", repoName, len(namespaces))
-		if rootFiles > 0 {
-			header = fmt.Sprintf("%s, plus %d repo-root file(s)", strings.TrimSuffix(header, ":"), rootFiles) + ":"
+		dirty, rootFiles := dirtyNamespaces(st.Dirty)
+		scoped := namespacesIn(dirty, namespaces)
+		if !blockRootFiles {
+			rootFiles = 0
 		}
-		msg := ui.List(header, namespaces, "run `dots sync` first, or --force to override")
-		return fmt.Errorf("%s", msg)
+		if len(scoped) > 0 || rootFiles > 0 {
+			header := fmt.Sprintf("%q has uncommitted changes in %d namespace(s):", repoName, len(scoped))
+			if rootFiles > 0 {
+				header = fmt.Sprintf("%s, plus %d repo-root file(s)", strings.TrimSuffix(header, ":"), rootFiles) + ":"
+			}
+			msg := ui.List(header, scoped, "run `dots sync` first, or --force to override")
+			return fmt.Errorf("%s", msg)
+		}
 	}
 	if st.Unpushed > 0 {
 		return fmt.Errorf("%q has %d commit(s) not pushed to its remote; run `dots sync` first, or --force to override",
