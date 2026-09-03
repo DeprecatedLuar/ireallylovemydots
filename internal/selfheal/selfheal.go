@@ -643,71 +643,21 @@ func reconcileNamespace(key state.Key, namespaceDir string, entries []manifest.E
 		}
 	}
 
-	var linked []string
-	for _, e := range entries {
-		if !e.HasDestination() {
-			continue
-		}
-
-		// A destination whose parent resolves inside dots' own data
-		// directory never reaches this point through `namespace add`
-		// (guarded at track time), but a manifest can still carry one —
-		// hand-edited, pulled from another machine, or rebuilt by
-		// recoverManifest — and reconcileNamespace is the only path that
-		// actually creates links for it, since it runs independently of
-		// engine.Preflight. Checked on the parent, not e.Dest itself: a
-		// correctly linked entry's Dest is a symlink whose target already
-		// lives inside the data directory by design, so resolving e.Dest
-		// itself would flag every healthy link. Reported and left alone,
-		// same as an occupied destination: never linked, never destroyed.
-		inside, err := paths.InsideDataDir(filepath.Dir(e.Dest))
-		if err != nil {
-			return nil, nil, err
-		}
-		if inside {
-			problems = append(problems, Problem{Repo: key.Repo, Namespace: key.Namespace, Entry: e.Name, Dest: e.Dest, Detail: "destination resolves inside dots' own data directory"})
-			continue
-		}
-
-		target, err := profile.Source(namespaceDir, e.Name, activeProfile)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		st, err := link.Classify(e.Dest, target)
-		if err != nil {
-			problems = append(problems, Problem{Repo: key.Repo, Namespace: key.Namespace, Entry: e.Name, Dest: e.Dest, Detail: err.Error()})
-			continue
-		}
-
-		switch st {
-		case link.CorrectSymlink:
-			linked = append(linked, e.Dest)
-		case link.Missing:
-			// State corrects the filesystem: removal was never requested,
-			// so a missing link is recreated.
-			if err := createLink(e.Dest, target); err != nil {
-				problems = append(problems, Problem{Repo: key.Repo, Namespace: key.Namespace, Entry: e.Name, Dest: e.Dest, Detail: err.Error()})
-				continue
-			}
-			linked = append(linked, e.Dest)
-		case link.WrongSymlink:
-			// State corrects the filesystem: a link pointing somewhere
-			// wrong is repointed.
-			if err := link.Remove(e.Dest); err != nil {
-				problems = append(problems, Problem{Repo: key.Repo, Namespace: key.Namespace, Entry: e.Name, Dest: e.Dest, Detail: err.Error()})
-				continue
-			}
-			if err := createLink(e.Dest, target); err != nil {
-				problems = append(problems, Problem{Repo: key.Repo, Namespace: key.Namespace, Entry: e.Name, Dest: e.Dest, Detail: err.Error()})
-				continue
-			}
-			linked = append(linked, e.Dest)
-		case link.RealFile, link.RealDir:
-			// Never destroyed — reported and left alone, per concept.md
-			// "Self-healing".
-			problems = append(problems, Problem{Repo: key.Repo, Namespace: key.Namespace, Entry: e.Name, Dest: e.Dest, Detail: "real file or directory occupies the destination"})
-		}
+	// State corrects the filesystem: every destination the manifest still
+	// names gets its symlink created if missing or repointed if it points
+	// somewhere else, via the same converge loop engine.SwitchProfile uses
+	// for a profile switch — self-heal's link creation and a profile change
+	// are the same mechanism, only the reason the target moved differs. See
+	// converge's doc comment for why this is the best-effort door onto it
+	// rather than the transactional one: reconcileNamespace runs a pass
+	// which can already be one entry into disagreement with the filesystem,
+	// so there is nothing correct upstream worth preserving by rolling back.
+	linked, failures, err := engine.Relink(namespaceDir, entries, activeProfile)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, f := range failures {
+		problems = append(problems, Problem{Repo: key.Repo, Namespace: key.Namespace, Entry: f.Entry.Name, Dest: f.Dest, Detail: f.Detail})
 	}
 	return linked, problems, nil
 }
@@ -727,13 +677,6 @@ func removeStaleLink(dest string) error {
 		return nil
 	}
 	return link.Remove(dest)
-}
-
-func createLink(dest, target string) error {
-	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		return fmt.Errorf("create parent directory for %s: %w", dest, err)
-	}
-	return link.Create(dest, target)
 }
 
 func sameDests(a, b []string) bool {

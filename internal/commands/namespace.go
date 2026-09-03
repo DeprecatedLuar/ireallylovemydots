@@ -264,12 +264,28 @@ func trackPaths(name string, args []string, flags shared.Flags) error {
 }
 
 // renameNamespace implements `mv`, reached from either spelling.
+//
+// Every symlink dots creates targets an absolute path built from the
+// namespace's own name (concept.md's data directory layout), so renaming it
+// moves the target every one of its links point at, even though nothing
+// about the manifest or a destination changed. relinkRenamedNamespaces
+// repoints them as the last step, mirroring renameRepo.
 func renameNamespace(oldName, newName string, flags shared.Flags) error {
 	loc, err := resolveNamespace(oldName, flags)
 	if err != nil {
 		return err
 	}
-	return namespace.Rename(filepath.Dir(loc.Dir), loc.Repo.Name, oldName, newName)
+	repoDir := filepath.Dir(loc.Dir)
+	if err := namespace.Rename(repoDir, loc.Repo.Name, oldName, newName); err != nil {
+		return err
+	}
+
+	failures, err := relinkRenamedNamespaces(repoDir, loc.Repo.Name, map[string]bool{newName: true})
+	if err != nil {
+		return err
+	}
+	reportRelinkFailures(failures)
+	return nil
 }
 
 // editNamespace implements `namespace <ns> edit`: open $EDITOR on a buffer

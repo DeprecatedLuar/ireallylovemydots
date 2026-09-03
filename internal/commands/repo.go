@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
+	"github.com/DeprecatedLuar/dotz/internal/engine"
 	"github.com/DeprecatedLuar/dotz/internal/git"
 	"github.com/DeprecatedLuar/dotz/internal/grammar"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
@@ -523,6 +524,15 @@ func resolveNewRepoName(reg manifest.Registry, name string) (string, error) {
 // registered repository, guard the new name against collisions, then rename
 // its on-disk clone, its registry entry, and every state key recorded under
 // its old name.
+//
+// Every symlink dots creates targets an absolute path built from the
+// repository's own name (concept.md's data directory layout), so renaming it
+// moves the target every one of its enabled namespaces' links point at, even
+// though nothing about a manifest or a destination changed. relinkRenamedNamespaces
+// repoints them as the last step of the rename, before this returns — left
+// for the next self-heal pass, every link would dangle in the meantime and
+// race whatever the destination's own program does when it finds nothing
+// there.
 func renameRepo(oldName, newName string, flags shared.Flags) error {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
@@ -559,7 +569,16 @@ func renameRepo(oldName, newName string, flags shared.Flags) error {
 		return err
 	}
 
-	return renameRepoState(r.Name, newName)
+	if err := renameRepoState(r.Name, newName); err != nil {
+		return err
+	}
+
+	failures, err := relinkRenamedNamespaces(filepath.Join(dataDir, newName), newName, nil)
+	if err != nil {
+		return err
+	}
+	reportRelinkFailures(failures)
+	return nil
 }
 
 // renameRepoState rewrites every recorded state entry belonging to oldName
@@ -579,6 +598,87 @@ func renameRepoState(oldName, newName string) error {
 		s.Entries[state.Key{Repo: newName, Namespace: k.Namespace}] = e
 	}
 	return state.Write(s)
+}
+
+// relinkRenamedNamespaces repoints the links of every enabled namespace
+// under repoName whose target moved because repoDir itself just moved on
+// disk — a repository rename (repoDir is the whole repository's new
+// location, names nil) or a single namespace rename within it (repoDir is
+// unchanged, names narrows the repair to the one namespace that moved). It
+// never rolls back: every reachable namespace still gets whatever repair
+// engine.Relink can do, and the destinations it couldn't relink are returned
+// for the caller to report rather than abort on — the rename already
+// happened and isn't undone by one stubborn destination.
+func relinkRenamedNamespaces(repoDir, repoName string, names map[string]bool) ([]engine.LinkFailure, error) {
+	s, err := state.Read()
+	if err != nil {
+		return nil, err
+	}
+
+	var failures []engine.LinkFailure
+	changed := false
+	for key, entry := range s.Entries {
+		if key.Repo != repoName || !entry.Enabled {
+			continue
+		}
+		if names != nil && !names[key.Namespace] {
+			continue
+		}
+
+		namespaceDir := filepath.Join(repoDir, key.Namespace)
+		if _, statErr := os.Stat(namespaceDir); statErr != nil {
+			// Not materialized on this machine — nothing on disk to relink.
+			continue
+		}
+		exists, existsErr := manifest.Exists(namespaceDir)
+		if existsErr != nil {
+			return nil, existsErr
+		}
+		if !exists {
+			// A missing manifest here is self-heal's manifest-recovery job,
+			// not a rename's — it never reads or writes a manifest, and
+			// recovering one from a guess is not this operation's call to
+			// make.
+			continue
+		}
+		m, readErr := manifest.Read(namespaceDir)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if m.Ignore {
+			continue
+		}
+
+		linked, nsFailures, relinkErr := engine.Relink(namespaceDir, m.Entries, entry.ActiveProfile)
+		if relinkErr != nil {
+			return nil, relinkErr
+		}
+		entry.LinkedDests = linked
+		s.Entries[key] = entry
+		changed = true
+		failures = append(failures, nsFailures...)
+	}
+
+	if changed {
+		if err := state.Write(s); err != nil {
+			return nil, err
+		}
+	}
+	return failures, nil
+}
+
+// reportRelinkFailures prints every destination relinkRenamedNamespaces
+// could not bring into place — a real file or directory occupying it, the
+// same "never destroyed, only reported" rule self-heal and enable follow —
+// so a rename that leaves one destination unlinked doesn't do so silently.
+func reportRelinkFailures(failures []engine.LinkFailure) {
+	if len(failures) == 0 {
+		return
+	}
+	for _, f := range failures {
+		fmt.Fprintln(os.Stderr, ui.WarningTone(fmt.Sprintf("! %s%s%s", f.Dest, ui.DetailSep, f.Detail)))
+	}
+	fmt.Fprintln(os.Stderr, ui.Tip("run `dots enable <namespace>` to retry, add --force to trash the occupant"))
 }
 
 func repoNameTaken(reg manifest.Registry, name string) bool {

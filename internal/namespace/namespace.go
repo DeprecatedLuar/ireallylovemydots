@@ -138,8 +138,13 @@ func Delete(dir string) error {
 // Rename moves a namespace's folder to newName within the same repository
 // and, if a state entry already exists under the old key (the namespace was
 // enabled), carries it forward under the new key. It touches no destination
-// and no symlink — destinations live in the manifest and are unaffected by
-// the namespace's name.
+// — destinations live in the manifest and are unaffected by the namespace's
+// name — but every symlink dots creates targets an absolute path that
+// includes the namespace's own name, so a rename does move every one of its
+// links' targets. Rename itself does not repoint them; the caller
+// (internal/commands' renameNamespace) does that immediately afterward via
+// engine.Relink, so a namespace never sits with dangling links between the
+// two steps.
 func Rename(repoDir, repoName, oldName, newName string) error {
 	oldDir := filepath.Join(repoDir, oldName)
 	newDir := filepath.Join(repoDir, newName)
