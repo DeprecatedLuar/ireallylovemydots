@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/selfheal"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
@@ -25,14 +26,24 @@ func HandleDoctor(args []string, findings selfheal.Findings) error {
 // finding's marker and colour match the "!" a listing would have shown for
 // the same namespace — shared by doctor's machine-wide scope and dots
 // <ns>'s findings block (renderNamespaceEntries), narrowed by
-// selfheal.Findings.For.
+// selfheal.Findings.For. Subjects are padded to the widest one in the block
+// so the detail text lines up in a column, matching concept.md "Doctor"'s
+// own example — DetailSep's flat gap is for a single report line, not a
+// block of them.
 func renderFindings(findings []selfheal.Finding) {
 	if len(findings) == 0 {
 		return
 	}
+	width := 0
+	for _, f := range findings {
+		if l := len(f.Subject); l > width {
+			width = l
+		}
+	}
 	entries := make([]ui.Entry, len(findings))
 	for i, f := range findings {
-		entries[i] = ui.Entry{Marker: ui.MarkerProblem, Name: f.Subject + ui.DetailSep + findingDetail(f)}
+		pad := strings.Repeat(" ", width-len(f.Subject))
+		entries[i] = ui.Entry{Marker: ui.MarkerProblem, Name: f.Subject + pad + ui.DetailSep + findingDetail(f)}
 	}
 	renderListing(entries)
 }

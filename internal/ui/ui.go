@@ -230,9 +230,9 @@ func coloredPrefix(e Entry, f *os.File) string {
 }
 
 // DetailSep separates a mutation report line's name from its trailing
-// detail (a destination, or what occupies it) — two spaces reads as a
-// column break without pretending to be alignment, since these lines are
-// read one at a time rather than scanned as an aligned block. Exported so
+// detail (a destination, or what occupies it) — a flat run of spaces reads
+// as a column break without pretending to be alignment, since these lines
+// are read one at a time rather than scanned as an aligned block. Exported so
 // any caller building its own detail string (e.g. a pre-flight skip
 // summary combining a destination and what occupies it) uses the exact
 // same column shape as Operation/Sub do internally.
