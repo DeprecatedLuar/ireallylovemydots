@@ -253,15 +253,31 @@ func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bo
 
 	invalid := toSet(report.Invalid)
 	orphaned := toSet(report.Orphans)
+	guarded := manifestGuardDetails(entries)
 
 	rows = make([]ui.Entry, 0, len(entries)+len(report.Untracked))
 	for _, e := range entries {
-		rows = append(rows, classifyEntry(e, namespaceDir, enabled, activeProfile, invalid, orphaned, diagnoseOccupancy))
+		rows = append(rows, classifyEntry(e, namespaceDir, enabled, activeProfile, invalid, orphaned, guarded, diagnoseOccupancy))
 	}
 	for _, name := range report.Untracked {
 		rows = append(rows, ui.Entry{Marker: ui.MarkerUntracked, Name: name})
 	}
 	return rows, report.Orphans, report.Untracked, nil
+}
+
+// manifestGuardDetails runs manifest.Validate over entries and keys its
+// findings by entry name, per concept.md "The in-repo link guard": two
+// entries sharing a destination, or one containing another, are wrong the
+// moment the manifest is read, independent of whatever the filesystem
+// currently happens to show at that destination — the same check pre-flight
+// runs (engine.Preflight's manifestGuardProblems) and `namespace <ns> edit`
+// refuses on the way back in, so a listing never disagrees with either.
+func manifestGuardDetails(entries []manifest.Entry) map[string]string {
+	details := map[string]string{}
+	for _, p := range manifest.Validate(manifest.Manifest{Entries: entries}) {
+		details[p.Entry] = p.Detail
+	}
+	return details
 }
 
 // classifyEntry decides one tracked entry's listing marker, per concept.md
@@ -289,12 +305,15 @@ func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bo
 // resolves to." namespaceRow's overview never sets it: concept.md "Listing
 // output" promotes a namespace to "!" only for an orphaned, invalid, or
 // untracked entry, not an occupied destination on an ordinary disabled one.
-func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, activeProfile string, invalid, orphaned map[string]bool, diagnoseOccupancy bool) ui.Entry {
+func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, activeProfile string, invalid, orphaned map[string]bool, guarded map[string]string, diagnoseOccupancy bool) ui.Entry {
 	if invalid[e.Name] {
 		return ui.Entry{Marker: ui.MarkerUntracked, Name: e.Name + ui.DetailSep + "destination not set"}
 	}
 	if orphaned[e.Name] {
 		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name + ui.DetailSep + "payload missing from repo"}
+	}
+	if detail, ok := guarded[e.Name]; ok {
+		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name + ui.DetailSep + detail}
 	}
 	if e.Dest == manifest.DestNone {
 		// Deliberately unlinked — nothing to classify against the
@@ -305,7 +324,7 @@ func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, activePr
 
 	payload, sourceErr := profile.Source(namespaceDir, e.Name, activeProfile)
 	if sourceErr != nil {
-		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}
+		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name + ui.DetailSep + sourceErr.Error()}
 	}
 
 	if !enabled {
@@ -319,15 +338,37 @@ func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, activePr
 		}
 		return ui.Entry{Marker: ui.MarkerMaterialized, Name: e.Name}
 	}
-	if st, classifyErr := link.Classify(e.Dest, payload); classifyErr != nil || st != link.CorrectSymlink {
+	st, classifyErr := link.Classify(e.Dest, payload)
+	if classifyErr != nil {
+		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name + ui.DetailSep + classifyErr.Error()}
+	}
+	if st != link.CorrectSymlink {
 		if diagnoseOccupancy {
 			if entry, ok := blockedEntry(e.Dest, payload); ok {
 				return entry
 			}
 		}
-		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name}
+		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name + ui.DetailSep + wrongLinkDetail(e.Dest, st)}
 	}
 	return ui.Entry{Marker: ui.MarkerEnabled, Name: e.Name}
+}
+
+// wrongLinkDetail names what a non-occupied, non-correct destination
+// actually holds — the case blockedEntry does not cover (engine.Occupancy
+// treats a missing destination or a symlink pointing elsewhere as absorbable,
+// never "occupied"), which used to fall through to a bare "!" row with no
+// explanation at all. st is never link.CorrectSymlink or link.RealFile/
+// link.RealDir here — the caller has already returned for the first and
+// routed the other two through blockedEntry.
+func wrongLinkDetail(dest string, st link.State) string {
+	if st == link.Missing {
+		return "symlink missing"
+	}
+	target, err := link.Read(dest)
+	if err != nil {
+		return "linked elsewhere"
+	}
+	return "linked to " + manifest.ContractHome(target)
 }
 
 // blockedEntry reports the "!" row an occupied destination gets — a real
@@ -341,7 +382,7 @@ func blockedEntry(dest, payload string) (ui.Entry, bool) {
 	if err != nil || !occupied {
 		return ui.Entry{}, false
 	}
-	return ui.Entry{Marker: ui.MarkerProblem, Name: ui.BlockedSummary([]ui.Blocked{{Dest: dest, Detail: detail}})}, true
+	return ui.Entry{Marker: ui.MarkerProblem, Name: ui.BlockedSummary([]ui.Blocked{{Dest: dest, Detail: detail}}, "occupied")}, true
 }
 
 // toSet turns a name slice into a membership set, for classifyEntry's O(1)

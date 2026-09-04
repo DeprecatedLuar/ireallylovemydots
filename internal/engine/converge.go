@@ -12,12 +12,20 @@ import (
 )
 
 // LinkFailure is one destination converge could not bring into place: a real
-// file or directory occupies it, or it resolves inside dots' own data
-// directory. Never destroyed — reported and left alone.
+// file or directory occupies it, it resolves inside dots' own data
+// directory, another of the namespace's own entries already claimed it this
+// pass, or some other filesystem error stopped it. Never destroyed —
+// reported and left alone.
 type LinkFailure struct {
-	Entry  manifest.Entry
-	Dest   string
-	Detail string
+	Entry manifest.Entry
+	Dest  string
+	// Occupied is true only when Detail describes a real file or non-empty
+	// directory occupying Dest (occupancyDetailText's wording) — every other
+	// failure kind is a "blocked" in concept.md "What enable reports"'s
+	// sense, not an occupied destination, per "The collapsed count names
+	// what actually blocked it".
+	Occupied bool
+	Detail   string
 }
 
 // restoredLink records one destination converge repointed, with the target
@@ -72,8 +80,25 @@ func converge(namespaceDir string, entries []manifest.Entry, activeProfile strin
 		}
 	}
 
+	// claimed tracks which entry, this pass, has already brought a
+	// destination into place — concept.md "Enabled means every entry's
+	// symlink is correct and healthy", judged per entry. Two entries naming
+	// the same destination (a malformed manifest that reached converge
+	// anyway — pre-flight's guard normally catches it before enable, but
+	// self-heal's reconciliation pass runs unconditionally on whatever the
+	// manifest says) must not have the second silently overwrite the first's
+	// freshly created link: that reads as "both linked" when only one
+	// destination exists to hold either.
+	claimed := map[string]string{}
+
 	for _, e := range entries {
 		if !e.HasDestination() {
+			continue
+		}
+
+		if owner, ok := claimed[e.Dest]; ok {
+			failures = append(failures, LinkFailure{Entry: e, Dest: e.Dest,
+				Detail: fmt.Sprintf("destination already linked by entry %q", owner)})
 			continue
 		}
 
@@ -117,6 +142,7 @@ func converge(namespaceDir string, entries []manifest.Entry, activeProfile strin
 
 		switch st {
 		case link.CorrectSymlink:
+			claimed[e.Dest] = e.Name
 			linked = append(linked, e.Dest)
 			continue
 		case link.RealFile, link.RealDir:
@@ -132,7 +158,7 @@ func converge(namespaceDir string, entries []manifest.Entry, activeProfile strin
 				}
 				return nil, nil, nil, detailErr
 			}
-			failures = append(failures, LinkFailure{Entry: e, Dest: e.Dest, Detail: detail})
+			failures = append(failures, LinkFailure{Entry: e, Dest: e.Dest, Occupied: true, Detail: detail})
 			if transactional {
 				rollback()
 				return nil, nil, nil, fmt.Errorf("%s: %s occupies the destination", e.Dest, detail)
@@ -178,6 +204,7 @@ func converge(namespaceDir string, entries []manifest.Entry, activeProfile strin
 			continue
 		}
 		undo = append(undo, restoredLink{dest: e.Dest, target: previous})
+		claimed[e.Dest] = e.Name
 		linked = append(linked, e.Dest)
 		repointed = append(repointed, e.Dest)
 	}

@@ -389,7 +389,7 @@ func TestHandleList_StatusAliasIsByteIdentical(t *testing.T) {
 // concept.md "Manual edits": invalid, not pending.
 func TestClassifyEntry_EmptyDestinationMarksUntracked(t *testing.T) {
 	invalid := map[string]bool{"cfg": true}
-	row := classifyEntry(manifest.Entry{Name: "cfg", Dest: ""}, t.TempDir(), true, "", invalid, nil, true)
+	row := classifyEntry(manifest.Entry{Name: "cfg", Dest: ""}, t.TempDir(), true, "", invalid, nil, nil, true)
 	if row.Marker != ui.MarkerUntracked {
 		t.Fatalf("expected marker %q, got %q", ui.MarkerUntracked, row.Marker)
 	}
@@ -401,9 +401,59 @@ func TestClassifyEntry_EmptyDestinationMarksUntracked(t *testing.T) {
 func TestClassifyEntry_MissingPayloadIsOrphan(t *testing.T) {
 	nsDir := t.TempDir()
 	orphaned := map[string]bool{"gone": true}
-	row := classifyEntry(manifest.Entry{Name: "gone", Dest: "/tmp/whatever"}, nsDir, true, "", nil, orphaned, true)
+	row := classifyEntry(manifest.Entry{Name: "gone", Dest: "/tmp/whatever"}, nsDir, true, "", nil, orphaned, nil, true)
 	if row.Marker != ui.MarkerProblem {
 		t.Fatalf("expected marker %q, got %q", ui.MarkerProblem, row.Marker)
+	}
+}
+
+// TestClassifyEntry_MissingSymlinkCarriesDetail covers the bug a bare "!"
+// used to hide: an enabled entry whose destination symlink is simply gone
+// must say so, not print a bare name with nothing to act on.
+func TestClassifyEntry_MissingSymlinkCarriesDetail(t *testing.T) {
+	nsDir := t.TempDir()
+	dest := filepath.Join(t.TempDir(), "cfg")
+	row := classifyEntry(manifest.Entry{Name: "cfg", Dest: dest}, nsDir, true, "", nil, nil, nil, true)
+	if row.Marker != ui.MarkerProblem {
+		t.Fatalf("expected marker %q, got %q", ui.MarkerProblem, row.Marker)
+	}
+	if !strings.Contains(row.Name, "symlink missing") {
+		t.Fatalf("expected a detail explaining the missing symlink, got %q", row.Name)
+	}
+}
+
+// TestClassifyEntry_WrongTargetSymlinkCarriesDetail covers the other half of
+// the same bug: a destination that is a symlink, just not the one this entry
+// wants, is not "occupied" (engine.Occupancy only counts a real file or
+// directory), so it used to fall through to a bare "!" with no explanation.
+func TestClassifyEntry_WrongTargetSymlinkCarriesDetail(t *testing.T) {
+	nsDir := t.TempDir()
+	destDir := t.TempDir()
+	dest := filepath.Join(destDir, "cfg")
+	elsewhere := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.Symlink(elsewhere, dest); err != nil {
+		t.Fatal(err)
+	}
+	row := classifyEntry(manifest.Entry{Name: "cfg", Dest: dest}, nsDir, true, "", nil, nil, nil, true)
+	if row.Marker != ui.MarkerProblem {
+		t.Fatalf("expected marker %q, got %q", ui.MarkerProblem, row.Marker)
+	}
+	if !strings.Contains(row.Name, "linked to") {
+		t.Fatalf("expected a detail naming what it's linked to instead, got %q", row.Name)
+	}
+}
+
+// TestClassifyEntry_DuplicateDestinationCarriesDetail covers the actual
+// copyq bug: two entries sharing a destination are flagged by the manifest
+// guard, not left for the filesystem check to (silently) decide.
+func TestClassifyEntry_DuplicateDestinationCarriesDetail(t *testing.T) {
+	guarded := map[string]string{"cfg": `destination also claimed by "other"`}
+	row := classifyEntry(manifest.Entry{Name: "cfg", Dest: "/home/u/.config/shared"}, t.TempDir(), true, "", nil, nil, guarded, true)
+	if row.Marker != ui.MarkerProblem {
+		t.Fatalf("expected marker %q, got %q", ui.MarkerProblem, row.Marker)
+	}
+	if !strings.Contains(row.Name, "also claimed by") {
+		t.Fatalf("expected the guard's own detail on the row, got %q", row.Name)
 	}
 }
 

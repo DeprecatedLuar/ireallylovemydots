@@ -135,6 +135,36 @@ func TestPreflight_SelfContainmentGuard(t *testing.T) {
 	}
 }
 
+// TestPreflight_EqualDestinationsGuard is the copyq regression test: two
+// entries naming the exact same destination are the in-repo link guard's
+// degenerate case (paths.Contains treats equal paths as containment), and
+// must refuse enable the same way nested destinations do — hard-blocked,
+// never overridable with --force.
+func TestPreflight_EqualDestinationsGuard(t *testing.T) {
+	home := t.TempDir()
+	nsDir := t.TempDir()
+
+	shared := filepath.Join(home, ".config", "copyq")
+
+	entries := []manifest.Entry{
+		{Name: "copyq-commands.ini", Dest: shared},
+		{Name: "copyq.conf", Dest: shared},
+	}
+	key := state.Key{Repo: "dotfiles", Namespace: "copyq"}
+	problems, err := Preflight(key, nsDir, entries, emptyState())
+	if err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+	if len(problems) != 2 {
+		t.Fatalf("expected both entries flagged by the in-repo link guard, got %+v", problems)
+	}
+	for _, p := range problems {
+		if p.Kind != LinkGuard {
+			t.Fatalf("expected LinkGuard, got %+v", p)
+		}
+	}
+}
+
 func TestPreflight_InsideDataDirGuard_ThroughExistingSymlink(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	dataDir, err := paths.Data()

@@ -39,7 +39,12 @@ type Problem struct {
 	Namespace string
 	Entry     string
 	Dest      string
-	Detail    string
+	// Occupied mirrors engine.LinkFailure.Occupied — true only when Detail
+	// describes a real file or non-empty directory, so disableReason's
+	// collapsed count can say "occupied" rather than the general "blocked"
+	// only where it is literally true (concept.md "What enable reports").
+	Occupied bool
+	Detail   string
 }
 
 // RecoverySource names the evidence a rebuilt manifest came from, ordered by
@@ -64,20 +69,23 @@ type Recovery struct {
 }
 
 // Repair is one namespace whose manifest — freshly recovered or not — still
-// needs a human decision: entries with no destination, an orphaned entry, or
-// an untracked payload. namespace.Inspect's Report carries the detail; the
-// command layer decides how to phrase it, since self-heal itself never
-// prints.
+// needs a human decision: entries with no destination, an orphaned entry, an
+// untracked payload, or two entries whose destinations collide (the in-repo
+// link guard's manifest-detectable half, manifest.Validate). namespace.
+// Inspect's Report and GuardProblems carry the detail; the command layer
+// decides how to phrase it, since self-heal itself never prints.
 type Repair struct {
-	Repo      string
-	Namespace string
-	Report    namespace.Report
+	Repo          string
+	Namespace     string
+	Report        namespace.Report
+	GuardProblems []manifest.Problem
 }
 
-// needsRepair reports whether report names anything a human still has to
-// resolve by hand.
-func needsRepair(report namespace.Report) bool {
-	return report.ManifestMissing || len(report.Invalid) > 0 || len(report.Orphans) > 0 || len(report.Untracked) > 0
+// needsRepair reports whether report or guardProblems name anything a human
+// still has to resolve by hand.
+func needsRepair(report namespace.Report, guardProblems []manifest.Problem) bool {
+	return report.ManifestMissing || len(report.Invalid) > 0 || len(report.Orphans) > 0 ||
+		len(report.Untracked) > 0 || len(guardProblems) > 0
 }
 
 // Findings is everything one Run pass discovered: drift it corrected,
@@ -396,8 +404,9 @@ func Run() (Findings, error) {
 		if inspectErr != nil {
 			return Findings{}, inspectErr
 		}
-		if needsRepair(report) {
-			repairs = append(repairs, Repair{Repo: key.Repo, Namespace: key.Namespace, Report: report})
+		guardProblems := manifest.Validate(m)
+		if needsRepair(report, guardProblems) {
+			repairs = append(repairs, Repair{Repo: key.Repo, Namespace: key.Namespace, Report: report, GuardProblems: guardProblems})
 		}
 
 		// A manifest recovered this pass is not yet trustworthy about what
@@ -715,7 +724,7 @@ func reconcileNamespace(key state.Key, namespaceDir string, entries []manifest.E
 		return nil, nil, err
 	}
 	for _, f := range failures {
-		problems = append(problems, Problem{Repo: key.Repo, Namespace: key.Namespace, Entry: f.Entry.Name, Dest: f.Dest, Detail: f.Detail})
+		problems = append(problems, Problem{Repo: key.Repo, Namespace: key.Namespace, Entry: f.Entry.Name, Dest: f.Dest, Occupied: f.Occupied, Detail: f.Detail})
 	}
 	return linked, problems, nil
 }

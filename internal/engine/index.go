@@ -5,8 +5,7 @@
 package engine
 
 import (
-	"path/filepath"
-
+	"github.com/DeprecatedLuar/dotz/internal/paths"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 )
 
@@ -53,21 +52,5 @@ func (idx Index) Conflict(dest string) (state.Key, bool) {
 }
 
 func overlaps(a, b string) bool {
-	return contains(a, b) || contains(b, a)
-}
-
-// contains reports whether child is parent itself, or falls beneath it.
-func contains(parent, child string) bool {
-	rel, err := filepath.Rel(parent, child)
-	if err != nil {
-		return false
-	}
-	if rel == "." {
-		return true
-	}
-	return rel != ".." && !hasParentPrefix(rel)
-}
-
-func hasParentPrefix(rel string) bool {
-	return len(rel) >= 3 && rel[:3] == ".."+string(filepath.Separator)
+	return paths.Contains(a, b) || paths.Contains(b, a)
 }

@@ -57,11 +57,11 @@ func editBuffer(seed []byte, pathForDisplay string, validate func(edited []byte)
 
 		if validateErr := validate(edited); validateErr != nil {
 			if !ui.Interactive() {
-				return fmt.Errorf("%s does not parse: %w (edit discarded)", pathForDisplay, validateErr)
+				return fmt.Errorf("%s is invalid: %w (edit discarded)", pathForDisplay, validateErr)
 			}
 			choice, promptErr := ui.Prompt(
 				"",
-				fmt.Sprintf("%s does not parse: %v\n  [r] reopen at the error\n  [d] discard the edit", pathForDisplay, validateErr),
+				fmt.Sprintf("%s is invalid: %v\n  [r] reopen at the error\n  [d] discard the edit", pathForDisplay, validateErr),
 				[]string{"r", "d"},
 			)
 			if promptErr != nil {

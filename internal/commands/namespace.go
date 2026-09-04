@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
 	"github.com/DeprecatedLuar/dotz/internal/engine"
@@ -335,13 +336,31 @@ func editNamespace(name string, flags shared.Flags) error {
 
 	return editBuffer(original, manifest.Path(loc.Dir),
 		func(edited []byte) error {
-			_, err := manifest.Decode(edited)
-			return err
+			m, err := manifest.Decode(edited)
+			if err != nil {
+				return err
+			}
+			if problems := manifest.Validate(m); len(problems) > 0 {
+				return formatManifestProblems(problems)
+			}
+			return nil
 		},
 		func(seed, edited []byte) error {
 			return applyEditedBuffer(loc.Dir, seed, edited)
 		},
 	)
+}
+
+// formatManifestProblems joins manifest.Validate's findings into the one
+// error editBuffer's validate callback returns, per concept.md "Manual
+// edits": a result that parses must still make sense, checked the same way
+// a parse error is — reopen-or-discard, never written until it does.
+func formatManifestProblems(problems []manifest.Problem) error {
+	reasons := make([]string, len(problems))
+	for i, p := range problems {
+		reasons[i] = fmt.Sprintf("%s: %s", p.Entry, p.Detail)
+	}
+	return fmt.Errorf("%s", strings.Join(reasons, "; "))
 }
 
 // prepareEditBuffer returns the bytes to seed namespace <ns> edit's buffer

@@ -82,6 +82,26 @@ func hasParentPrefix(rel string) bool {
 	return len(rel) >= 3 && rel[:3] == ".."+string(filepath.Separator)
 }
 
+// Contains reports whether child is parent itself, or falls beneath it —
+// the containment test the in-repo link guard is built from, shared by
+// every caller that needs it: the claimed-destination index (a directory
+// entry's destination overlaps its own subtree), pre-flight and
+// manifest.Validate (two entries whose destinations nest, including the
+// degenerate case of naming the exact same destination), and namespace.Add's
+// early warning for a destination already covered by an existing entry.
+// Lexical only — it does not touch the filesystem, so it works equally
+// against a destination that does not exist yet.
+func Contains(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	return rel != ".." && !hasParentPrefix(rel)
+}
+
 // IsProtectedRoot reports whether path is one of the roots dots refuses as a
 // destination outright, per concept.md "Destinations dots will not link":
 // ~, /, and the XDG config, data, and state roots themselves. A destination

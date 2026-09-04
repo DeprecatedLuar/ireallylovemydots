@@ -259,13 +259,25 @@ func resolveExplicitTargets(dataDir string, reg manifest.Registry, names []strin
 // concept.md "What enable reports" gives it: exactly one blocked destination
 // prints inline with what occupies it; more than one collapses to a count
 // (ui.BlockedSummary), because concatenating N reasons onto a single line
-// rebuilds the run-on the cap exists to prevent.
+// rebuilds the run-on the cap exists to prevent. The count's noun is
+// "occupied" only when every problem actually is one — concept.md "The
+// collapsed count names what actually blocked it" — otherwise "blocked",
+// since a link-guard skip (two entries claiming one destination) is not
+// occupied by anything.
 func problemSummary(problems []engine.Problem) string {
 	blocked := make([]ui.Blocked, len(problems))
+	allOccupied := true
 	for i, p := range problems {
 		blocked[i] = ui.Blocked{Dest: p.Entry.Dest, Detail: problemDetail(p)}
+		if p.Kind != engine.Occupied {
+			allOccupied = false
+		}
 	}
-	return ui.BlockedSummary(blocked)
+	state := "blocked"
+	if allOccupied {
+		state = "occupied"
+	}
+	return ui.BlockedSummary(blocked, state)
 }
 
 // problemDetail extracts one pre-flight problem's reason with its own

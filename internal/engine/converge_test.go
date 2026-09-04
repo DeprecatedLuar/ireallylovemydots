@@ -129,3 +129,44 @@ func TestRelink_PartialFailureDoesNotRollBackWhatSucceeded(t *testing.T) {
 		t.Fatal("good's repointed link was rolled back despite blocked's failure")
 	}
 }
+
+// TestRelink_DuplicateDestinationDoesNotStompFirstEntry covers the copyq
+// bug: two entries naming the same destination must not have the second
+// silently overwrite the link the first just created — that read as "both
+// linked" to self-heal's own-entry count (len(linked) == len(entries)) when
+// only one of the two destinations actually holds either entry's payload.
+// The first entry (manifest order) keeps the destination; the second is
+// reported as a failure rather than acted on.
+func TestRelink_DuplicateDestinationDoesNotStompFirstEntry(t *testing.T) {
+	nsDir := t.TempDir()
+	home := t.TempDir()
+	for _, name := range []string{"first", "second"} {
+		if err := os.WriteFile(filepath.Join(nsDir, name), []byte("payload "+name), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dest := filepath.Join(home, "shared")
+
+	entries := []manifest.Entry{
+		{Name: "first", Dest: dest},
+		{Name: "second", Dest: dest},
+	}
+	linked, failures, err := Relink(nsDir, entries, "")
+	if err != nil {
+		t.Fatalf("Relink: %v", err)
+	}
+	if len(linked) != 1 || linked[0] != dest {
+		t.Fatalf("linked = %v, want exactly one claim on %s", linked, dest)
+	}
+	if len(failures) != 1 || failures[0].Entry.Name != "second" {
+		t.Fatalf("failures = %+v, want one naming the second entry", failures)
+	}
+
+	target, err := os.Readlink(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != filepath.Join(nsDir, "first") {
+		t.Fatalf("target = %q, want the first entry's payload left in place, not overwritten", target)
+	}
+}

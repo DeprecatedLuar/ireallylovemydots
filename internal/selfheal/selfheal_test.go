@@ -387,6 +387,79 @@ func TestRun_PartiallyLinkedNamespaceIsFullyUnlinkedAndDisabled(t *testing.T) {
 	}
 }
 
+// TestRun_DuplicateDestinationEntriesDisablesNamespace is the regression
+// test for the copyq bug: a manifest where two entries name the same
+// destination used to read as fully healthy, because converge appended one
+// linked destination per entry regardless of whether a later entry's link
+// actually stomped an earlier one — three entries linking the same one path
+// counted as "3 linked, 3 wanted" and the namespace stayed enabled with two
+// of its three entries effectively unlinked. Per concept.md "Self-healing":
+// "enabled means every entry's symlink is correct and healthy — nothing
+// less," judged per entry, so this must disable the namespace instead.
+func TestRun_DuplicateDestinationEntriesDisablesNamespace(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	reg := manifest.Registry{Repos: []manifest.Repo{{Name: "dotfiles"}}}
+	if err := manifest.WriteRegistry(reg); err != nil {
+		t.Fatal(err)
+	}
+
+	namespaceDir := filepath.Join(dataHome, "ireallylovemydots", "dotfiles", "dup-ns")
+	if err := os.MkdirAll(namespaceDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	firstPayload := filepath.Join(namespaceDir, "first")
+	if err := os.WriteFile(firstPayload, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	secondPayload := filepath.Join(namespaceDir, "second")
+	if err := os.WriteFile(secondPayload, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	sharedDest := filepath.Join(home, ".config", "shared")
+
+	m := manifest.Manifest{Entries: []manifest.Entry{
+		{Name: "first", Dest: sharedDest},
+		{Name: "second", Dest: sharedDest},
+	}}
+	if err := manifest.Write(namespaceDir, m); err != nil {
+		t.Fatal(err)
+	}
+
+	mustSymlink(t, firstPayload, sharedDest)
+
+	if err := state.Write(state.State{Entries: map[state.Key]state.Entry{
+		{Repo: "dotfiles", Namespace: "dup-ns"}: {Enabled: true, LinkedDests: []string{sharedDest}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	findings, err := Run()
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings.Disabled) != 1 || findings.Disabled[0].Namespace != "dup-ns" {
+		t.Fatalf("expected dup-ns to be disabled, got %+v", findings.Disabled)
+	}
+
+	if _, err := os.Lstat(sharedDest); !os.IsNotExist(err) {
+		t.Fatalf("expected the shared destination to be unlinked, lstat: %v", err)
+	}
+
+	s, err := state.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Entries[state.Key{Repo: "dotfiles", Namespace: "dup-ns"}].Enabled {
+		t.Fatal("expected dup-ns to be disabled")
+	}
+}
+
 // TestRun_EmptyDestinationNeverLinked covers: a manifest entry with an
 // empty destination is never enabled and self-heal never tries to link it.
 func TestRun_EmptyDestinationNeverLinked(t *testing.T) {

@@ -51,7 +51,7 @@ type Problem struct {
 // itself has been materialized.
 func Preflight(key state.Key, namespaceDir string, entries []manifest.Entry, s state.State) ([]Problem, error) {
 	idx := BuildIndex(s)
-	guarded := selfContainmentGuard(entries)
+	guarded := manifestGuardProblems(entries)
 
 	var problems []Problem
 	for _, e := range entries {
@@ -72,9 +72,9 @@ func Preflight(key state.Key, namespaceDir string, entries []manifest.Entry, s s
 			continue
 		}
 
-		if guarded[e.Dest] {
+		if detail, ok := guarded[e.Name]; ok {
 			problems = append(problems, Problem{Kind: LinkGuard, Entry: e,
-				Message: fmt.Sprintf("%s: in-repo link guard, another entry in this namespace claims a destination that contains or is contained by this one", e.Dest)})
+				Message: fmt.Sprintf("%s: in-repo link guard, %s", e.Dest, detail)})
 			continue
 		}
 		inside, err := paths.InsideDataDir(filepath.Dir(e.Dest))
@@ -116,25 +116,18 @@ func Preflight(key state.Key, namespaceDir string, entries []manifest.Entry, s s
 	return problems, nil
 }
 
-// selfContainmentGuard finds destinations within one namespace's own
-// entries that contain, or fall beneath, another entry's destination — the
-// in-repo link guard's malformed-manifest case. It is catchable from the
-// manifest alone, before any link exists: a namespace holding both "nvim" at
-// "~/.config/nvim" and an entry at "~/.config/nvim/init.lua" would, after
-// the first link is created, resolve the second destination's parent
-// through it, back into the data directory.
-func selfContainmentGuard(entries []manifest.Entry) map[string]bool {
-	guarded := map[string]bool{}
-	for i, a := range entries {
-		for j, b := range entries {
-			if i == j {
-				continue
-			}
-			if contains(a.Dest, b.Dest) {
-				guarded[a.Dest] = true
-				guarded[b.Dest] = true
-			}
-		}
+// manifestGuardProblems runs manifest.Validate over entries and keys its
+// findings by entry name, so Preflight's own per-entry loop can look one up
+// in O(1) — the in-repo link guard's malformed-manifest case (concept.md
+// "The in-repo link guard"): two entries naming the same destination, or one
+// destination falling inside another, both catchable from the manifest
+// alone, before any link exists. Sharing manifest.Validate here rather than
+// re-deriving the same check means Preflight, the listing, and `namespace
+// <ns> edit` can never disagree about what counts as guarded.
+func manifestGuardProblems(entries []manifest.Entry) map[string]string {
+	guarded := map[string]string{}
+	for _, p := range manifest.Validate(manifest.Manifest{Entries: entries}) {
+		guarded[p.Entry] = p.Detail
 	}
 	return guarded
 }

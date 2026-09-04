@@ -3,6 +3,7 @@ package commands
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
@@ -287,5 +288,38 @@ func TestEditNamespace_SavingPersistsChanges(t *testing.T) {
 	}
 	if len(got.Entries) != 1 || got.Entries[0].Name != "starship.toml" {
 		t.Fatalf("expected the filled-in entry to persist, got %+v", got.Entries)
+	}
+}
+
+// TestEditNamespace_ValidateRejectsDuplicateDestination covers the edit
+// guard's new semantic half (concept.md "Manual edits": "a result that
+// parses must still make sense"): editNamespace's validate callback runs
+// manifest.Decode and manifest.Validate together, so a buffer that parses
+// fine but gives two entries the same destination — the copyq bug — is
+// still refused, with both entry names in the reported error.
+func TestEditNamespace_ValidateRejectsDuplicateDestination(t *testing.T) {
+	edited, err := manifest.Encode(manifest.Manifest{Entries: []manifest.Entry{
+		{Name: "copyq-commands.ini", Dest: "~/.config/copyq"},
+		{Name: "copyq.conf", Dest: "~/.config/copyq"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := manifest.Decode(edited)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	problems := manifest.Validate(m)
+	if len(problems) == 0 {
+		t.Fatal("expected the duplicate destination to be flagged")
+	}
+
+	err = formatManifestProblems(problems)
+	if err == nil {
+		t.Fatal("expected a non-nil error")
+	}
+	if !strings.Contains(err.Error(), "copyq-commands.ini") || !strings.Contains(err.Error(), "copyq.conf") {
+		t.Fatalf("expected both entry names in the error, got %q", err)
 	}
 }

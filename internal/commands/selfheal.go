@@ -138,10 +138,18 @@ func renderDisabledBlock(disabled []selfheal.Disabled) {
 // describe the same occupied destination identically.
 func disableReason(reasons []selfheal.Problem) string {
 	blocked := make([]ui.Blocked, len(reasons))
+	allOccupied := true
 	for i, p := range reasons {
 		blocked[i] = ui.Blocked{Dest: p.Dest, Detail: p.Detail}
+		if !p.Occupied {
+			allOccupied = false
+		}
 	}
-	return ui.BlockedSummary(blocked)
+	state := "blocked"
+	if allOccupied {
+		state = "occupied"
+	}
+	return ui.BlockedSummary(blocked, state)
 }
 
 // renderRepairBlock prints the one line the user asked for after "I had no

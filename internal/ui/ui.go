@@ -226,13 +226,19 @@ type Blocked struct {
 // count" — joining every reason onto one line rebuilds the run-on the cap
 // exists to prevent. Dest is contracted for display; callers pass the
 // absolute path, the same as Sub. Shared by enable's problemSummary and
-// self-heal's disableReason so the two reports describe the same occupied
+// self-heal's disableReason so the two reports describe the same blocked
 // destination identically (concept.md "Self-healing").
-func BlockedSummary(blocked []Blocked) string {
+//
+// state names what the collapsed count actually means — "occupied" only
+// when every one of them holds a real file or directory, "blocked" for the
+// in-repo link guard and anything else, per concept.md "What enable
+// reports": "The collapsed count names what actually blocked it" — "occupied"
+// is not a general synonym for "could not be linked".
+func BlockedSummary(blocked []Blocked, state string) string {
 	if len(blocked) == 1 {
 		return manifest.ContractHome(blocked[0].Dest) + DetailSep + blocked[0].Detail
 	}
-	return fmt.Sprintf("%s occupied", Plural(len(blocked), "destination"))
+	return fmt.Sprintf("%s %s", Plural(len(blocked), "destination"), state)
 }
 
 // BlockedTip prepends a "run `dots <namespace>`" clause for every namespace
