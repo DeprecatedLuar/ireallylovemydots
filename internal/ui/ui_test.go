@@ -17,10 +17,10 @@ func TestRender_PipedOutputHasNoEscapeSequences(t *testing.T) {
 		{Marker: MarkerMaterialized, Name: "kitty"},
 		{Marker: MarkerAbsent, Name: "tmux"},
 		{Marker: MarkerProblem, Name: "zsh"},
-		{Marker: MarkerUntracked, Name: "starship.toml"},
+		{Marker: MarkerProblem, Name: "starship.toml"},
 	}
 	got := Render(entries)
-	want := "+ nvim\n- kitty\n= tmux\n! zsh\n? starship.toml\n"
+	want := "+ nvim\n- kitty\n= tmux\n! zsh\n! starship.toml\n"
 	if got != want {
 		t.Fatalf("Render (piped) = %q, want %q", got, want)
 	}
@@ -125,10 +125,11 @@ func TestRenderLines_ZeroCountEmitsNoParens(t *testing.T) {
 }
 
 // TestMarkerProblem_UsesWarningTone covers the deliberate choice that "!"
-// shares warningTone with "?": most "!" rows are a rollup of an underlying
-// "?", not a failure, so red stays reserved for MarkerRemoved. Asserted
-// directly against markerColor since the piped-output tests above cannot
-// observe an escape sequence at all (go test's stdout is never a terminal).
+// carries warningTone rather than errorTone: it marks something a human has
+// to look at, not a failure, so red stays reserved for MarkerRemoved.
+// Asserted directly against markerColor since the piped-output tests above
+// cannot observe an escape sequence at all (go test's stdout is never a
+// terminal).
 func TestMarkerProblem_UsesWarningTone(t *testing.T) {
 	if markerColor[MarkerProblem] != warningTone {
 		t.Fatalf("markerColor[MarkerProblem] = %q, want warningTone %q", markerColor[MarkerProblem], warningTone)

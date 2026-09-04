@@ -23,6 +23,7 @@ func HandleHelp(args []string) error {
 		Section("Top level",
 			gohelp.Item("sync", "Reconcile every registered repository"),
 			gohelp.Item("list, ls, status", "Every namespace, with state"),
+			gohelp.Item("doctor", "Every finding self-heal has on record"),
 			gohelp.Item("enable <namespace>...", "Materialize and link"),
 			gohelp.Item("disable <namespace>", "Remove symlinks, keep files"),
 			gohelp.Item("install <namespace>...", "Put its files on disk, link nothing"),

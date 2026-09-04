@@ -13,6 +13,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
+	"github.com/DeprecatedLuar/dotz/internal/selfheal"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
@@ -713,7 +714,7 @@ func renderRepoNamespaces(name string) error {
 		return err
 	}
 
-	rows, err := namespaceListing(reg.Repos, listOptions{Repo: r.Name})
+	rows, err := namespaceListing(reg.Repos, listOptions{Repo: r.Name}, selfheal.Findings{})
 	if err != nil {
 		return err
 	}

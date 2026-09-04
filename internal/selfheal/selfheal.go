@@ -180,6 +180,122 @@ type ProfileFallback struct {
 	Relinked  []string
 }
 
+// Finding is one self-heal result flattened into the shape concept.md
+// "Doctor" specifies — a subject, what is wrong with it, and, where there
+// is exactly one mechanical fix, the command that applies it — so `doctor`
+// and dots <ns> (doctor scoped to one namespace, via For) render from the
+// same values rather than each re-deriving them from Findings' raw,
+// case-specific slices. Repo and Namespace key it back to the namespace it
+// belongs to. Fix is "" where no single command resolves it — an orphaned
+// entry can mean either "restore the payload" or "remove the entry", and
+// doctor states the fact rather than guessing which.
+type Finding struct {
+	Repo      string
+	Namespace string
+	Subject   string
+	Detail    string
+	Fix       string
+}
+
+// All flattens every reportable finding — manifest repairs, then .profiles/
+// drift — into Finding's one shape. Disabled, Unregistered and
+// DataDirEmpty are not included: the first is a state ("-"), not a finding
+// (concept.md "Self-healing": "An occupied destination is therefore not a
+// '!' finding either"), and the other two have no namespace row to carry a
+// Finding at all and are reported directly by RenderSelfHealFindings
+// instead.
+func (f Findings) All() []Finding {
+	var out []Finding
+	for _, r := range f.NeedsRepair {
+		out = append(out, repairFindings(r)...)
+	}
+	for _, p := range f.ProfileProblems {
+		out = append(out, profileProblemFinding(p))
+	}
+	for _, fb := range f.ProfileFallbacks {
+		out = append(out, fallbackFinding(fb))
+	}
+	return out
+}
+
+// For narrows All to one namespace's findings, for dots <ns>'s findings
+// block and for a listing's "!" rollup.
+func (f Findings) For(repo, namespace string) []Finding {
+	var out []Finding
+	for _, fnd := range f.All() {
+		if fnd.Repo == repo && fnd.Namespace == namespace {
+			out = append(out, fnd)
+		}
+	}
+	return out
+}
+
+// repairFindings expands one namespace's manifest repair into a Finding per
+// entry — an invalid (destination-less) entry, an orphan, an untracked
+// payload, or an in-repo link guard collision — each subjected
+// "<namespace>/<entry>", per concept.md "Doctor"'s examples. Every case but
+// the orphan resolves through the same `dots <ns> edit`: an invalid entry
+// gets a destination there, an untracked payload gets declared there, and a
+// guard collision is resolved by editing one of the colliding destinations
+// there. An orphan has no single fix — restoring the payload and removing
+// the entry are both valid — so Fix stays empty, matching concept.md's own
+// example ("zsh/.zshrc  orphaned entry — its payload is gone from the
+// namespace", no "run:" clause).
+func repairFindings(r Repair) []Finding {
+	editFix := fmt.Sprintf("dots %s edit", r.Namespace)
+	var out []Finding
+	for _, name := range r.Report.Invalid {
+		out = append(out, Finding{Repo: r.Repo, Namespace: r.Namespace, Subject: r.Namespace + "/" + name, Detail: "destination not set", Fix: editFix})
+	}
+	for _, name := range r.Report.Orphans {
+		out = append(out, Finding{Repo: r.Repo, Namespace: r.Namespace, Subject: r.Namespace + "/" + name, Detail: "orphaned entry — its payload is gone from the namespace"})
+	}
+	for _, name := range r.Report.Untracked {
+		out = append(out, Finding{Repo: r.Repo, Namespace: r.Namespace, Subject: r.Namespace + "/" + name, Detail: "untracked payload", Fix: editFix})
+	}
+	for _, p := range r.GuardProblems {
+		out = append(out, Finding{Repo: r.Repo, Namespace: r.Namespace, Subject: r.Namespace + "/" + p.Entry, Detail: p.Detail, Fix: editFix})
+	}
+	return out
+}
+
+// profileProblemFinding renders one .profiles/ inconsistency, per
+// concept.md "Doctor"'s "kitty/blue  profile folder not declared, run: dots
+// kitty profiles add blue" example. Subject narrows from the namespace down
+// to the exact override where the case names one. Only the two cases with
+// exactly one folder or entry to name resolve through a single command; the
+// declared-but-no-longer-tracked case has no safe one-line fix (the
+// declaration lives in a committed file the entry itself no longer
+// resolves against) and is left for `profiles edit` to sort out by hand.
+func profileProblemFinding(p ProfileProblem) Finding {
+	parts := []string{p.Namespace}
+	if p.Profile != "" {
+		parts = append(parts, p.Profile)
+	}
+	if p.Entry != "" {
+		parts = append(parts, p.Entry)
+	}
+	subject := strings.Join(parts, "/")
+
+	var fix string
+	switch {
+	case p.Profile != "" && p.Entry == "":
+		fix = fmt.Sprintf("dots %s profiles add %s", p.Namespace, p.Profile)
+	case p.Profile != "" && p.Entry != "":
+		fix = fmt.Sprintf("dots %s profiles main add %s", p.Namespace, p.Entry)
+	}
+	return Finding{Repo: p.Repo, Namespace: p.Namespace, Subject: subject, Detail: p.Detail, Fix: fix}
+}
+
+// fallbackFinding renders a profile fallback to main, per concept.md
+// "Self-healing": "The fallback to main is... a mutation... It stays a
+// finding anyway." It carries no Fix — the relink already happened, this
+// pass, and there is nothing left to run.
+func fallbackFinding(fb ProfileFallback) Finding {
+	return Finding{Repo: fb.Repo, Namespace: fb.Namespace, Subject: fb.Namespace,
+		Detail: fmt.Sprintf("profile %q no longer exists, fell back to main", fb.Profile)}
+}
+
 // Disabled records one namespace Run flipped to disabled this pass, by
 // calling the same engine.Disable an explicit `dots disable` uses, because
 // at least one entry's destination could not be linked. Reasons names the
@@ -611,7 +727,7 @@ func changedDestinations(namespaceDir string, entries []manifest.Entry, activePr
 //  2. destinations state still remembers that are still symlinks pointing
 //     into this namespace's folder — proof, not inference.
 //  3. a dest-less scaffold entry for whatever payload neither source
-//     accounts for, which lists as "?" until a human fills in a destination
+//     accounts for, which lists as "!" until a human fills in a destination
 //     (namespace <ns> edit) or removes the payload.
 //
 // The manifest this returns is written back to disk by the caller — the one

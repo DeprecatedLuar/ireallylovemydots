@@ -33,7 +33,7 @@ func RebuildFromLinks(nsDir string, linkedDests []string) []manifest.Entry {
 // Scaffold returns one dest-less entry per untracked payload in report — so
 // a recovered manifest names every payload in the namespace folder, with the
 // ones RebuildFromLinks could not prove a destination for landing as invalid
-// entries (concept.md "Manual edits": "?", not linked, until a human fills
+// entries (concept.md "Manual edits": "!", not linked, until a human fills
 // in a destination or removes the payload). Call Inspect with whatever
 // RebuildFromLinks already recovered before building report, so its
 // Untracked list already excludes them.

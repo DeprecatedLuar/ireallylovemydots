@@ -38,6 +38,7 @@ const (
 	targetList
 	targetSync
 	targetHelp
+	targetDoctor
 )
 
 // route is the result of resolving argv into a dispatch target plus the
@@ -88,15 +89,17 @@ func main() {
 
 	switch r.target {
 	case targetNamespace:
-		err = commands.HandleNamespace(r.args, flags)
+		err = commands.HandleNamespace(r.args, flags, findings)
 	case targetRepo:
 		err = commands.HandleRepo(r.args, flags)
 	case targetList:
-		err = commands.HandleList(r.args)
+		err = commands.HandleList(r.args, findings)
 	case targetSync:
 		err = commands.HandleSync(r.args)
 	case targetHelp:
 		err = commands.HandleHelp(r.args)
+	case targetDoctor:
+		err = commands.HandleDoctor(r.args, findings)
 	}
 	commands.RenderSelfHealFindings(findings)
 	if err != nil {
@@ -228,6 +231,8 @@ func resolveRoute(args []string, namespaces, repos []string, ambiguous func(name
 		return route{target: targetSync, args: args[1:]}, nil
 	case "list", "ls", "status":
 		return route{target: targetList, args: args[1:]}, nil
+	case "doctor":
+		return route{target: targetDoctor, args: args[1:]}, nil
 	case "help", "h", "-h", "--help":
 		return route{target: targetHelp, args: args[1:]}, nil
 	}

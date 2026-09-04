@@ -15,6 +15,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/paths"
 	"github.com/DeprecatedLuar/dotz/internal/profile"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
+	"github.com/DeprecatedLuar/dotz/internal/selfheal"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
@@ -44,15 +45,16 @@ func (o listOptions) wantState(marker string) bool {
 // materialized namespaces marked "-", namespaces that exist in a
 // repository's catalogue but are not materialized here marked "=", and any
 // materialized namespace holding an orphaned, invalid, or untracked
-// entry underneath it marked "!" — concept.md "Manual edits": "a `!`
-// namespace always has at least one `!` or `?` entry underneath it". The
-// catalogue walk (repo.Namespaces) is skipped for a repository when "="
+// entry underneath it (or a .profiles/ finding of its own) marked "!" —
+// concept.md "Manual edits": "a `!` namespace always has at least one `!`
+// entry underneath it". The catalogue walk (repo.Namespaces) is skipped for
+// a repository when "="
 // is excluded by opts.States. Every materialized namespace's manifest is
 // read regardless of opts.Counts now, since deciding "+"/"-" vs "!" needs
 // it; self-heal (run once ahead of every dispatch, in cmd/dotz/main.go) has
 // already corrected whatever it could by the time this runs, so what is
 // left to find here is exactly what self-heal would not touch.
-func namespaceListing(repos []manifest.Repo, opts listOptions) ([]ui.Entry, error) {
+func namespaceListing(repos []manifest.Repo, opts listOptions, findings selfheal.Findings) ([]ui.Entry, error) {
 	dataDir, err := paths.Data()
 	if err != nil {
 		return nil, err
@@ -87,7 +89,7 @@ func namespaceListing(repos []manifest.Repo, opts listOptions) ([]ui.Entry, erro
 			if m.Ignore {
 				continue
 			}
-			row, err := namespaceRow(s, r.Name, n, nsDir, m.Entries)
+			row, err := namespaceRow(s, r.Name, n, nsDir, m.Entries, findings)
 			if err != nil {
 				return nil, err
 			}
@@ -149,13 +151,16 @@ func qualifyCollisions(rows []ui.Entry) {
 
 // namespaceRow is the one place a namespace's listing marker is decided:
 // enabled materialized namespaces are "+", every other materialized
-// namespace is "-", unless namespaceProblems finds a "!" or "?" entry
-// underneath it, which promotes the namespace itself to "!". diagnoseOccupancy
-// is false here: concept.md "Listing output" promotes a namespace to "!"
-// only for an orphaned, invalid, or untracked entry, never for an occupied
-// destination on an otherwise-ordinary disabled namespace — that diagnostic
-// belongs to entryListing (`dots <ns>`), one command away, not the overview.
-func namespaceRow(s state.State, repoName, nsName, namespaceDir string, entries []manifest.Entry) (ui.Entry, error) {
+// namespace is "-", unless namespaceProblems finds a "!" entry underneath
+// it, or findings names a .profiles/ finding for this namespace, either of
+// which promotes the namespace itself to "!" — concept.md "Self-healing"
+// under Profiles: "Every one of these promotes the namespace to '!' in a
+// listing." diagnoseOccupancy is false here: concept.md "Listing output"
+// promotes a namespace to "!" only for an orphaned, invalid, or untracked
+// entry, never for an occupied destination on an otherwise-ordinary
+// disabled namespace — that diagnostic belongs to entryListing (`dots
+// <ns>`), one command away, not the overview.
+func namespaceRow(s state.State, repoName, nsName, namespaceDir string, entries []manifest.Entry, findings selfheal.Findings) (ui.Entry, error) {
 	stateEntry := s.Entries[state.Key{Repo: repoName, Namespace: nsName}]
 	marker := ui.MarkerMaterialized
 	if stateEntry.Enabled {
@@ -167,12 +172,15 @@ func namespaceRow(s state.State, repoName, nsName, namespaceDir string, entries 
 		return ui.Entry{}, err
 	}
 	for _, row := range rows {
-		if row.Marker == ui.MarkerProblem || row.Marker == ui.MarkerUntracked {
+		if row.Marker == ui.MarkerProblem {
 			marker = ui.MarkerProblem
 			break
 		}
 	}
-	return ui.Entry{Marker: marker, Name: nsName}, nil
+	if marker != ui.MarkerProblem && len(findings.For(repoName, nsName)) > 0 {
+		marker = ui.MarkerProblem
+	}
+	return ui.Entry{Marker: marker, Name: nsName, Profile: stateEntry.ActiveProfile}, nil
 }
 
 // catalogueNamespaceIgnored reports whether a namespace not materialized
@@ -260,7 +268,7 @@ func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bo
 		rows = append(rows, classifyEntry(e, namespaceDir, enabled, activeProfile, invalid, orphaned, guarded, diagnoseOccupancy))
 	}
 	for _, name := range report.Untracked {
-		rows = append(rows, ui.Entry{Marker: ui.MarkerUntracked, Name: name})
+		rows = append(rows, ui.Entry{Marker: ui.MarkerProblem, Name: name})
 	}
 	return rows, report.Orphans, report.Untracked, nil
 }
@@ -281,8 +289,8 @@ func manifestGuardDetails(entries []manifest.Entry) map[string]string {
 }
 
 // classifyEntry decides one tracked entry's listing marker, per concept.md
-// "Manual edits": "?" for an entry with an empty destination — invalid, not
-// pending — "!" for an orphan (its payload is gone from the namespace), "+"
+// "Manual edits": "!" for an entry with an empty destination — invalid, not
+// pending — same as an orphan (its payload is gone from the namespace), "+"
 // for a correctly linked entry in an enabled namespace, "-" otherwise. The
 // invalid and orphan rows carry a detail suffix (ui.DetailSep, the same
 // "<name>    <detail>" shape blockedEntry below uses) naming what's actually
@@ -307,7 +315,7 @@ func manifestGuardDetails(entries []manifest.Entry) map[string]string {
 // untracked entry, not an occupied destination on an ordinary disabled one.
 func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, activeProfile string, invalid, orphaned map[string]bool, guarded map[string]string, diagnoseOccupancy bool) ui.Entry {
 	if invalid[e.Name] {
-		return ui.Entry{Marker: ui.MarkerUntracked, Name: e.Name + ui.DetailSep + "destination not set"}
+		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name + ui.DetailSep + "destination not set"}
 	}
 	if orphaned[e.Name] {
 		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name + ui.DetailSep + "payload missing from repo"}
@@ -416,8 +424,8 @@ func sortNamespaceRows(rows []ui.Entry) {
 }
 
 // sortEntryRows applies the same state-then-name grouping to one
-// namespace's entry rows, so a "!" or "?" entry leads a per-namespace
-// listing the same way a "!" namespace leads the top-level one.
+// namespace's entry rows, so a "!" entry leads a per-namespace listing the
+// same way a "!" namespace leads the top-level one.
 func sortEntryRows(rows []ui.Entry) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		iRank := markerRank(rows[i].Marker)
@@ -433,15 +441,13 @@ func markerRank(marker string) int {
 	switch marker {
 	case ui.MarkerProblem:
 		return 0
-	case ui.MarkerUntracked:
-		return 1
 	case ui.MarkerEnabled:
-		return 2
+		return 1
 	case ui.MarkerMaterialized:
-		return 3
+		return 2
 	case ui.MarkerAbsent:
-		return 4
+		return 3
 	default:
-		return 5
+		return 4
 	}
 }

@@ -16,9 +16,8 @@ import (
 const (
 	MarkerEnabled      = "+" // enabled
 	MarkerMaterialized = "-" // materialized, not linked
-	MarkerProblem      = "!" // manifest needs a human: orphan, invalid, or untracked entry
+	MarkerProblem      = "!" // every finding: orphan, invalid entry, untracked payload, profile drift
 	MarkerAbsent       = "=" // in the repository, not on this machine (dim)
-	MarkerUntracked    = "?" // payload with no manifest entry
 	// MarkerRemoved appears only in the output of a mutation, never in a
 	// listing: the namespace was removed and has no state left to report,
 	// per concept.md "Listing output".
@@ -35,22 +34,21 @@ const (
 	dim         = "\033[2m"
 	green       = "\033[32m"
 	purple      = "\033[35m"
+	blue        = "\033[34m"
 	errorTone   = "\033[31m"
 	warningTone = "\033[33m"
 	reset       = "\033[0m"
 )
 
-// MarkerProblem shares warningTone with MarkerUntracked rather than
-// errorTone: "!" is most often a rollup of an underlying "?" (an untracked
-// file, an invalid entry) rather than something that actually failed, so
-// red is reserved for a marker that means an operation did not do what it
-// was asked — MarkerRemoved, and the arrow die() prints on a fatal error.
+// MarkerProblem carries warningTone rather than errorTone: "!" marks
+// something a human has to look at, not something that failed, so red is
+// reserved for a marker that means an operation did not do what it was
+// asked — MarkerRemoved, and the arrow die() prints on a fatal error.
 var markerColor = map[string]string{
 	MarkerEnabled:      green,
 	MarkerMaterialized: purple,
 	MarkerAbsent:       dim,
 	MarkerProblem:      warningTone,
-	MarkerUntracked:    warningTone,
 	MarkerRemoved:      errorTone,
 }
 
@@ -61,12 +59,16 @@ var markerColor = map[string]string{
 // ("" = none) — a caller that found this Name colliding across
 // repositories in the rendered set qualifies the row with it, per
 // concept.md "Listing output": "A name carried by two repositories is
-// qualified, and only then."
+// qualified, and only then." Profile is optional ("" = main, no bracket) —
+// the namespace's active profile, rendered as "[<name>]" between Name and
+// the repository qualifier, per concept.md "Listing output": "A namespace
+// with a profile active carries its name in brackets."
 type Entry struct {
-	Marker string
-	Name   string
-	Count  int
-	Repo   string
+	Marker  string
+	Name    string
+	Count   int
+	Repo    string
+	Profile string
 }
 
 // Interactive reports whether both stdin and stdout are attached to a
@@ -127,6 +129,18 @@ func dimTone(s string, f *os.File) string {
 	return dim + s + reset
 }
 
+// blueTone wraps s in blue, the one tone in the palette carried by neither
+// a marker nor the dim qualifier — concept.md "Listing output": "Blue is
+// the only tone added past the marker set, and it is added for an
+// annotation rather than a marker." Coloured only when f is a
+// colour-enabled destination.
+func blueTone(s string, f *os.File) string {
+	if s == "" || !colorEnabled(f) {
+		return s
+	}
+	return blue + s + reset
+}
+
 // Render formats entries for the listing output. Success prints nothing —
 // callers simply skip printing when entries is empty. Each marker carries
 // its own tone from concept.md's palette, applied to the whole line, only
@@ -148,12 +162,12 @@ func Render(entries []Entry) string {
 //
 // When any entry carries a Count or a Repo, every such entry's line gets an
 // aligned trailing-parenthesis column in the dim tone, padded to the widest
-// marker-plus-name among decorated entries; an entry with neither prints
-// without one. Repo, when present, is rendered as its own "(repo)"
-// parenthesis ahead of the count's "(n items)" — concept.md "Listing
-// output": a name carried by two repositories in the rendered set is
-// qualified with its repository, in the same trailing-parenthesis shape the
-// count column already uses, ordered before the count when both are
+// marker-plus-name-plus-profile among decorated entries; an entry with
+// neither prints without one. Repo, when present, is rendered as its own
+// "(repo)" parenthesis ahead of the count's "(n items)" — concept.md
+// "Listing output": a name carried by two repositories in the rendered set
+// is qualified with its repository, in the same trailing-parenthesis shape
+// the count column already uses, ordered before the count when both are
 // present on a row. This is CountedItems' alignment rule, folded into the
 // one renderer so a block can carry markers, repo qualifiers, and counts
 // together.
@@ -161,7 +175,7 @@ func RenderLines(entries []Entry, f *os.File) []string {
 	width := 0
 	for _, e := range entries {
 		if e.Count > 0 || e.Repo != "" {
-			if l := len(e.Marker) + 1 + len(e.Name); l > width {
+			if l := len(plainPrefix(e)); l > width {
 				width = l
 			}
 		}
@@ -169,8 +183,8 @@ func RenderLines(entries []Entry, f *os.File) []string {
 
 	lines := make([]string, len(entries))
 	for i, e := range entries {
-		prefix := fmt.Sprintf("%s %s", e.Marker, e.Name)
-		line := prefix
+		plain := plainPrefix(e)
+		line := coloredPrefix(e, f)
 		var parens []string
 		if e.Repo != "" {
 			parens = append(parens, fmt.Sprintf("(%s)", e.Repo))
@@ -180,11 +194,39 @@ func RenderLines(entries []Entry, f *os.File) []string {
 		}
 		if len(parens) > 0 {
 			paren := dimTone(strings.Join(parens, " "), f)
-			line = fmt.Sprintf("%-*s %s", width, prefix, paren)
+			pad := width - len(plain)
+			if pad < 0 {
+				pad = 0
+			}
+			line = line + strings.Repeat(" ", pad) + " " + paren
 		}
 		lines[i] = colorLine(e.Marker, line, f)
 	}
 	return lines
+}
+
+// plainPrefix is entry's marker/name/profile column, uncoloured — the width
+// alignment above must measure this, never coloredPrefix, since an ANSI
+// escape sequence would otherwise count toward the padding.
+func plainPrefix(e Entry) string {
+	p := fmt.Sprintf("%s %s", e.Marker, e.Name)
+	if e.Profile != "" {
+		p += fmt.Sprintf(" [%s]", e.Profile)
+	}
+	return p
+}
+
+// coloredPrefix is plainPrefix with the profile bracket in blue, per
+// concept.md "Listing output": "the bracket is blue... making it match the
+// row's marker would tie a piece of state to a colour that already means
+// something else." The marker and name still pick up the row's marker tone
+// afterward, from colorLine wrapping the whole line.
+func coloredPrefix(e Entry, f *os.File) string {
+	p := fmt.Sprintf("%s %s", e.Marker, e.Name)
+	if e.Profile != "" {
+		p += " " + blueTone(fmt.Sprintf("[%s]", e.Profile), f)
+	}
+	return p
 }
 
 // DetailSep separates a mutation report line's name from its trailing
@@ -378,7 +420,7 @@ func ErrorTone(msg string) string {
 	return errorTone + msg + reset
 }
 
-// WarningTone wraps msg in the warning tone used for "?" markers, for
+// WarningTone wraps msg in the warning tone used for the "!" marker, for
 // message output that should read as the same kind of problem, per
 // concept.md "Listing output". Coloured only when stderr is a terminal and
 // NO_COLOR is unset.

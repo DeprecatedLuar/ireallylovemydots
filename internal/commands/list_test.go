@@ -44,7 +44,7 @@ func TestHandleList_EmptyRegistryPrintsHintOnStderrOnly(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 	stdout, stderr := captureStdoutStderr(t, func() {
-		if err := HandleList(nil); err != nil {
+		if err := HandleList(nil, selfheal.Findings{}); err != nil {
 			t.Fatalf("HandleList: %v", err)
 		}
 	})
@@ -76,7 +76,7 @@ func TestHandleList_HintDisappearsOnceRepoRegistered(t *testing.T) {
 	}
 
 	_, stderr := captureStdoutStderr(t, func() {
-		if err := HandleList(nil); err != nil {
+		if err := HandleList(nil, selfheal.Findings{}); err != nil {
 			t.Fatalf("HandleList: %v", err)
 		}
 	})
@@ -121,7 +121,7 @@ func TestHandleList_MarksEnabledNamespacesWithPlus(t *testing.T) {
 	}
 
 	stdout, stderr := captureStdoutStderr(t, func() {
-		if err := HandleList(nil); err != nil {
+		if err := HandleList(nil, selfheal.Findings{}); err != nil {
 			t.Fatalf("HandleList: %v", err)
 		}
 	})
@@ -192,7 +192,7 @@ func TestHandleList_ShowsSelfHealAutoDisabledNamespaceAsMaterialized(t *testing.
 	}
 
 	stdout, stderr := captureStdoutStderr(t, func() {
-		if err := HandleList(nil); err != nil {
+		if err := HandleList(nil, selfheal.Findings{}); err != nil {
 			t.Fatalf("HandleList: %v", err)
 		}
 	})
@@ -238,7 +238,7 @@ func TestHandleList_IgnoredNamespaceProducesNoRow(t *testing.T) {
 	}
 
 	stdout, stderr := captureStdoutStderr(t, func() {
-		if err := HandleList(nil); err != nil {
+		if err := HandleList(nil, selfheal.Findings{}); err != nil {
 			t.Fatalf("HandleList: %v", err)
 		}
 	})
@@ -363,16 +363,16 @@ func TestHandleList_StatusAliasIsByteIdentical(t *testing.T) {
 	}
 
 	bareOut, bareErr := captureStdoutStderr(t, func() {
-		if err := HandleList(nil); err != nil {
-			t.Fatalf("HandleList(nil): %v", err)
+		if err := HandleList(nil, selfheal.Findings{}); err != nil {
+			t.Fatalf("HandleList(nil, selfheal.Findings{}): %v", err)
 		}
 	})
 	// cmd/dotz's resolveRoute passes args[1:] of ["status"] through, an
 	// empty (non-nil) slice — HandleList treats it the same as nil, which
 	// is exactly the byte-identical guarantee under test.
 	statusOut, statusErr := captureStdoutStderr(t, func() {
-		if err := HandleList([]string{}); err != nil {
-			t.Fatalf("HandleList([]string{}): %v", err)
+		if err := HandleList([]string{}, selfheal.Findings{}); err != nil {
+			t.Fatalf("HandleList([]string{}, selfheal.Findings{}): %v", err)
 		}
 	})
 
@@ -385,13 +385,13 @@ func TestHandleList_StatusAliasIsByteIdentical(t *testing.T) {
 }
 
 // TestClassifyEntry_EmptyDestinationMarksUntracked covers: a manifest entry
-// with an empty destination marks the entry "?" and is never enabled —
+// with an empty destination marks the entry "!" and is never enabled —
 // concept.md "Manual edits": invalid, not pending.
 func TestClassifyEntry_EmptyDestinationMarksUntracked(t *testing.T) {
 	invalid := map[string]bool{"cfg": true}
 	row := classifyEntry(manifest.Entry{Name: "cfg", Dest: ""}, t.TempDir(), true, "", invalid, nil, nil, true)
-	if row.Marker != ui.MarkerUntracked {
-		t.Fatalf("expected marker %q, got %q", ui.MarkerUntracked, row.Marker)
+	if row.Marker != ui.MarkerProblem {
+		t.Fatalf("expected marker %q, got %q", ui.MarkerProblem, row.Marker)
 	}
 }
 
@@ -458,7 +458,7 @@ func TestClassifyEntry_DuplicateDestinationCarriesDetail(t *testing.T) {
 }
 
 // TestEntryListing_UntrackedPayloadMarked covers: a payload present in the
-// namespace but absent from the manifest is marked "?".
+// namespace but absent from the manifest is marked "!".
 func TestEntryListing_UntrackedPayloadMarked(t *testing.T) {
 	nsDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(nsDir, "mystery"), []byte("x"), 0644); err != nil {
@@ -469,7 +469,7 @@ func TestEntryListing_UntrackedPayloadMarked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("entryListing: %v", err)
 	}
-	if len(rows) != 1 || rows[0].Marker != ui.MarkerUntracked || rows[0].Name != "mystery" {
+	if len(rows) != 1 || rows[0].Marker != ui.MarkerProblem || rows[0].Name != "mystery" {
 		t.Fatalf("unexpected rows: %+v", rows)
 	}
 }
@@ -505,7 +505,7 @@ func TestNamespaceRow_PromotesToProblemOnOrphanEntry(t *testing.T) {
 	entries := []manifest.Entry{{Name: "gone", Dest: "/tmp/gone-dest"}}
 	s := state.State{Entries: map[state.Key]state.Entry{}}
 
-	row, err := namespaceRow(s, "dotfiles", "cfg-ns", nsDir, entries)
+	row, err := namespaceRow(s, "dotfiles", "cfg-ns", nsDir, entries, selfheal.Findings{})
 	if err != nil {
 		t.Fatalf("namespaceRow: %v", err)
 	}
@@ -531,7 +531,7 @@ func TestNamespaceRow_HealthyEnabledNamespaceStaysPlus(t *testing.T) {
 		{Repo: "dotfiles", Namespace: "cfg-ns"}: {Enabled: true},
 	}}
 
-	row, err := namespaceRow(s, "dotfiles", "cfg-ns", nsDir, entries)
+	row, err := namespaceRow(s, "dotfiles", "cfg-ns", nsDir, entries, selfheal.Findings{})
 	if err != nil {
 		t.Fatalf("namespaceRow: %v", err)
 	}
@@ -568,7 +568,7 @@ func TestNamespaceListing_StateFilterExcludesAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows, err := namespaceListing(reg.Repos, listOptions{States: []string{ui.MarkerEnabled, ui.MarkerMaterialized}})
+	rows, err := namespaceListing(reg.Repos, listOptions{States: []string{ui.MarkerEnabled, ui.MarkerMaterialized}}, selfheal.Findings{})
 	if err != nil {
 		t.Fatalf("namespaceListing: %v", err)
 	}

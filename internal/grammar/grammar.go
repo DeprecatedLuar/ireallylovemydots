@@ -37,8 +37,9 @@ var NounAliases = map[string]string{
 }
 
 // TopOnly are reserved words that are neither verbs nor nouns but still
-// occupy the top level: status aliases to list, sync has no target.
-var TopOnly = []string{"status", "sync"}
+// occupy the top level: status aliases to list, sync has no target, doctor
+// takes no name at all.
+var TopOnly = []string{"status", "sync", "doctor"}
 
 // RepoOnlyVerbs are verbs valid only at the repository level: init takes a
 // local folder rather than a name, and has no meaning for a namespace or
@@ -112,7 +113,7 @@ func CanonicalNoun(tok string) string {
 // because a name in verb position descends the grammar.
 func IsReserved(tok string) bool {
 	return IsVerb(tok) || IsNoun(tok) || slices.Contains(RepoOnlyVerbs, tok) ||
-		slices.Contains(NamespaceOnlyVerbs, tok) || tok == "status" || tok == "sync"
+		slices.Contains(NamespaceOnlyVerbs, tok) || tok == "status" || tok == "sync" || tok == "doctor"
 }
 
 // ProfileMain is the name of the unprofiled layer — the namespace root. It

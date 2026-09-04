@@ -28,7 +28,7 @@ const (
 
 // Report is what one namespace folder holds, checked against its manifest —
 // facts only, no markers and no notion of enabled/disabled. A listing turns
-// these facts into "!"/"?" rows; self-heal turns them into a repair warning.
+// these facts into "!" rows; self-heal turns them into a repair finding.
 type Report struct {
 	// ManifestMissing is true when the namespace has no .dots file at all,
 	// as opposed to one that parses to zero entries — Read collapses that

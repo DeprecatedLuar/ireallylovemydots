@@ -3,6 +3,8 @@ package commands
 import (
 	"fmt"
 	"os"
+
+	"github.com/DeprecatedLuar/dotz/internal/selfheal"
 )
 
 // emptyRegistryHint is the one line concept.md "Listing output" requires
@@ -13,11 +15,11 @@ const emptyRegistryHint = "No repositories registered. Run: dots repo add <url>"
 // HandleList implements the top-level list and its status alias as shortcuts
 // for namespace list. Its scope is every namespace in every registered
 // repository, materialized or not.
-func HandleList(args []string) error {
+func HandleList(args []string, findings selfheal.Findings) error {
 	if len(args) != 0 {
 		return fmt.Errorf("usage: list")
 	}
-	return renderNamespaceList()
+	return renderNamespaceList(findings)
 }
 
 // printEmptyRegistryHint prints the hint to stderr, per concept.md: exit

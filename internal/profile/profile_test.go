@@ -168,6 +168,46 @@ func TestCreateFromProfileCopiesThatProfilesVersion(t *testing.T) {
 	}
 }
 
+// TestCreateWithoutFromAdoptsExistingFolderUntouched pins concept.md
+// "Self-healing"'s undeclared-profile remedy: `profiles add <profile>`
+// (Create with no --from) must declare a folder already sitting in
+// .profiles/ without touching its contents — self-heal never writes
+// .profiles/.dots from what is on disk, so the human-run add is the only
+// path that adopts it, and it must adopt exactly what is there.
+func TestCreateWithoutFromAdoptsExistingFolderUntouched(t *testing.T) {
+	dir := namespaceWithEntries(t)
+	profileDir := ProfileDir(dir, "dark")
+	if err := os.MkdirAll(profileDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "gitconfig"), []byte("hand-written"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Create(dir, "dark", ""); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(profileDir, "gitconfig"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(data) != "hand-written" {
+		t.Fatalf("Create rewrote the folder's content: got %q", data)
+	}
+	if entries, err := os.ReadDir(profileDir); err != nil || len(entries) != 1 {
+		t.Fatalf("Create changed the folder's contents: entries=%v err=%v", entries, err)
+	}
+
+	m, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.HasProfile("dark") {
+		t.Fatal("Create did not declare the profile")
+	}
+}
+
 func TestRemoveDropsDeclarationAndTrashesOverrides(t *testing.T) {
 	dir := namespaceWithEntries(t)
 	if err := Create(dir, "dark", Main); err != nil {

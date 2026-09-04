@@ -10,6 +10,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
+	"github.com/DeprecatedLuar/dotz/internal/selfheal"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 )
 
@@ -55,7 +56,7 @@ func TestRmNamespaces_BatchInSameRepo_DoesNotSelfBlockOnGitSafety(t *testing.T) 
 	runGit(t, repoDir, "commit", "-m", "init")
 	runGit(t, repoDir, "remote", "add", "origin", "https://example.com/someone/dotfiles")
 
-	if err := HandleNamespace([]string{"rm", "aaa", "bbb"}, shared.Flags{Yes: true}); err != nil {
+	if err := HandleNamespace([]string{"rm", "aaa", "bbb"}, shared.Flags{Yes: true}, selfheal.Findings{}); err != nil {
 		t.Fatalf("namespace rm aaa bbb (batch in same repo): %v", err)
 	}
 
@@ -80,7 +81,7 @@ func TestRmEntry_Default_TrashesPayloadWritesNothingHome(t *testing.T) {
 	entries := []manifest.Entry{{Name: "nvim", Dest: dest}}
 	dataDir, _, nsDir := registerRepoWithNamespace(t, "editors", entries)
 
-	if err := HandleNamespace([]string{"editors", "rm", "nvim"}, shared.Flags{Yes: true}); err != nil {
+	if err := HandleNamespace([]string{"editors", "rm", "nvim"}, shared.Flags{Yes: true}, selfheal.Findings{}); err != nil {
 		t.Fatalf("namespace editors rm nvim: %v", err)
 	}
 
@@ -112,7 +113,7 @@ func TestRmEntry_Restore_WritesRealFileToDestination(t *testing.T) {
 	entries := []manifest.Entry{{Name: "nvim", Dest: dest}}
 	_, _, nsDir := registerRepoWithNamespace(t, "editors", entries)
 
-	if err := HandleNamespace([]string{"editors", "rm", "nvim"}, shared.Flags{Yes: true, Restore: true}); err != nil {
+	if err := HandleNamespace([]string{"editors", "rm", "nvim"}, shared.Flags{Yes: true, Restore: true}, selfheal.Findings{}); err != nil {
 		t.Fatalf("namespace editors rm nvim --restore: %v", err)
 	}
 
@@ -137,7 +138,7 @@ func TestRmNamespace_Default_TrashesFolderWritesNothingHome(t *testing.T) {
 	entries := []manifest.Entry{{Name: "aaa", Dest: destA}, {Name: "bbb", Dest: destB}}
 	_, _, nsDir := registerRepoWithNamespace(t, "editors", entries)
 
-	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true}); err != nil {
+	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true}, selfheal.Findings{}); err != nil {
 		t.Fatalf("namespace rm editors: %v", err)
 	}
 
@@ -162,7 +163,7 @@ func TestRmNamespace_Restore_DisabledNamespace_WritesFilesToDestinations(t *test
 		t.Fatalf("expected dest absent before rm, got err=%v", err)
 	}
 
-	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true, Restore: true}); err != nil {
+	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true, Restore: true}, selfheal.Findings{}); err != nil {
 		t.Fatalf("namespace rm editors --restore (disabled): %v", err)
 	}
 
@@ -186,7 +187,7 @@ func TestRmNamespace_EnabledNamespace_DefaultRemovesSymlinkTrashesFolderNoDangli
 		t.Fatalf("expected a symlink after enable: %v", err)
 	}
 
-	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true}); err != nil {
+	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true}, selfheal.Findings{}); err != nil {
 		t.Fatalf("namespace rm editors (enabled): %v", err)
 	}
 
@@ -216,7 +217,7 @@ func TestRmNamespace_Restore_EnabledNamespace_RemovesSymlinkAndWritesRealFile(t 
 		t.Fatalf("enableNamespace: %v", err)
 	}
 
-	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true, Restore: true}); err != nil {
+	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true, Restore: true}, selfheal.Findings{}); err != nil {
 		t.Fatalf("namespace rm editors --restore (enabled): %v", err)
 	}
 
@@ -256,7 +257,7 @@ func TestRmNamespace_Purge_LeavesNothingInTrash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true, Purge: true}); err != nil {
+	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true, Purge: true}, selfheal.Findings{}); err != nil {
 		t.Fatalf("namespace rm editors --purge: %v", err)
 	}
 
@@ -301,7 +302,7 @@ func TestRmNamespace_RestorePurge_RestoresFirstThenLeavesNothingInTrash(t *testi
 		t.Fatal(err)
 	}
 
-	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true, Restore: true, Purge: true}); err != nil {
+	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true, Restore: true, Purge: true}, selfheal.Findings{}); err != nil {
 		t.Fatalf("namespace rm editors --restore --purge: %v", err)
 	}
 
@@ -332,7 +333,7 @@ func TestRestoreEntries_NonInteractiveOccupiedDestination_ErrorsNamingForce(t *t
 	entries := []manifest.Entry{{Name: "nvim", Dest: dest}}
 	registerRepoWithNamespace(t, "editors", entries)
 
-	err := HandleNamespace([]string{"editors", "rm", "nvim"}, shared.Flags{Yes: true, Restore: true})
+	err := HandleNamespace([]string{"editors", "rm", "nvim"}, shared.Flags{Yes: true, Restore: true}, selfheal.Findings{})
 	if err == nil {
 		t.Fatal("expected a non-interactive occupied-destination restore to fail")
 	}
@@ -365,7 +366,7 @@ func TestRmEntry_RestoreForce_TrashesOccupantAndRestoresOurs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := HandleNamespace([]string{"editors", "rm", "nvim"}, shared.Flags{Force: true, Yes: true, Restore: true}); err != nil {
+	if err := HandleNamespace([]string{"editors", "rm", "nvim"}, shared.Flags{Force: true, Yes: true, Restore: true}, selfheal.Findings{}); err != nil {
 		t.Fatalf("namespace editors rm nvim --restore --force: %v", err)
 	}
 
@@ -429,7 +430,7 @@ func TestRm_NonInteractiveWithoutYes_HardErrorsChangesNothing(t *testing.T) {
 	entries := []manifest.Entry{{Name: "nvim", Dest: dest}}
 	_, _, nsDir := registerRepoWithNamespace(t, "editors", entries)
 
-	err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{})
+	err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{}, selfheal.Findings{})
 	if err == nil {
 		t.Fatal("expected a non-interactive rm without -y to fail")
 	}
@@ -488,7 +489,7 @@ func TestRmNamespace_StagesRemovalImmediately(t *testing.T) {
 	runGit(t, repoDir, "sparse-checkout", "init", "--cone")
 	runGit(t, repoDir, "sparse-checkout", "set", "editors", "other")
 
-	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true}); err != nil {
+	if err := HandleNamespace([]string{"rm", "editors"}, shared.Flags{Yes: true}, selfheal.Findings{}); err != nil {
 		t.Fatalf("namespace rm editors: %v", err)
 	}
 

@@ -15,6 +15,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/paths"
 	"github.com/DeprecatedLuar/dotz/internal/profile"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
+	"github.com/DeprecatedLuar/dotz/internal/selfheal"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/trash"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
@@ -141,7 +142,7 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 			return err
 		}
 		targets = append(targets, resolved{loc: loc, entries: m.Entries})
-		row, err := namespaceRow(s, loc.Repo.Name, name, loc.Dir, m.Entries)
+		row, err := namespaceRow(s, loc.Repo.Name, name, loc.Dir, m.Entries, selfheal.Findings{})
 		if err != nil {
 			return err
 		}
@@ -213,7 +214,7 @@ func rmRepo(name string, flags shared.Flags) error {
 	// namespaces exist only in the catalogue and have no local folder to
 	// trash, so they're excluded by the state filter rather than by a
 	// separate check here.
-	rows, err := namespaceListing(reg.Repos, listOptions{Repo: r.Name, States: onDiskStates, Counts: true})
+	rows, err := namespaceListing(reg.Repos, listOptions{Repo: r.Name, States: onDiskStates, Counts: true}, selfheal.Findings{})
 	if err != nil {
 		return err
 	}

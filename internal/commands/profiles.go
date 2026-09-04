@@ -67,14 +67,15 @@ func handleProfiles(namespace string, args []string, flags shared.Flags) error {
 func handleProfilesNounVerb(namespace, verb string, args []string, flags shared.Flags) error {
 	switch verb {
 	case "add":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: namespace %s profiles add <profile>", namespace)
+		if len(args) == 0 {
+			return fmt.Errorf("usage: namespace %s profiles add <profile>...", namespace)
 		}
-		name := args[0]
-		if grammar.IsReservedProfile(name) {
-			return fmt.Errorf("%q is a reserved name and cannot be used for a profile", name)
+		for _, name := range args {
+			if grammar.IsReservedProfile(name) {
+				return fmt.Errorf("%q is a reserved name and cannot be used for a profile", name)
+			}
 		}
-		return addProfile(namespace, name, flags)
+		return addProfiles(namespace, args, flags)
 	case "rm":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: namespace %s profiles rm <profile>", namespace)
@@ -252,21 +253,31 @@ func editProfiles(namespaceName string, flags shared.Flags) error {
 	)
 }
 
-// addProfile implements `profiles add <profile>`. Its success line carries
-// a "created" detail rather than going through reportProfile bare: a bare
-// "- <name>" is exactly what renderProfileList prints for that same profile
-// once it exists, and a mutation that succeeds in silence — or that reads
-// like a listing row instead of an announcement — is indistinguishable from
-// one that did nothing (concept.md "Listing output").
-func addProfile(namespaceName, name string, flags shared.Flags) error {
+// addProfiles implements `profiles add <profile>...`: every name is
+// created in one scope lookup, --from applied to each identically, one
+// report line per name. Each success line carries a "created" detail rather
+// than going through reportProfile bare: a bare "- <name>" is exactly what
+// renderProfileList prints for that same profile once it exists, and a
+// mutation that succeeds in silence — or that reads like a listing row
+// instead of an announcement — is indistinguishable from one that did
+// nothing (concept.md "Listing output"). profile.Create adopts an existing
+// folder untouched when --from is absent, so `profiles add` is also how a
+// profile folder dropped in by hand (or found undeclared by self-heal) gets
+// declared — concept.md "Self-healing": "profiles add <profile>, which
+// adopts the folder as it stands."
+func addProfiles(namespaceName string, names []string, flags shared.Flags) error {
 	sc, err := scopeFor(namespaceName, flags)
 	if err != nil {
 		return err
 	}
-	if err := profile.Create(sc.dir, name, flags.From); err != nil {
-		return err
+	lines := make([]string, 0, len(names))
+	for _, name := range names {
+		if err := profile.Create(sc.dir, name, flags.From); err != nil {
+			return err
+		}
+		lines = append(lines, ui.Operation(ui.MarkerMaterialized, name, "created"))
 	}
-	fmt.Print(ui.Report([]string{ui.Operation(ui.MarkerMaterialized, name, "created")}, ""))
+	fmt.Print(ui.Report(lines, ""))
 	return nil
 }
 
@@ -585,7 +596,7 @@ func renderProfiledEntries(namespaceName string, flags shared.Flags) error {
 }
 
 // renderProfileEntries lists what one profile overrides. An override for an
-// entry that is not declared profiled is marked "?": it is a file the
+// entry that is not declared profiled is marked "!": it is a file the
 // resolution rule ignores until it is declared.
 func renderProfileEntries(namespaceName, profileName string, flags shared.Flags) error {
 	sc, err := scopeFor(namespaceName, flags)
@@ -603,7 +614,7 @@ func renderProfileEntries(namespaceName, profileName string, flags shared.Flags)
 	for _, name := range overrides {
 		marker := ui.MarkerMaterialized
 		if !sc.profile.HasEntry(name) {
-			marker = ui.MarkerUntracked
+			marker = ui.MarkerProblem
 		}
 		rows = append(rows, ui.Entry{Marker: marker, Name: name})
 	}

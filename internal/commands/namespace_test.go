@@ -10,18 +10,19 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/engine"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
+	"github.com/DeprecatedLuar/dotz/internal/selfheal"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 )
 
 func TestHandleNamespace_AddRejectsReservedName(t *testing.T) {
-	err := HandleNamespace([]string{"add", "list"}, shared.Flags{})
+	err := HandleNamespace([]string{"add", "list"}, shared.Flags{}, selfheal.Findings{})
 	if err == nil {
 		t.Fatal("expected error creating a namespace named \"list\"")
 	}
 }
 
 func TestHandleNamespace_MvRejectsReservedTarget(t *testing.T) {
-	err := HandleNamespace([]string{"mv", "neovim", "sync"}, shared.Flags{})
+	err := HandleNamespace([]string{"mv", "neovim", "sync"}, shared.Flags{}, selfheal.Findings{})
 	if err == nil {
 		t.Fatal("expected error renaming a namespace to a reserved name")
 	}
@@ -57,8 +58,8 @@ func TestHandleNamespace_EditBothSpellingsReachSameHandler(t *testing.T) {
 	name := setupRegisteredNamespace(t)
 	t.Setenv("EDITOR", "")
 
-	err1 := HandleNamespace([]string{"edit", name}, shared.Flags{})
-	err2 := HandleNamespace([]string{name, "edit"}, shared.Flags{})
+	err1 := HandleNamespace([]string{"edit", name}, shared.Flags{}, selfheal.Findings{})
+	err2 := HandleNamespace([]string{name, "edit"}, shared.Flags{}, selfheal.Findings{})
 	if err1 == nil || err2 == nil {
 		t.Fatalf("expected both spellings to fail identically with no $EDITOR set, got %v / %v", err1, err2)
 	}
@@ -74,8 +75,8 @@ func TestHandleNamespace_EnableBothSpellingsReachSameHandler(t *testing.T) {
 	// no pre-flight problems); what matters is that both spellings reach
 	// the same handler and behave identically, not that enabling twice is
 	// itself interesting.
-	err1 := HandleNamespace([]string{"enable", name}, shared.Flags{})
-	err2 := HandleNamespace([]string{name, "enable"}, shared.Flags{})
+	err1 := HandleNamespace([]string{"enable", name}, shared.Flags{}, selfheal.Findings{})
+	err2 := HandleNamespace([]string{name, "enable"}, shared.Flags{}, selfheal.Findings{})
 	if err1 != nil || err2 != nil {
 		t.Fatalf("expected both spellings to enable an empty namespace without error, got %v / %v", err1, err2)
 	}
@@ -86,8 +87,8 @@ func TestHandleNamespace_DisableBothSpellingsReachSameHandler(t *testing.T) {
 
 	// Neither call has anything enabled to disable; both spellings must
 	// still reach the same handler and behave identically (a no-op).
-	err1 := HandleNamespace([]string{"disable", name}, shared.Flags{})
-	err2 := HandleNamespace([]string{name, "disable"}, shared.Flags{})
+	err1 := HandleNamespace([]string{"disable", name}, shared.Flags{}, selfheal.Findings{})
+	err2 := HandleNamespace([]string{name, "disable"}, shared.Flags{}, selfheal.Findings{})
 	if err1 != nil || err2 != nil {
 		t.Fatalf("expected both spellings to no-op disabling an unenabled namespace, got %v / %v", err1, err2)
 	}

@@ -51,7 +51,7 @@ func TestRebuildFromLinks_SkipsUnproven(t *testing.T) {
 
 // TestScaffold_UntrackedBecomesDestless covers the last rung of the ladder:
 // every payload Inspect could not otherwise account for becomes a dest-less
-// entry, so it lists as "?" rather than vanishing from the manifest.
+// entry, so it lists as "!" rather than vanishing from the manifest.
 func TestScaffold_UntrackedBecomesDestless(t *testing.T) {
 	report := Report{Untracked: []string{"a", "b"}}
 	entries := Scaffold(report)

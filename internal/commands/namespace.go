@@ -14,6 +14,7 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/namespace"
 	"github.com/DeprecatedLuar/dotz/internal/paths"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
+	"github.com/DeprecatedLuar/dotz/internal/selfheal"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
@@ -25,19 +26,19 @@ import (
 // namespace first (add, rm, list, edit, enable, disable, profiles). `add`
 // does not flip: its collection-level meaning (create) and member-level
 // meaning (track) are distinguished only by position.
-func HandleNamespace(args []string, flags shared.Flags) error {
+func HandleNamespace(args []string, flags shared.Flags, findings selfheal.Findings) error {
 	if len(args) == 0 {
-		return renderNamespaceList()
+		return renderNamespaceList(findings)
 	}
 
 	if grammar.IsNamespaceVerb(args[0]) {
-		return handleNamespaceNounVerb(grammar.Canonical(args[0]), args[1:], flags)
+		return handleNamespaceNounVerb(grammar.Canonical(args[0]), args[1:], flags, findings)
 	}
 
 	name := args[0]
 	rest := args[1:]
 	if len(rest) == 0 {
-		return renderNamespaceEntries(name, flags)
+		return renderNamespaceEntries(name, flags, findings)
 	}
 
 	if grammar.CanonicalNoun(rest[0]) == "profiles" {
@@ -45,7 +46,7 @@ func HandleNamespace(args []string, flags shared.Flags) error {
 	}
 
 	if grammar.IsNamespaceVerb(rest[0]) {
-		return handleNamespaceVerb(name, grammar.Canonical(rest[0]), rest[1:], flags)
+		return handleNamespaceVerb(name, grammar.Canonical(rest[0]), rest[1:], flags, findings)
 	}
 
 	// Neither a namespace verb nor the profiles noun: the token can only be a
@@ -63,7 +64,7 @@ func HandleNamespace(args []string, flags shared.Flags) error {
 	return handleProfiles(name, rest, flags)
 }
 
-func handleNamespaceNounVerb(verb string, args []string, flags shared.Flags) error {
+func handleNamespaceNounVerb(verb string, args []string, flags shared.Flags, findings selfheal.Findings) error {
 	switch verb {
 	case "add":
 		if len(args) != 1 {
@@ -88,7 +89,7 @@ func handleNamespaceNounVerb(verb string, args []string, flags shared.Flags) err
 		}
 		return renameNamespace(args[0], args[1], flags)
 	case "list":
-		return renderNamespaceList()
+		return renderNamespaceList(findings)
 	case "edit":
 		if len(args) != 1 {
 			return fmt.Errorf("usage: namespace edit <name>")
@@ -135,7 +136,7 @@ func handleNamespaceNounVerb(verb string, args []string, flags shared.Flags) err
 // flag, instead of acting on a namespace that declared itself out of scope.
 var namespaceVerbsIgnoredMayUse = map[string]bool{"ignore": true, "unignore": true, "edit": true, "list": true, "mv": true}
 
-func handleNamespaceVerb(name, verb string, args []string, flags shared.Flags) error {
+func handleNamespaceVerb(name, verb string, args []string, flags shared.Flags, findings selfheal.Findings) error {
 	if !namespaceVerbsIgnoredMayUse[verb] {
 		loc, err := resolveNamespace(name, flags)
 		if err != nil {
@@ -154,7 +155,7 @@ func handleNamespaceVerb(name, verb string, args []string, flags shared.Flags) e
 		}
 		return rmEntry(name, args, flags)
 	case "list":
-		return renderNamespaceEntries(name, flags)
+		return renderNamespaceEntries(name, flags, findings)
 	case "edit":
 		return editNamespace(name, flags)
 	case "enable":
@@ -523,8 +524,11 @@ func renderIgnoredNamespaces() error {
 }
 
 // renderNamespaceList lists every namespace across every registered
-// repository, via the shared listing API in listing.go.
-func renderNamespaceList() error {
+// repository, via the shared listing API in listing.go. When any row
+// rendered "!", it closes with the one tip concept.md "Listing output"
+// specifies — constant text naming the drill-down, never the finding or its
+// count.
+func renderNamespaceList(findings selfheal.Findings) error {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
 		return err
@@ -533,15 +537,40 @@ func renderNamespaceList() error {
 		printEmptyRegistryHint()
 		return nil
 	}
-	rows, err := namespaceListing(reg.Repos, listOptions{})
+	rows, err := namespaceListing(reg.Repos, listOptions{}, findings)
 	if err != nil {
 		return err
 	}
 	renderListing(rows)
+	if hasProblem(rows) {
+		fmt.Fprintln(os.Stderr, ui.Tip(listingTip))
+	}
 	return nil
 }
 
-func renderNamespaceEntries(name string, flags shared.Flags) error {
+// listingTip is the one line a listing closes with when any row rendered
+// "!", per concept.md "Listing output": it names the drill-down and nothing
+// else — never what is wrong, never how many findings there are, never how
+// many namespaces carry one. Literal, constant text, the same convention
+// already used throughout dots' usage strings (e.g. "usage: enable
+// <namespace>...").
+const listingTip = "run `dots <namespace>` for details"
+
+func hasProblem(rows []ui.Entry) bool {
+	for _, r := range rows {
+		if r.Marker == ui.MarkerProblem {
+			return true
+		}
+	}
+	return false
+}
+
+// renderNamespaceEntries implements `dots <ns>`: the namespace's entry
+// listing, then the same namespace's findings (concept.md "Doctor": "`dots
+// <ns>` is a listing of that namespace's entries followed by `doctor`
+// narrowed to it"), with profile findings in their own block below the
+// entries rather than mixed among them.
+func renderNamespaceEntries(name string, flags shared.Flags, findings selfheal.Findings) error {
 	loc, err := resolveNamespace(name, flags)
 	if err != nil {
 		return err
@@ -568,6 +597,7 @@ func renderNamespaceEntries(name string, flags shared.Flags) error {
 	if suggestion != "" {
 		fmt.Fprintln(os.Stderr, ui.Tip(suggestion))
 	}
+	renderFindings(findings.For(loc.Repo.Name, name))
 	return nil
 }
 
