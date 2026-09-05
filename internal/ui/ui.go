@@ -462,3 +462,9 @@ func Prompt(context, question string, options []string) (string, error) {
 	}
 	return strings.TrimSpace(line), nil
 }
+
+// IsYes reports whether a Prompt response, as returned raw by Prompt, is an
+// affirmative "y" or "yes" answer, case-insensitively.
+func IsYes(choice string) bool {
+	return strings.EqualFold(choice, "y") || strings.EqualFold(choice, "yes")
+}

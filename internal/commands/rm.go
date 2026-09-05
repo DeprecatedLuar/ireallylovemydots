@@ -471,7 +471,7 @@ func confirmRemoval(noun string, targets []ui.Entry, flags shared.Flags) (procee
 	if err != nil {
 		return false, err
 	}
-	if !strings.EqualFold(choice, "y") && !strings.EqualFold(choice, "yes") {
+	if !ui.IsYes(choice) {
 		fmt.Fprintln(os.Stderr, "\ncancelled")
 		return false, nil
 	}

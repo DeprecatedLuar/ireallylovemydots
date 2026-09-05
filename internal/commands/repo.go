@@ -145,8 +145,7 @@ func addRepo(url string, flags shared.Flags) error {
 		state = newState
 	}
 
-	reg.Repos = append(reg.Repos, manifest.Repo{Name: name, Owner: owner, URL: resolvedURL})
-	if err := manifest.WriteRegistry(reg); err != nil {
+	if err := registerRepo(reg, manifest.Repo{Name: name, Owner: owner, URL: resolvedURL}); err != nil {
 		os.RemoveAll(dest)
 		return err
 	}
@@ -206,8 +205,7 @@ func adoptRepo(name string) error {
 		}
 	}
 
-	reg.Repos = append(reg.Repos, manifest.Repo{Name: name, Owner: owner, URL: url, Origin: origin})
-	if err := manifest.WriteRegistry(reg); err != nil {
+	if err := registerRepo(reg, manifest.Repo{Name: name, Owner: owner, URL: url, Origin: origin}); err != nil {
 		return err
 	}
 
@@ -301,7 +299,7 @@ func planBootstrap(repoPath string, entries []repo.RootEntry) ([]repo.PlannedNam
 	if err != nil {
 		return nil, false, err
 	}
-	return plan, strings.EqualFold(choice, "y") || strings.EqualFold(choice, "yes"), nil
+	return plan, ui.IsYes(choice), nil
 }
 
 // renderGitignorePreview shows all three outcomes of the root .gitignore
@@ -450,8 +448,7 @@ func initRepo(pathArg string, flags shared.Flags) error {
 	// repo init has no remote, so this entry is never written to the shared
 	// config registry — concept.md "Repository manifest": a local folder
 	// path means nothing on another machine.
-	reg.Repos = append(reg.Repos, manifest.Repo{Name: name, Origin: manifest.OriginLocal})
-	if err := manifest.WriteRegistry(reg); err != nil {
+	if err := registerRepo(reg, manifest.Repo{Name: name, Origin: manifest.OriginLocal}); err != nil {
 		return err
 	}
 
@@ -668,6 +665,15 @@ func reportRelinkFailures(failures []engine.LinkFailure) {
 		fmt.Fprintln(os.Stderr, ui.WarningTone(fmt.Sprintf("! %s%s%s", manifest.ContractHome(f.Dest), ui.DetailSep, f.Detail)))
 	}
 	fmt.Fprintln(os.Stderr, ui.Tip("run `dots enable <namespace>` to retry, add --force to trash the occupant"))
+}
+
+// registerRepo appends entry to reg.Repos and writes the registry back to
+// disk. It never rolls back anything itself — that stays whatever it was at
+// each call site, since only some of them have something to unwind (a clone
+// already made) on failure.
+func registerRepo(reg manifest.Registry, entry manifest.Repo) error {
+	reg.Repos = append(reg.Repos, entry)
+	return manifest.WriteRegistry(reg)
 }
 
 func repoNameTaken(reg manifest.Registry, name string) bool {

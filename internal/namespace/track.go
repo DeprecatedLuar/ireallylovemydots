@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/grammar"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
@@ -24,7 +25,11 @@ import (
 //
 // When the namespace holds no payload by that name yet, this is the
 // ordinary case: the destination is moved into the namespace and a symlink
-// is left in its place.
+// is left in its place. A destination that is itself already a symlink is
+// normally refused, except when it's a same-directory alias — its raw,
+// unresolved target is a bare relative filename such as "CLAUDE.md" (see
+// isSameDirAlias) — in which case the symlink itself is moved into the
+// namespace like any other payload, preserving the alias relationship.
 func Add(namespaceDir, path string) error {
 	dest, err := filepath.Abs(path)
 	if err != nil {
@@ -77,7 +82,7 @@ func Add(namespaceDir, path string) error {
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", dest, err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
+	if info.Mode()&os.ModeSymlink != 0 && !isSameDirAlias(dest) {
 		return fmt.Errorf("%s is already a symlink", dest)
 	}
 
@@ -109,6 +114,25 @@ func adopt(namespaceDir string, m manifest.Manifest, name, dest, payload string)
 
 	m.Entries = append(m.Entries, manifest.Entry{Name: name, Dest: dest})
 	return manifest.Write(namespaceDir, m)
+}
+
+// isSameDirAlias reports whether dest is a symlink whose raw target (as
+// os.Readlink returns it, unresolved) is a bare relative filename — no
+// leading "/", no ".."/"." component, no separator at all. That shape is the
+// only one a move into the namespace's flat per-file layout preserves
+// correctly: the link text itself never changes, so "CLAUDE.md" still means
+// "the sibling payload" once both live in namespaceDir. Every dotz-owned
+// symlink is always absolute (see concept.md), so this never mistakes one
+// for a foreign alias.
+func isSameDirAlias(dest string) bool {
+	target, err := os.Readlink(dest)
+	if err != nil {
+		return false
+	}
+	if filepath.IsAbs(target) || target == "." || target == ".." {
+		return false
+	}
+	return !strings.ContainsRune(target, filepath.Separator)
 }
 
 func entryByName(m manifest.Manifest, name string) (manifest.Entry, bool) {

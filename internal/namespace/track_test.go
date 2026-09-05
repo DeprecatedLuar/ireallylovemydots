@@ -181,6 +181,156 @@ func TestAdd_RefusesProtectedRoot(t *testing.T) {
 	}
 }
 
+func TestAdd_SymlinkAlias(t *testing.T) {
+	for _, order := range []string{"alias-first", "target-first"} {
+		t.Run(order, func(t *testing.T) {
+			repoDir := t.TempDir()
+			nsDir, err := Create(repoDir, "claude")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			home := t.TempDir()
+			claudeDir := filepath.Join(home, ".claude")
+			if err := os.MkdirAll(claudeDir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			claudeMd := filepath.Join(claudeDir, "CLAUDE.md")
+			if err := os.WriteFile(claudeMd, []byte("# instructions"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			agentsMd := filepath.Join(claudeDir, "AGENTS.md")
+			if err := os.Symlink("CLAUDE.md", agentsMd); err != nil {
+				t.Fatal(err)
+			}
+
+			if order == "alias-first" {
+				if err := Add(nsDir, agentsMd); err != nil {
+					t.Fatalf("Add(AGENTS.md): %v", err)
+				}
+				if err := Add(nsDir, claudeMd); err != nil {
+					t.Fatalf("Add(CLAUDE.md): %v", err)
+				}
+			} else {
+				if err := Add(nsDir, claudeMd); err != nil {
+					t.Fatalf("Add(CLAUDE.md): %v", err)
+				}
+				if err := Add(nsDir, agentsMd); err != nil {
+					t.Fatalf("Add(AGENTS.md): %v", err)
+				}
+			}
+
+			// The destination symlink is preserved, still relative.
+			info, err := os.Lstat(agentsMd)
+			if err != nil || info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("expected %s to remain a symlink", agentsMd)
+			}
+			payloadTarget, err := os.Readlink(agentsMd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payloadDir := filepath.Dir(payloadTarget)
+			if payloadDir != nsDir {
+				t.Fatalf("AGENTS.md destination should symlink into namespace, got %s", payloadTarget)
+			}
+
+			// The payload itself is still a relative alias to CLAUDE.md.
+			aliasPayload := filepath.Join(nsDir, "AGENTS.md")
+			rawTarget, err := os.Readlink(aliasPayload)
+			if err != nil {
+				t.Fatalf("expected payload %s to be a symlink: %v", aliasPayload, err)
+			}
+			if rawTarget != "CLAUDE.md" {
+				t.Fatalf("payload alias target = %q, want %q", rawTarget, "CLAUDE.md")
+			}
+
+			// Resolves end-to-end to the tracked content.
+			resolved, err := filepath.EvalSymlinks(agentsMd)
+			if err != nil {
+				t.Fatalf("resolve %s: %v", agentsMd, err)
+			}
+			data, err := os.ReadFile(resolved)
+			if err != nil || string(data) != "# instructions" {
+				t.Fatalf("expected AGENTS.md to resolve to CLAUDE.md's content, got %q, err=%v", data, err)
+			}
+
+			m, err := manifest.Read(nsDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(m.Entries) != 2 {
+				t.Fatalf("expected two manifest entries, got %+v", m.Entries)
+			}
+		})
+	}
+}
+
+func TestAdd_RefusesAbsoluteSymlink(t *testing.T) {
+	repoDir := t.TempDir()
+	nsDir, err := Create(repoDir, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	elsewhere := filepath.Join(home, "elsewhere.md")
+	if err := os.WriteFile(elsewhere, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(home, "AGENTS.md")
+	if err := os.Symlink(elsewhere, dest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Add(nsDir, dest); err == nil {
+		t.Fatal("expected error tracking a destination that is an absolute symlink")
+	}
+}
+
+func TestAdd_RefusesRelativeSymlinkWithSeparator(t *testing.T) {
+	repoDir := t.TempDir()
+	nsDir, err := Create(repoDir, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	dest := filepath.Join(home, "AGENTS.md")
+	if err := os.Symlink("sub/CLAUDE.md", dest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Add(nsDir, dest); err == nil {
+		t.Fatal("expected error tracking a relative symlink with a subdirectory component")
+	}
+}
+
+func TestAdd_SymlinkAliasDangling(t *testing.T) {
+	repoDir := t.TempDir()
+	nsDir, err := Create(repoDir, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	dest := filepath.Join(home, "AGENTS.md")
+	if err := os.Symlink("CLAUDE.md", dest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Add(nsDir, dest); err != nil {
+		t.Fatalf("expected a dangling same-directory alias to be trackable: %v", err)
+	}
+
+	rawTarget, err := os.Readlink(filepath.Join(nsDir, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rawTarget != "CLAUDE.md" {
+		t.Fatalf("payload alias target = %q, want %q", rawTarget, "CLAUDE.md")
+	}
+}
+
 func TestAdd_BasenameCollision(t *testing.T) {
 	repoDir := t.TempDir()
 	nsDir, err := Create(repoDir, "shells")

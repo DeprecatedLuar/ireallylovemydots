@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"strings"
-
 	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
 	"github.com/DeprecatedLuar/dotz/internal/engine"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
@@ -143,5 +141,5 @@ func confirmUninstallEnabled(name string, flags shared.Flags) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return strings.EqualFold(choice, "y") || strings.EqualFold(choice, "yes"), nil
+	return ui.IsYes(choice), nil
 }

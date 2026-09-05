@@ -205,12 +205,8 @@ func (sc profileScope) relink(newProfile string) ([]string, error) {
 	return engine.SwitchProfile(sc.key, sc.dir, sc.entries, sc.state, newProfile)
 }
 
-func reportProfile(marker, name string, relinked []string) {
-	lines := []string{ui.Operation(marker, name, "")}
-	for _, dest := range relinked {
-		lines = append(lines, ui.Sub(ui.MarkerEnabled, dest, ""))
-	}
-	fmt.Print(ui.Report(lines, ""))
+func reportProfile(marker, name string) {
+	fmt.Print(ui.Report([]string{ui.Operation(marker, name, "")}, ""))
 }
 
 // editProfiles implements `namespace <ns> profiles edit`, the only thing
@@ -293,17 +289,15 @@ func rmProfile(namespaceName, name string, flags shared.Flags) error {
 		return fmt.Errorf("no profile named %q in namespace %q", name, namespaceName)
 	}
 
-	var relinked []string
 	if sc.active == name {
-		relinked, err = sc.relink("")
-		if err != nil {
+		if _, err := sc.relink(""); err != nil {
 			return err
 		}
 	}
 	if err := profile.Remove(sc.dir, name); err != nil {
 		return err
 	}
-	reportProfile(ui.MarkerRemoved, name, relinked)
+	reportProfile(ui.MarkerRemoved, name)
 	return nil
 }
 
@@ -319,14 +313,12 @@ func mvProfile(namespaceName, oldName, newName string, flags shared.Flags) error
 		return err
 	}
 
-	var relinked []string
 	if sc.active == oldName {
-		relinked, err = sc.relink(newName)
-		if err != nil {
+		if _, err := sc.relink(newName); err != nil {
 			return err
 		}
 	}
-	reportProfile(ui.MarkerMaterialized, newName, relinked)
+	reportProfile(ui.MarkerMaterialized, newName)
 	return nil
 }
 
@@ -350,11 +342,10 @@ func enableProfile(namespaceName, name string, flags shared.Flags) error {
 		fmt.Fprintln(os.Stderr, ui.WarningTone(fmt.Sprintf("profile %q overrides nothing; every entry stays on main's version", name)))
 	}
 
-	relinked, err := sc.relink(name)
-	if err != nil {
+	if _, err := sc.relink(name); err != nil {
 		return err
 	}
-	reportProfile(ui.MarkerEnabled, name, relinked)
+	reportProfile(ui.MarkerEnabled, name)
 	return nil
 }
 
@@ -366,11 +357,10 @@ func disableProfile(namespaceName, name string, flags shared.Flags) error {
 	if sc.active != name {
 		return fmt.Errorf("profile %q is not active in namespace %q", name, namespaceName)
 	}
-	relinked, err := sc.relink("")
-	if err != nil {
+	if _, err := sc.relink(""); err != nil {
 		return err
 	}
-	reportProfile(ui.MarkerMaterialized, name, relinked)
+	reportProfile(ui.MarkerMaterialized, name)
 	return nil
 }
 
@@ -386,11 +376,10 @@ func returnToMain(namespaceName string, flags shared.Flags) error {
 	if sc.active == "" {
 		return nil
 	}
-	relinked, err := sc.relink("")
-	if err != nil {
+	if _, err := sc.relink(""); err != nil {
 		return err
 	}
-	reportProfile(ui.MarkerMaterialized, profile.Main, relinked)
+	reportProfile(ui.MarkerMaterialized, profile.Main)
 	return nil
 }
 
@@ -409,7 +398,7 @@ func declareEntry(namespaceName, token string, flags shared.Flags) error {
 	if err := profile.Declare(sc.dir, name); err != nil {
 		return err
 	}
-	reportProfile(ui.MarkerMaterialized, name, nil)
+	reportProfile(ui.MarkerMaterialized, name)
 	return nil
 }
 
@@ -449,17 +438,15 @@ func undeclareEntry(namespaceName, token string, flags shared.Flags) error {
 		}
 	}
 
-	var relinked []string
 	if sc.active != "" {
-		relinked, err = sc.relink(sc.active)
-		if err != nil {
+		if _, err := sc.relink(sc.active); err != nil {
 			return err
 		}
 	}
 	if err := profile.Undeclare(sc.dir, name); err != nil {
 		return err
 	}
-	reportProfile(ui.MarkerRemoved, name, relinked)
+	reportProfile(ui.MarkerRemoved, name)
 	return nil
 }
 
@@ -493,14 +480,12 @@ func addOverride(namespaceName, profileName, token string, flags shared.Flags) e
 		return err
 	}
 
-	var relinked []string
 	if sc.active == profileName {
-		relinked, err = sc.relink(profileName)
-		if err != nil {
+		if _, err := sc.relink(profileName); err != nil {
 			return err
 		}
 	}
-	reportProfile(ui.MarkerMaterialized, name, relinked)
+	reportProfile(ui.MarkerMaterialized, name)
 	return nil
 }
 
@@ -540,14 +525,12 @@ func dropOverride(namespaceName, profileName, token string, flags shared.Flags) 
 		return err
 	}
 
-	var relinked []string
 	if sc.active == profileName {
-		relinked, err = sc.relink(profileName)
-		if err != nil {
+		if _, err := sc.relink(profileName); err != nil {
 			return err
 		}
 	}
-	reportProfile(ui.MarkerRemoved, name, relinked)
+	reportProfile(ui.MarkerRemoved, name)
 	return nil
 }
 
