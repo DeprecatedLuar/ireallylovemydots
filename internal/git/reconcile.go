@@ -108,7 +108,7 @@ func Reconcile(dir string) (remoteConfigured bool, err error) {
 			)
 		}
 		return true, fmt.Errorf(
-			"sync stopped because local and remote changed the same paths; both states are recoverable — local at %s, remote at %s:\n  cd %s\n  git status",
+			"sync stopped because local and remote changed the same paths; both states are recoverable: local at %s, remote at %s:\n  cd %s\n  git status",
 			recoveryRef, remoteRef, dir,
 		)
 	}

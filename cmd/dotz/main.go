@@ -1,6 +1,6 @@
 // Command dotz is the entrypoint and sole router for dots. Flag extraction,
 // token resolution, alias rewriting, ambiguity handling, and dispatch all
-// live here-see CLAUDE.md's orchestrator pattern. internal/commands holds
+// live here - see CLAUDE.md's orchestrator pattern. internal/commands holds
 // only command implementations; every other internal package is a
 // single-responsibility primitive those implementations call into.
 package main
@@ -112,7 +112,7 @@ func main() {
 
 // shortFlags maps every valueless long flag's single-letter short form to
 // the field it sets, per concept.md "Flags". -r/--repo takes a value and is
-// handled separately-it never joins a cluster.
+// handled separately - it never joins a cluster.
 var shortFlags = map[byte]func(*shared.Flags){
 	'A': func(f *shared.Flags) { f.All = true },
 	'f': func(f *shared.Flags) { f.Force = true },
@@ -125,7 +125,7 @@ var shortFlags = map[byte]func(*shared.Flags){
 // extractGlobalFlags pulls the command-wide flags from anywhere in args and
 // returns the remaining positional tokens. Every valueless long flag has a
 // short form, and short forms cluster: -Af is --all --force. An unknown
-// letter in a cluster is an error naming it-never reinterpreted as a
+// letter in a cluster is an error naming it - never reinterpreted as a
 // positional name, per concept.md "Flags".
 func extractGlobalFlags(args []string) ([]string, shared.Flags, error) {
 	var remaining []string

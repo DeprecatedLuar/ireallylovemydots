@@ -248,7 +248,7 @@ func repairFindings(r Repair) []Finding {
 		out = append(out, Finding{Repo: r.Repo, Namespace: r.Namespace, Subject: r.Namespace + "/" + name, Detail: "destination not set", Fix: editFix})
 	}
 	for _, name := range r.Report.Orphans {
-		out = append(out, Finding{Repo: r.Repo, Namespace: r.Namespace, Subject: r.Namespace + "/" + name, Detail: "orphaned entry — its payload is gone from the namespace"})
+		out = append(out, Finding{Repo: r.Repo, Namespace: r.Namespace, Subject: r.Namespace + "/" + name, Detail: "orphaned entry: its payload is gone from the namespace"})
 	}
 	for _, name := range r.Report.Untracked {
 		out = append(out, Finding{Repo: r.Repo, Namespace: r.Namespace, Subject: r.Namespace + "/" + name, Detail: "untracked payload", Fix: editFix})
