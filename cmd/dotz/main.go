@@ -1,6 +1,6 @@
 // Command dotz is the entrypoint and sole router for dots. Flag extraction,
 // token resolution, alias rewriting, ambiguity handling, and dispatch all
-// live here — see CLAUDE.md's orchestrator pattern. internal/commands holds
+// live here-see CLAUDE.md's orchestrator pattern. internal/commands holds
 // only command implementations; every other internal package is a
 // single-responsibility primitive those implementations call into.
 package main
@@ -112,7 +112,7 @@ func main() {
 
 // shortFlags maps every valueless long flag's single-letter short form to
 // the field it sets, per concept.md "Flags". -r/--repo takes a value and is
-// handled separately — it never joins a cluster.
+// handled separately-it never joins a cluster.
 var shortFlags = map[byte]func(*shared.Flags){
 	'A': func(f *shared.Flags) { f.All = true },
 	'f': func(f *shared.Flags) { f.Force = true },
@@ -125,7 +125,7 @@ var shortFlags = map[byte]func(*shared.Flags){
 // extractGlobalFlags pulls the command-wide flags from anywhere in args and
 // returns the remaining positional tokens. Every valueless long flag has a
 // short form, and short forms cluster: -Af is --all --force. An unknown
-// letter in a cluster is an error naming it — never reinterpreted as a
+// letter in a cluster is an error naming it-never reinterpreted as a
 // positional name, per concept.md "Flags".
 func extractGlobalFlags(args []string) ([]string, shared.Flags, error) {
 	var remaining []string
@@ -238,17 +238,17 @@ func resolveRoute(args []string, namespaces, repos []string, ambiguous func(name
 	}
 
 	// Verb-first alias: `dots enable neovim` -> `namespace enable neovim`.
-	// This alias only ever targets the namespace subtree — repo has its
+	// This alias only ever targets the namespace subtree-repo has its
 	// own explicit `repo add`/`repo rm`, never a bare verb form. Per
 	// concept.md "Aliases", "the verb-first alias always resolves to the
-	// collection level, whatever follows it" — the collection level is
+	// collection level, whatever follows it"-the collection level is
 	// where a namespace not yet on this machine is still nameable, which is
 	// what makes `dots install <ns>` and `dots enable <ns> -i` reach the
 	// namespaces they exist to fetch. `add` is the sole verb whose
 	// collection meaning takes exactly one name; routing it here the same
 	// way as every other verb still produces the right usage error for
 	// `dots add <ns> <path>`, via handleNamespaceNounVerb's own arity
-	// check — no special case needed.
+	// check-no special case needed.
 	if grammar.IsVerb(tok0) || slices.Contains(grammar.NamespaceOnlyVerbs, tok0) {
 		canon := grammar.Canonical(tok0)
 		return route{target: targetNamespace, args: append([]string{canon}, args[1:]...)}, nil
@@ -308,8 +308,8 @@ func contains(list []string, name string) bool {
 // namespace.Resolve's: here the token itself is read two ways (as a
 // namespace or as a repository name), not one namespace name held by
 // several repositories. That second kind can still be nested inside the
-// first — the token might match a namespace that itself exists in more
-// than one repository — and per concept.md "Name resolution" a name
+// first-the token might match a namespace that itself exists in more
+// than one repository-and per concept.md "Name resolution" a name
 // matching more than one existing thing always errors, naming every
 // candidate, and never prompts even interactively; so that case is checked
 // first and short-circuits the namespace/repository choice entirely.

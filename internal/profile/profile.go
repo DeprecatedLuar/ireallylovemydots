@@ -34,7 +34,10 @@ func Create(namespaceDir, name, from string) error {
 	}
 
 	m.Profiles = append(m.Profiles, name)
-	return Write(namespaceDir, m)
+	if err := Write(namespaceDir, m); err != nil {
+		return err
+	}
+	return os.MkdirAll(ProfileDir(namespaceDir, name), dirPerm)
 }
 
 // seed copies from's version of every profiled entry into the new profile's
@@ -249,6 +252,27 @@ func Folders(namespaceDir string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// EnsureFolders creates the folder for every profile m declares that does
+// not already have one. A profile that overrides nothing still gets an
+// empty folder — declared and materialized are separate facts (concept.md
+// "The profile manifest"): the folder is what a hand-edit needs to exist
+// against, and git ignores an empty directory regardless, so this changes
+// nothing about what a clone starts with.
+func EnsureFolders(namespaceDir string, m Manifest) error {
+	for _, name := range m.Profiles {
+		dir := ProfileDir(namespaceDir, name)
+		if _, err := os.Lstat(dir); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat %s: %w", dir, err)
+		}
+		if err := os.MkdirAll(dir, dirPerm); err != nil {
+			return fmt.Errorf("create %s: %w", dir, err)
+		}
+	}
+	return nil
 }
 
 // copyTree copies a file or a whole directory tree, preserving permissions.

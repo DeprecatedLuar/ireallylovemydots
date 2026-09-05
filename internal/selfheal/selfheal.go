@@ -632,17 +632,24 @@ func Run() (Findings, error) {
 
 // reconcileProfiles cross-checks one namespace's .profiles/ against its
 // namespace manifest and its active profile, per concept.md "Self-healing"
-// under Profiles. Five of the six cases are facts about two committed files
+// under Profiles. Before any of that it makes sure every declared profile
+// has a folder — the one mutation here that is not itself a finding, since a
+// missing folder for a declared name is not evidence of anything wrong. Of
+// the checks that follow, five are facts about two committed files
 // disagreeing, so they are reported and never written back; only a
 // no-longer-declared active profile is acted on, by falling back to main —
 // and even that touches nothing inside .profiles/, it only changes which
 // version this machine links.
 //
-// The two silent cases (a declared profile with no folder, a declared entry
-// no profile overrides) are normal and produce nothing at all.
+// The one remaining silent case (a declared entry no profile overrides) is
+// normal and produces nothing at all.
 func reconcileProfiles(key state.Key, namespaceDir string, entries []manifest.Entry, activeProfile string) ([]ProfileProblem, *ProfileFallback, error) {
 	pm, err := profile.Read(namespaceDir)
 	if err != nil {
+		return nil, nil, err
+	}
+
+	if err := profile.EnsureFolders(namespaceDir, pm); err != nil {
 		return nil, nil, err
 	}
 
