@@ -11,25 +11,32 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/paths"
 )
 
-// Add tracks path into the namespace at namespaceDir. Per concept.md
-// "In-repo naming", a name already present in the namespace is three
-// different situations, told apart by whether a manifest entry exists and
-// whether it names the same destination:
+// Add tracks path into the namespace at namespaceDir: it moves the payload
+// in and writes the manifest entry, and creates no symlink. Linking is the
+// link engine's job and only ever happens through it, so a tracked
+// destination is claim-checked, pre-flighted and recorded in machine state
+// like every other link dots creates — see trackPaths in
+// internal/commands/namespace.go, which decides whether this namespace's
+// state permits linking at all.
 //
-//   - no entry: the payload is untracked — adopts, writing the entry and
-//     linking the destination without moving anything.
+// Per concept.md "In-repo naming", a name already present in the namespace
+// is three different situations, told apart by whether a manifest entry
+// exists and whether it names the same destination:
+//
+//   - no entry: the payload is untracked — adopts, writing the entry
+//     without moving anything.
 //   - an entry naming the same destination: already tracked — reports and
 //     stops, not an error.
 //   - an entry naming a different destination: a basename collision — a
 //     hard error naming both destinations.
 //
 // When the namespace holds no payload by that name yet, this is the
-// ordinary case: the destination is moved into the namespace and a symlink
-// is left in its place. A destination that is itself already a symlink is
-// normally refused, except when it's a same-directory alias — its raw,
-// unresolved target is a bare relative filename such as "CLAUDE.md" (see
-// isSameDirAlias) — in which case the symlink itself is moved into the
-// namespace like any other payload, preserving the alias relationship.
+// ordinary case: the destination is moved into the namespace. A destination
+// that is itself already a symlink is normally refused, except when it's a
+// same-directory alias — its raw, unresolved target is a bare relative
+// filename such as "CLAUDE.md" (see isSameDirAlias) — in which case the
+// symlink itself is moved into the namespace like any other payload,
+// preserving the alias relationship.
 func Add(namespaceDir, path string) error {
 	dest, err := filepath.Abs(path)
 	if err != nil {
@@ -75,7 +82,7 @@ func Add(namespaceDir, path string) error {
 		return err
 	}
 	if payloadExists {
-		return adopt(namespaceDir, m, name, dest, payload)
+		return adopt(namespaceDir, m, name, dest)
 	}
 
 	info, err := os.Lstat(dest)
@@ -91,26 +98,22 @@ func Add(namespaceDir, path string) error {
 	if err := os.Rename(dest, payload); err != nil {
 		return fmt.Errorf("move %s into namespace: %w", dest, err)
 	}
-	if err := os.Symlink(payload, dest); err != nil {
-		if rollbackErr := os.Rename(payload, dest); rollbackErr != nil {
-			return fmt.Errorf("create symlink %s: %w (rollback also failed: %v)", dest, err, rollbackErr)
-		}
-		return fmt.Errorf("create symlink %s -> %s: %w", dest, payload, err)
-	}
 
 	m.Entries = append(m.Entries, manifest.Entry{Name: name, Dest: dest})
-	return manifest.Write(namespaceDir, m)
+	if err := manifest.Write(namespaceDir, m); err != nil {
+		if rollbackErr := os.Rename(payload, dest); rollbackErr != nil {
+			return fmt.Errorf("track %s: %w (moving it back also failed: %v)", dest, err, rollbackErr)
+		}
+		return err
+	}
+	return nil
 }
 
 // adopt handles the "untracked payload" case: the namespace already holds
-// payload with no manifest entry naming it, so add writes the entry and
-// links dest to the existing payload, moving nothing.
-func adopt(namespaceDir string, m manifest.Manifest, name, dest, payload string) error {
+// payload with no manifest entry naming it, so add writes the entry naming
+// it, moving nothing.
+func adopt(namespaceDir string, m manifest.Manifest, name, dest string) error {
 	warnIfCoveredByExistingEntry(m, dest)
-
-	if err := os.Symlink(payload, dest); err != nil {
-		return fmt.Errorf("create symlink %s -> %s: %w", dest, payload, err)
-	}
 
 	m.Entries = append(m.Entries, manifest.Entry{Name: name, Dest: dest})
 	return manifest.Write(namespaceDir, m)

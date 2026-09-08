@@ -45,12 +45,27 @@ func TestDisable_RemovesLinksKeepsFilesFlipsState(t *testing.T) {
 	}
 }
 
-func TestDisable_UnenabledNamespaceIsNoOp(t *testing.T) {
+func TestDisable_UnenabledNamespaceUnlinksNothingButRecordsTheDeclaration(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
 	s := state.State{Entries: map[state.Key]state.Entry{}}
 	if err := Disable(key, s); err != nil {
-		t.Fatalf("expected disabling a namespace with no state entry to be a no-op, got %v", err)
+		t.Fatalf("disable a namespace with no state entry: %v", err)
+	}
+
+	// The entry has to exist afterwards: "disabled" is what tells `add`
+	// not to link, and it can only do that if the declaration is recorded
+	// rather than inferred from an absent entry.
+	reread, err := state.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := reread.Entries[key]
+	if !ok {
+		t.Fatal("expected disable to record a state entry")
+	}
+	if entry.Enabled || len(entry.LinkedDests) != 0 {
+		t.Fatalf("state entry = %+v, want disabled with no linked destinations", entry)
 	}
 }
 

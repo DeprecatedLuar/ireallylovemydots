@@ -104,7 +104,7 @@ func TestProfilesAddOverride_UndeclaredEntry_ForceDeclaresIt(t *testing.T) {
 	}
 }
 
-func TestProfilesRm_ActiveProfileReturnsToMainAndReportsRelinks(t *testing.T) {
+func TestProfilesRm_ActiveProfileReturnsToMainAndRelinks(t *testing.T) {
 	nsDir, entries := registerNamespaceWithFiles(t, "editors", []string{"gitconfig", "plain"})
 	enableForProfiles(t, "editors")
 	if err := profile.Write(nsDir, profile.Manifest{}); err != nil {
@@ -128,8 +128,7 @@ func TestProfilesRm_ActiveProfileReturnsToMainAndReportsRelinks(t *testing.T) {
 		t.Fatal("dark did not become active")
 	}
 
-	var stdout string
-	stdout, _ = captureStdoutStderr(t, func() {
+	captureStdoutStderr(t, func() {
 		if err := handleProfiles("editors", []string{"rm", "dark"}, shared.Flags{}); err != nil {
 			t.Fatalf("profiles rm: %v", err)
 		}
@@ -138,9 +137,9 @@ func TestProfilesRm_ActiveProfileReturnsToMainAndReportsRelinks(t *testing.T) {
 	if activeProfile(t, "editors") != "" {
 		t.Fatalf("active profile = %q, want main", activeProfile(t, "editors"))
 	}
-	if !strings.Contains(stdout, entries[0].Dest) {
-		t.Fatalf("report does not name the relinked destination:\n%s", stdout)
-	}
+	// The report is the operation line alone (concept.md "Listing output":
+	// the marker is the message) — the relink is real but not echoed back;
+	// dots <ns> shows the result on demand.
 	target, err := os.Readlink(entries[0].Dest)
 	if err != nil {
 		t.Fatal(err)

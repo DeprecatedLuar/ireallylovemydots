@@ -266,7 +266,23 @@ func resolveTargetRepo(reg manifest.Registry, flags shared.Flags) (manifest.Repo
 	return repo.Resolve(reg.Repos, choice)
 }
 
-// trackPaths implements `namespace <ns> add <path>...`.
+// trackPaths implements `namespace <ns> add <path>...`: namespace.Add moves
+// each payload in and writes its manifest entry, then — and only then — the
+// link engine is asked to bring the namespace into the state the machine
+// says it should be in. add never links anything itself, so a tracked
+// destination goes through the same claim index, pre-flight and state write
+// as every other link dots creates.
+//
+// Whether the new entries end up linked is machine state's call, not add's:
+//
+//   - no state entry: never enabled and never disabled here, so "disabled"
+//     is a default rather than a declaration — tracking is the moment the
+//     namespace starts being used, so it is enabled and linked.
+//   - enabled: link the new entries alongside the existing ones.
+//   - disabled: the user declared it off. The payload is tracked and moved
+//     in, nothing is linked, and the report says so — linking here would
+//     leave live symlinks under a namespace state calls disabled, which is
+//     the desync `disable` could then never clean up.
 func trackPaths(name string, args []string, flags shared.Flags) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: namespace %s add <path>...", name)
@@ -279,12 +295,23 @@ func trackPaths(name string, args []string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	s, err := state.Read()
+	if err != nil {
+		return err
+	}
+	entry, declared := s.Entries[state.Key{Repo: loc.Repo.Name, Namespace: name}]
+
 	for _, p := range args {
 		if err := namespace.Add(loc.Dir, p); err != nil {
 			return err
 		}
 	}
-	return nil
+
+	if declared && !entry.Enabled {
+		fmt.Fprintln(os.Stderr, ui.Tip(fmt.Sprintf("%s is disabled: tracked, not linked. Run `dots %s enable`.", name, name)))
+		return nil
+	}
+	return enableNamespace(name, flags)
 }
 
 // renameNamespace implements `mv`, reached from either spelling.

@@ -15,7 +15,15 @@ import (
 // drift detection is self-healing's job, not disable's.
 func Disable(key state.Key, s state.State) error {
 	entry, ok := s.Entries[key]
-	if !ok || !entry.Enabled {
+	if !ok {
+		// Never enabled here, so there is nothing to unlink — but the entry
+		// is still written, because "disabled" has to be a fact and not an
+		// inference: trackPaths reads exactly this to tell a namespace the
+		// user declared off from one that has simply never been used.
+		s.Entries[key] = state.Entry{Enabled: false}
+		return state.Write(s)
+	}
+	if !entry.Enabled {
 		return nil
 	}
 

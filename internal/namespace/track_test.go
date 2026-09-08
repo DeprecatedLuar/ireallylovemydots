@@ -30,12 +30,10 @@ func TestAdd_File(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	info, err := os.Lstat(target)
-	if err != nil {
-		t.Fatalf("expected symlink at original location: %v", err)
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		t.Fatal("expected a symlink left at the original location")
+	// Add tracks; it does not link. The destination is left empty for the
+	// link engine, which is the only thing in dots that creates a symlink.
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("expected nothing left at the original location, got err = %v", err)
 	}
 
 	payload := filepath.Join(nsDir, "init.lua")
@@ -73,9 +71,11 @@ func TestAdd_Directory(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	info, err := os.Lstat(target)
-	if err != nil || info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("expected a symlink left at %s", target)
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("expected %s to be left empty for the link engine, got err = %v", target, err)
+	}
+	if _, err := os.Stat(filepath.Join(nsDir, "nvim")); err != nil {
+		t.Fatalf("expected the directory moved into the namespace: %v", err)
 	}
 }
 
@@ -103,19 +103,13 @@ func TestAdd_AdoptsUntrackedPayload(t *testing.T) {
 		t.Fatalf("Add (adopt): %v", err)
 	}
 
-	info, err := os.Lstat(dest)
-	if err != nil {
-		t.Fatalf("expected a symlink created at %s: %v", dest, err)
+	// Adoption writes the entry and moves nothing; the destination stays
+	// untouched until the link engine acts on the manifest.
+	if _, err := os.Lstat(dest); !os.IsNotExist(err) {
+		t.Fatalf("expected %s untouched by adoption, got err = %v", dest, err)
 	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("expected %s to be a symlink", dest)
-	}
-	target, err := os.Readlink(dest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if target != payload {
-		t.Fatalf("symlink target = %s, want %s", target, payload)
+	if _, err := os.Stat(payload); err != nil {
+		t.Fatalf("expected the adopted payload left in place: %v", err)
 	}
 
 	m, err := manifest.Read(nsDir)
@@ -220,21 +214,10 @@ func TestAdd_SymlinkAlias(t *testing.T) {
 				}
 			}
 
-			// The destination symlink is preserved, still relative.
-			info, err := os.Lstat(agentsMd)
-			if err != nil || info.Mode()&os.ModeSymlink == 0 {
-				t.Fatalf("expected %s to remain a symlink", agentsMd)
-			}
-			payloadTarget, err := os.Readlink(agentsMd)
-			if err != nil {
-				t.Fatal(err)
-			}
-			payloadDir := filepath.Dir(payloadTarget)
-			if payloadDir != nsDir {
-				t.Fatalf("AGENTS.md destination should symlink into namespace, got %s", payloadTarget)
-			}
-
-			// The payload itself is still a relative alias to CLAUDE.md.
+			// The alias moved into the namespace whole, still a relative
+			// symlink to its sibling — the one shape that survives the move.
+			// What the destination ends up holding is the link engine's
+			// business; see TestTrackPaths_* in internal/commands.
 			aliasPayload := filepath.Join(nsDir, "AGENTS.md")
 			rawTarget, err := os.Readlink(aliasPayload)
 			if err != nil {
@@ -243,15 +226,9 @@ func TestAdd_SymlinkAlias(t *testing.T) {
 			if rawTarget != "CLAUDE.md" {
 				t.Fatalf("payload alias target = %q, want %q", rawTarget, "CLAUDE.md")
 			}
-
-			// Resolves end-to-end to the tracked content.
-			resolved, err := filepath.EvalSymlinks(agentsMd)
-			if err != nil {
-				t.Fatalf("resolve %s: %v", agentsMd, err)
-			}
-			data, err := os.ReadFile(resolved)
+			data, err := os.ReadFile(aliasPayload)
 			if err != nil || string(data) != "# instructions" {
-				t.Fatalf("expected AGENTS.md to resolve to CLAUDE.md's content, got %q, err=%v", data, err)
+				t.Fatalf("expected the payload alias to resolve to CLAUDE.md's content, got %q, err=%v", data, err)
 			}
 
 			m, err := manifest.Read(nsDir)

@@ -199,10 +199,14 @@ func (sc profileScope) entryName(token string) (string, error) {
 	return "", fmt.Errorf("%q is not tracked in namespace %q; only a tracked entry can be profiled", token, sc.name)
 }
 
-// relink applies newProfile to the namespace and reports every destination
-// whose link target changed, as sub-lines under an operation line.
-func (sc profileScope) relink(newProfile string) ([]string, error) {
-	return engine.SwitchProfile(sc.key, sc.dir, sc.entries, sc.state, newProfile)
+// relink applies newProfile to the namespace. engine.SwitchProfile also
+// returns which destinations it repointed, but no profile command prints
+// them: the operation line is the whole report (concept.md "Listing
+// output": the marker is the message). Which entries moved follows from
+// which profile is now active, and `dots <ns>` shows it on demand.
+func (sc profileScope) relink(newProfile string) error {
+	_, err := engine.SwitchProfile(sc.key, sc.dir, sc.entries, sc.state, newProfile)
+	return err
 }
 
 func reportProfile(marker, name string) {
@@ -290,7 +294,7 @@ func rmProfile(namespaceName, name string, flags shared.Flags) error {
 	}
 
 	if sc.active == name {
-		if _, err := sc.relink(""); err != nil {
+		if err := sc.relink(""); err != nil {
 			return err
 		}
 	}
@@ -314,7 +318,7 @@ func mvProfile(namespaceName, oldName, newName string, flags shared.Flags) error
 	}
 
 	if sc.active == oldName {
-		if _, err := sc.relink(newName); err != nil {
+		if err := sc.relink(newName); err != nil {
 			return err
 		}
 	}
@@ -342,7 +346,7 @@ func enableProfile(namespaceName, name string, flags shared.Flags) error {
 		fmt.Fprintln(os.Stderr, ui.WarningTone(fmt.Sprintf("profile %q overrides nothing; every entry stays on main's version", name)))
 	}
 
-	if _, err := sc.relink(name); err != nil {
+	if err := sc.relink(name); err != nil {
 		return err
 	}
 	reportProfile(ui.MarkerEnabled, name)
@@ -357,7 +361,7 @@ func disableProfile(namespaceName, name string, flags shared.Flags) error {
 	if sc.active != name {
 		return fmt.Errorf("profile %q is not active in namespace %q", name, namespaceName)
 	}
-	if _, err := sc.relink(""); err != nil {
+	if err := sc.relink(""); err != nil {
 		return err
 	}
 	reportProfile(ui.MarkerMaterialized, name)
@@ -376,7 +380,7 @@ func returnToMain(namespaceName string, flags shared.Flags) error {
 	if sc.active == "" {
 		return nil
 	}
-	if _, err := sc.relink(""); err != nil {
+	if err := sc.relink(""); err != nil {
 		return err
 	}
 	reportProfile(ui.MarkerMaterialized, profile.Main)
@@ -439,7 +443,7 @@ func undeclareEntry(namespaceName, token string, flags shared.Flags) error {
 	}
 
 	if sc.active != "" {
-		if _, err := sc.relink(sc.active); err != nil {
+		if err := sc.relink(sc.active); err != nil {
 			return err
 		}
 	}
@@ -481,7 +485,7 @@ func addOverride(namespaceName, profileName, token string, flags shared.Flags) e
 	}
 
 	if sc.active == profileName {
-		if _, err := sc.relink(profileName); err != nil {
+		if err := sc.relink(profileName); err != nil {
 			return err
 		}
 	}
@@ -526,7 +530,7 @@ func dropOverride(namespaceName, profileName, token string, flags shared.Flags) 
 	}
 
 	if sc.active == profileName {
-		if _, err := sc.relink(profileName); err != nil {
+		if err := sc.relink(profileName); err != nil {
 			return err
 		}
 	}
