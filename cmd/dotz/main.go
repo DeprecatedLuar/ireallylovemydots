@@ -95,7 +95,7 @@ func main() {
 	case targetList:
 		err = commands.HandleList(r.args, findings)
 	case targetSync:
-		err = commands.HandleSync(r.args)
+		err = commands.HandleSync(r.args, flags)
 	case targetHelp:
 		err = commands.HandleHelp(r.args)
 	case targetDoctor:

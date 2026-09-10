@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
+	"github.com/DeprecatedLuar/dotz/internal/git"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
 )
@@ -120,7 +122,7 @@ func TestHandleSync_NamedRepoOnlySyncsThatRepoAndLeavesOthersUntouched(t *testin
 	}
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := HandleSync([]string{"repo-a"}); err != nil {
+		if err := HandleSync([]string{"repo-a"}, shared.Flags{}); err != nil {
 			t.Fatalf("HandleSync: %v", err)
 		}
 	})
@@ -196,7 +198,7 @@ func TestHandleSync_DivergingRepoStopsUncommittedAndExitsNonZeroWhileOthersSucce
 
 	var err error
 	stdout, _ := captureStdoutStderr(t, func() {
-		err = HandleSync(nil)
+		err = HandleSync(nil, shared.Flags{})
 	})
 	if !errors.Is(err, ErrSomeSkipped) {
 		t.Fatalf("expected ErrSomeSkipped for a run with one diverging repository, got %v", err)
@@ -279,7 +281,7 @@ func TestHandleSync_NoRemoteRepoCommitsLocallyAlongsideRepoThatFetches(t *testin
 	}
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := HandleSync(nil); err != nil {
+		if err := HandleSync(nil, shared.Flags{}); err != nil {
 			t.Fatalf("HandleSync: %v", err)
 		}
 	})
@@ -349,7 +351,7 @@ func TestHandleSync_SparseRepoRebasesCleanlyWithNoStagedDeletionsAndRemoteGainsN
 	}
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := HandleSync([]string{"big"}); err != nil {
+		if err := HandleSync([]string{"big"}, shared.Flags{}); err != nil {
 			t.Fatalf("HandleSync: %v", err)
 		}
 	})
@@ -388,4 +390,150 @@ func TestHandleSync_SparseRepoRebasesCleanlyWithNoStagedDeletionsAndRemoteGainsN
 	if deletions != "" {
 		t.Fatalf("expected the remote to gain no deletion commit, got:\n%s", deletions)
 	}
+}
+
+// stageNamespaceRemoval deletes ns's folder and stages that deletion via
+// git.StagePath — the state `rm` leaves a repository in (see
+// rmNamespaceAt, internal/commands/rm.go) once the payload is trashed but
+// before the next sync commits anything.
+func stageNamespaceRemoval(t *testing.T, repoDir, ns string) {
+	t.Helper()
+	if err := os.RemoveAll(filepath.Join(repoDir, ns)); err != nil {
+		t.Fatal(err)
+	}
+	if err := git.StagePath(repoDir, ns); err != nil {
+		t.Fatalf("StagePath: %v", err)
+	}
+}
+
+func TestHandleSync_RewindsRemovedNamespaceStillOnlyInUnpushedCommits(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"keep"})
+	// Widens the sparse cone ahead of writing new namespaces below: unlike
+	// `namespace add` (a plain filesystem move, unaffected by the cone),
+	// writeSyncNamespace + `git add -A` needs the paths inside the cone to
+	// be staged at all. repo.Add can't be used here — it verifies the path
+	// materializes from the index afterward, which only holds once
+	// something is actually tracked there.
+	syncGitRun(t, repoDir, "sparse-checkout", "add", "extra", "secret")
+
+	writeSyncNamespace(t, repoDir, "extra")
+	syncGitRun(t, repoDir, "add", "-A")
+	syncGitRun(t, repoDir, "commit", "-m", "add extra")
+	extraCommit := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
+
+	writeSyncNamespace(t, repoDir, "secret")
+	syncGitRun(t, repoDir, "add", "-A")
+	syncGitRun(t, repoDir, "commit", "-m", "add secret")
+
+	stageNamespaceRemoval(t, repoDir, "secret")
+
+	// An unrelated uncommitted edit alongside the staged removal, so the
+	// rewind still has something real to recommit on top of extraCommit —
+	// exercising the same "sync still commits everything else" path a bare
+	// deletion-only rewind (nothing left to commit) would skip.
+	if err := os.WriteFile(filepath.Join(repoDir, "keep", "file"), []byte("changed keep"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, _ := captureStdoutStderr(t, func() {
+		if err := HandleSync([]string{"repo"}, shared.Flags{Yes: true}); err != nil {
+			t.Fatalf("HandleSync: %v", err)
+		}
+	})
+	if !strings.Contains(stdout, "repo") {
+		t.Fatalf("expected the summary to report repo, got: %s", stdout)
+	}
+
+	log := strings.TrimSpace(syncGitRun(t, repoDir, "log", "--oneline", "HEAD", "--", "secret"))
+	if log != "" {
+		t.Fatalf("expected no commit reachable from HEAD to touch secret, got:\n%s", log)
+	}
+	if _, err := syncGitRunErr(repoDir, "merge-base", "--is-ancestor", extraCommit, "HEAD"); err != nil {
+		t.Fatalf("expected the unrelated 'add extra' commit to still be an ancestor of HEAD: %v", err)
+	}
+	if content, err := os.ReadFile(filepath.Join(repoDir, "keep", "file")); err != nil || string(content) != "changed keep" {
+		t.Fatalf("expected keep/file's edit to have been carried into the recommit, got %q, err=%v", content, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(repoDir, "extra", "file")); err != nil || string(content) != "extra" {
+		t.Fatalf("expected extra/file to be unchanged, got %q, err=%v", content, err)
+	}
+
+	localHead := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
+	remoteHead := strings.TrimSpace(syncGitRun(t, remote, "rev-parse", "main"))
+	if localHead != remoteHead {
+		t.Fatalf("expected repo to have been pushed, local=%s remote=%s", localHead, remoteHead)
+	}
+	remoteLog := strings.TrimSpace(syncGitRun(t, remote, "log", "--oneline", "main", "--", "secret"))
+	if remoteLog != "" {
+		t.Fatalf("expected the pushed history to contain nothing touching secret, got:\n%s", remoteLog)
+	}
+}
+
+func TestHandleSync_RefusesRewindAndReportsWhenRemovedNamespaceAlreadyPushed(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"keep", "secret"})
+
+	stageNamespaceRemoval(t, repoDir, "secret")
+
+	stdout, stderr := captureStdoutStderr(t, func() {
+		if err := HandleSync([]string{"repo"}, shared.Flags{Yes: true}); err != nil {
+			t.Fatalf("HandleSync: %v", err)
+		}
+	})
+	if !strings.Contains(stdout+stderr, "already pushed") {
+		t.Fatalf("expected a report that secret was already pushed, got stdout=%s stderr=%s", stdout, stderr)
+	}
+
+	localHead := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
+	remoteHead := strings.TrimSpace(syncGitRun(t, remote, "rev-parse", "main"))
+	if localHead != remoteHead {
+		t.Fatalf("expected repo to still sync and push its deletion commit, local=%s remote=%s", localHead, remoteHead)
+	}
+	deletions := strings.TrimSpace(syncGitRun(t, remote, "log", "--diff-filter=D", "--name-only", "main"))
+	if !strings.Contains(deletions, "secret") {
+		t.Fatalf("expected an ordinary deletion commit for secret since it could not be rewound, got:\n%s", deletions)
+	}
+}
+
+func TestHandleSync_NonInteractiveWithoutYesLeavesRewindUndone(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"keep"})
+	syncGitRun(t, repoDir, "sparse-checkout", "add", "secret")
+
+	writeSyncNamespace(t, repoDir, "secret")
+	syncGitRun(t, repoDir, "add", "-A")
+	syncGitRun(t, repoDir, "commit", "-m", "add secret")
+	headBefore := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
+	remoteHeadBefore := strings.TrimSpace(syncGitRun(t, remote, "rev-parse", "main"))
+
+	stageNamespaceRemoval(t, repoDir, "secret")
+
+	err := HandleSync([]string{"repo"}, shared.Flags{})
+	if err == nil {
+		t.Fatal("expected an error requiring -y in a non-interactive run")
+	}
+
+	headAfter := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
+	if headAfter != headBefore {
+		t.Fatalf("expected HEAD to be untouched without confirmation, before=%s after=%s", headBefore, headAfter)
+	}
+	status := strings.TrimSpace(syncGitRun(t, repoDir, "status", "--porcelain"))
+	if status == "" {
+		t.Fatal("expected secret's staged removal to remain uncommitted")
+	}
+	remoteHead := strings.TrimSpace(syncGitRun(t, remote, "rev-parse", "main"))
+	if remoteHead != remoteHeadBefore {
+		t.Fatalf("expected nothing to have been pushed, remote=%s remoteHeadBefore=%s", remoteHead, remoteHeadBefore)
+	}
+}
+
+// syncGitRunErr runs a git command without failing the test, for assertions
+// that are themselves the pass/fail condition (e.g. merge-base
+// --is-ancestor, which exits non-zero for "no").
+func syncGitRunErr(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }

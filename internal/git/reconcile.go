@@ -160,12 +160,20 @@ func fetch(dir, branch string) error {
 // the former and would otherwise stage the latter's namespace as a
 // deletion to commit. Sync relies on self-heal's cone reconciliation
 // (internal/repo.ReconcileCone, run ahead of every invocation) to have
-// already settled that before this ever runs. A clean tree is a no-op, not
-// an empty commit.
+// already settled that before this ever runs.
 func commitTrackedChanges(dir string) error {
 	if out, err := gitCmd(dir, "add", "-A"); err != nil {
 		return fmt.Errorf("stage changes in %s: %s", dir, strings.TrimSpace(out))
 	}
+	return commitStaged(dir)
+}
+
+// commitStaged commits whatever is currently staged in dir, deriving the
+// message from commitMessage. A clean index is a no-op, not an empty
+// commit. Shared by commitTrackedChanges and RewindAndRecommit, which both
+// end the same way: something is staged, and it needs one commit on top of
+// wherever HEAD currently points.
+func commitStaged(dir string) error {
 	if _, err := gitCmd(dir, "diff", "--cached", "--quiet"); err == nil {
 		return nil
 	}
@@ -180,20 +188,21 @@ func commitTrackedChanges(dir string) error {
 	return nil
 }
 
-// commitMessage summarizes the staged change by the namespaces it
-// touches, classified added / updated / removed, per concept.md "Sync":
-// "derived from the namespaces the commit touches... no item-level
-// detail, no machine name." A namespace is the first path segment of
-// every tracked path in a repository (concept.md "Namespace"), so
-// per-namespace classification comes from the git status letters seen
-// among its changed paths: a namespace whose paths are all newly added
-// reads as added, all removed reads as removed, and anything else —
-// including a modification or a rename, which carries both an old and a
-// new path — reads as updated.
-func commitMessage(dir string) (string, error) {
+// stagedNamespaceClasses classifies every namespace touched by dir's staged
+// changes as added, updated, or removed, per concept.md "Sync": "derived
+// from the namespaces the commit touches... no item-level detail, no
+// machine name." A namespace is the first path segment of every tracked
+// path in a repository (concept.md "Namespace"), so per-namespace
+// classification comes from the git status letters seen among its changed
+// paths: a namespace whose paths are all newly added reads as added, all
+// removed reads as removed, and anything else — including a modification
+// or a rename, which carries both an old and a new path — reads as
+// updated. Shared by commitMessage, which reports all three, and
+// StagedRemovals, which only needs the removed set.
+func stagedNamespaceClasses(dir string) (added, updated, removed []string, err error) {
 	out, err := gitCmd(dir, "diff", "--cached", "--name-status")
 	if err != nil {
-		return "", fmt.Errorf("inspect staged changes in %s: %s", dir, strings.TrimSpace(out))
+		return nil, nil, nil, fmt.Errorf("inspect staged changes in %s: %s", dir, strings.TrimSpace(out))
 	}
 
 	statuses := map[string]map[byte]bool{}
@@ -221,7 +230,6 @@ func commitMessage(dir string) (string, error) {
 	}
 	sort.Strings(namespaces)
 
-	var added, updated, removed []string
 	for _, ns := range namespaces {
 		s := statuses[ns]
 		switch {
@@ -232,6 +240,17 @@ func commitMessage(dir string) (string, error) {
 		default:
 			updated = append(updated, ns)
 		}
+	}
+	return added, updated, removed, nil
+}
+
+// commitMessage summarizes dir's staged change by the namespaces it
+// touches, per concept.md "Sync": "derived from the namespaces the commit
+// touches... no item-level detail, no machine name."
+func commitMessage(dir string) (string, error) {
+	added, updated, removed, err := stagedNamespaceClasses(dir)
+	if err != nil {
+		return "", err
 	}
 
 	var parts []string
@@ -248,4 +267,14 @@ func commitMessage(dir string) (string, error) {
 		return "sync", nil
 	}
 	return strings.Join(parts, "; "), nil
+}
+
+// StagedRemovals returns the namespaces whose staged changes are entirely
+// deletions — namespaces `rm` has already trashed and staged (see
+// StagePath) but that sync has not yet committed. Sync reads this ahead of
+// committing to decide whether any of them needs RewindAndRecommit instead
+// of an ordinary commit.
+func StagedRemovals(dir string) ([]string, error) {
+	_, _, removed, err := stagedNamespaceClasses(dir)
+	return removed, err
 }
