@@ -150,6 +150,8 @@ func addRepo(url string, flags shared.Flags) error {
 		return err
 	}
 
+	probeAndRecordAccess(dest, name)
+
 	if state == repo.StateNamespaces {
 		fmt.Print(ui.Render([]ui.Entry{{Marker: ui.MarkerMaterialized, Name: name}}))
 	}
@@ -558,6 +560,9 @@ func renameRepo(oldName, newName string, flags shared.Flags) error {
 	if err := renameRepoState(r.Name, newName); err != nil {
 		return err
 	}
+	if err := renameRepoAccess(r.Name, newName); err != nil {
+		return err
+	}
 
 	failures, err := relinkRenamedNamespaces(filepath.Join(dataDir, newName), newName, nil)
 	if err != nil {
@@ -584,6 +589,23 @@ func renameRepoState(oldName, newName string) error {
 		s.Entries[state.Key{Repo: newName, Namespace: k.Namespace}] = e
 	}
 	return state.Write(s)
+}
+
+// renameRepoAccess moves oldName's recorded push access, if any, onto
+// newName — the same machine-local rename renameRepoState already gives
+// state.Entries, so a renamed read-only repository doesn't silently read as
+// pushable again under its new name.
+func renameRepoAccess(oldName, newName string) error {
+	access, err := state.ReadAccess()
+	if err != nil {
+		return err
+	}
+	if !access.IsReadOnly(oldName) {
+		return nil
+	}
+	delete(access.ReadOnly, oldName)
+	access.SetReadOnly(newName, true)
+	return state.WriteAccess(access)
 }
 
 // relinkRenamedNamespaces repoints the links of every enabled namespace
@@ -665,6 +687,33 @@ func reportRelinkFailures(failures []engine.LinkFailure) {
 		fmt.Fprintln(os.Stderr, ui.WarningTone(fmt.Sprintf("! %s%s%s", manifest.ContractHome(f.Dest), ui.DetailSep, f.Detail)))
 	}
 	fmt.Fprintln(os.Stderr, ui.Tip("run `dots enable <namespace>` to retry, add --force to trash the occupant"))
+}
+
+// probeAndRecordAccess checks whether this machine can push to the
+// newly-cloned repository at dest and records the result under name in the
+// machine-local access store, per concept.md "Repository manifest": push
+// capability is per-machine, never shared. A probe failure is not fatal to
+// `repo add` — it only means the repository is left unflagged, to be
+// resolved the next time something tries to push.
+func probeAndRecordAccess(dest, name string) {
+	canPush, err := git.CanPush(dest)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, ui.WarningTone(fmt.Sprintf("! %s%scould not determine push access: %v", name, ui.DetailSep, err)))
+		return
+	}
+	if canPush {
+		return
+	}
+
+	access, err := state.ReadAccess()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, ui.WarningTone(fmt.Sprintf("! %s%scould not record read-only access: %v", name, ui.DetailSep, err)))
+		return
+	}
+	access.SetReadOnly(name, true)
+	if err := state.WriteAccess(access); err != nil {
+		fmt.Fprintln(os.Stderr, ui.WarningTone(fmt.Sprintf("! %s%scould not record read-only access: %v", name, ui.DetailSep, err)))
+	}
 }
 
 // registerRepo appends entry to reg.Repos and writes the registry back to

@@ -2,9 +2,12 @@ package commands
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
+	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/selfheal"
+	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
 )
 
@@ -19,6 +22,43 @@ func HandleDoctor(args []string, findings selfheal.Findings) error {
 		return fmt.Errorf("usage: doctor")
 	}
 	renderFindings(findings.All())
+	if err := renderReadOnlyFindings(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// renderReadOnlyFindings reports every repository this machine has recorded
+// as read-only, per Phase 13: a fact worth surfacing on every invocation,
+// same as every other self-heal finding, even though it isn't self-heal's
+// own drift to report — sync will fetch-only for these until push access is
+// restored.
+func renderReadOnlyFindings() error {
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		return err
+	}
+	access, err := state.ReadAccess()
+	if err != nil {
+		return err
+	}
+
+	var names []string
+	for _, r := range reg.Repos {
+		if access.IsReadOnly(r.Name) {
+			names = append(names, r.Name)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+
+	entries := make([]ui.Entry, len(names))
+	for i, name := range names {
+		entries[i] = ui.Entry{Marker: ui.MarkerProblem, Name: name + ui.DetailSep + "read-only on this machine — sync will fetch only"}
+	}
+	renderListing(entries)
 	return nil
 }
 

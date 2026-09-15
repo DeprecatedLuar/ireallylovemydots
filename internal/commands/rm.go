@@ -268,6 +268,17 @@ func rmRepo(name string, flags shared.Flags) error {
 	if err := manifest.WriteRegistry(reg); err != nil {
 		return err
 	}
+
+	access, err := state.ReadAccess()
+	if err != nil {
+		return err
+	}
+	if access.IsReadOnly(r.Name) {
+		delete(access.ReadOnly, r.Name)
+		if err := state.WriteAccess(access); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

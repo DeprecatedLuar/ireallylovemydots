@@ -212,13 +212,21 @@ func repoListing(repos []manifest.Repo) ([]ui.Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	access, err := state.ReadAccess()
+	if err != nil {
+		return nil, err
+	}
 	rows := make([]ui.Entry, 0, len(repos))
 	for _, r := range repos {
 		marker := ui.MarkerMaterialized
 		if _, err := os.Stat(filepath.Join(dataDir, r.Name)); os.IsNotExist(err) {
 			marker = ui.MarkerProblem
 		}
-		rows = append(rows, ui.Entry{Marker: marker, Name: r.Name})
+		name := r.Name
+		if access.IsReadOnly(r.Name) {
+			name += " (read-only)"
+		}
+		rows = append(rows, ui.Entry{Marker: marker, Name: name})
 	}
 	return rows, nil
 }

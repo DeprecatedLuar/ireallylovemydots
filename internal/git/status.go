@@ -111,6 +111,29 @@ func hasRemote(repoDir string) (bool, error) {
 	return strings.TrimSpace(string(out)) != "", nil
 }
 
+// CanPush reports whether this machine can push to repoDir's upstream.
+// Returns (false, nil) when the remote rejects the push for any reason;
+// returns an error only when git could not be run at all. A repository with
+// no remote reads as (true, nil) — nothing to be denied by.
+func CanPush(repoDir string) (bool, error) {
+	hasRemote, err := hasRemote(repoDir)
+	if err != nil {
+		return false, err
+	}
+	if !hasRemote {
+		return true, nil
+	}
+
+	cmd := exec.Command("git", "-C", repoDir, "push", "--dry-run", "--porcelain")
+	if err := cmd.Run(); err != nil {
+		if _, ok := err.(*exec.ExitError); ok {
+			return false, nil
+		}
+		return false, fmt.Errorf("git push --dry-run %s: %w", repoDir, err)
+	}
+	return true, nil
+}
+
 // RemoteURL returns repoDir's "origin" remote URL, or "" if it has none —
 // `repo adopt`'s way of recovering what a clone was cloned from when its
 // registry entry is gone but the clone itself is not.
