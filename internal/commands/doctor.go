@@ -2,10 +2,15 @@ package commands
 
 import (
 	"fmt"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
+	"github.com/DeprecatedLuar/dotz/internal/namespace"
+	"github.com/DeprecatedLuar/dotz/internal/paths"
+	"github.com/DeprecatedLuar/dotz/internal/repo"
 	"github.com/DeprecatedLuar/dotz/internal/selfheal"
 	"github.com/DeprecatedLuar/dotz/internal/state"
 	"github.com/DeprecatedLuar/dotz/internal/ui"
@@ -23,6 +28,9 @@ func HandleDoctor(args []string, findings selfheal.Findings) error {
 	}
 	renderFindings(findings.All())
 	if err := renderReadOnlyFindings(); err != nil {
+		return err
+	}
+	if err := renderWhitelistFindings(); err != nil {
 		return err
 	}
 	return nil
@@ -58,6 +66,57 @@ func renderReadOnlyFindings() error {
 	for i, name := range names {
 		entries[i] = ui.Entry{Marker: ui.MarkerProblem, Name: name + ui.DetailSep + "read-only on this machine — sync will fetch only"}
 	}
+	renderListing(entries)
+	return nil
+}
+
+// renderWhitelistFindings reports two kinds of drift between a repository's
+// Phase 15 namespaces whitelist and reality, same as renderReadOnlyFindings:
+// a namespace materialized on this machine that the whitelist no longer
+// names — not an error, since manifest.Repo.Allows keeps an installed
+// namespace visible until it is uninstalled — and a whitelist entry naming a
+// namespace the repository's catalogue does not contain at all.
+func renderWhitelistFindings() error {
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		return err
+	}
+	dataDir, err := paths.Data()
+	if err != nil {
+		return err
+	}
+
+	var entries []ui.Entry
+	for _, r := range reg.Repos {
+		if len(r.Namespaces) == 0 {
+			continue
+		}
+		repoDir := filepath.Join(dataDir, r.Name)
+
+		installed, err := namespace.LocalNames(repoDir)
+		if err != nil {
+			return err
+		}
+		for _, n := range installed {
+			if !r.Allows(n, false) {
+				entries = append(entries, ui.Entry{Marker: ui.MarkerProblem, Name: n + ui.DetailSep + fmt.Sprintf("installed but not in repository %q's namespaces whitelist; stays listed until uninstalled", r.Name)})
+			}
+		}
+
+		catalogue, err := repo.Namespaces(repoDir)
+		if err != nil {
+			return err
+		}
+		for _, n := range r.Namespaces {
+			if !slices.Contains(catalogue, n) {
+				entries = append(entries, ui.Entry{Marker: ui.MarkerProblem, Name: n + ui.DetailSep + fmt.Sprintf("named in repository %q's namespaces whitelist but not found in it", r.Name)})
+			}
+		}
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 	renderListing(entries)
 	return nil
 }

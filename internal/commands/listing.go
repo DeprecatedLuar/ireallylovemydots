@@ -114,6 +114,9 @@ func namespaceListing(repos []manifest.Repo, opts listOptions, findings selfheal
 			if localSet[n] {
 				continue
 			}
+			if !r.Allows(n, false) {
+				continue
+			}
 			ignored, err := catalogueNamespaceIgnored(repoDir, n)
 			if err != nil {
 				return nil, err

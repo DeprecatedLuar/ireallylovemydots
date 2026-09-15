@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 
@@ -39,6 +40,24 @@ type Repo struct {
 	Owner  string `toml:"owner"`
 	URL    string `toml:"url"`
 	Origin Origin `toml:"-"`
+
+	// Namespaces, when non-empty, is the whitelist of namespace names this
+	// repository exposes. Empty means expose everything.
+	Namespaces []string `toml:"namespaces,omitempty"`
+}
+
+// Allows reports whether name is exposed by r. An installed namespace is
+// always exposed, whatever the whitelist says.
+func (r Repo) Allows(name string, installed bool) bool {
+	if len(r.Namespaces) == 0 || installed {
+		return true
+	}
+	for _, n := range r.Namespaces {
+		if strings.EqualFold(n, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // Registry is the full set of registered repositories, config-registered

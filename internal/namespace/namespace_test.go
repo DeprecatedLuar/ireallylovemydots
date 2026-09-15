@@ -2,11 +2,47 @@ package namespace
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 )
+
+// initCatalogueOnlyNamespace commits a namespace folder to a fresh git
+// repository at repoDir, then removes it from the working tree — so it is
+// visible only through repo.Namespaces' git catalogue, never through
+// LocalNames, the same "=" state a namespace that has never been checked
+// out on this machine is in.
+func initCatalogueOnlyNamespace(t *testing.T, repoDir, name string) {
+	t.Helper()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+
+	nsDir := filepath.Join(repoDir, name)
+	if err := os.MkdirAll(nsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nsDir, ".dots"), []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", ".")
+	run("commit", "-m", "test")
+
+	if err := os.RemoveAll(nsDir); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestCreate(t *testing.T) {
 	repoDir := t.TempDir()
@@ -101,6 +137,55 @@ func TestResolve_RepoFlagDisambiguates(t *testing.T) {
 	}
 	if loc.Repo.Name != "two" {
 		t.Fatalf("Resolve repo = %q, want two", loc.Repo.Name)
+	}
+}
+
+func TestResolve_FilteredOutNamespaceNotFound_NoRepoSpec(t *testing.T) {
+	dataDir := t.TempDir()
+	repoDir := filepath.Join(dataDir, "dotfiles")
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	initCatalogueOnlyNamespace(t, repoDir, "nvim")
+	repos := []manifest.Repo{{Name: "dotfiles", Namespaces: []string{"hyprland"}}}
+
+	if _, err := Resolve(dataDir, repos, "nvim", ""); err == nil {
+		t.Fatal("expected a whitelist-filtered namespace to not be returned by Resolve")
+	}
+}
+
+func TestResolve_FilteredOutNamespaceErrors_WithRepoSpec(t *testing.T) {
+	dataDir := t.TempDir()
+	repoDir := filepath.Join(dataDir, "dotfiles")
+	if err := os.MkdirAll(repoDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	initCatalogueOnlyNamespace(t, repoDir, "nvim")
+	repos := []manifest.Repo{{Name: "dotfiles", Namespaces: []string{"hyprland"}}}
+
+	_, err := Resolve(dataDir, repos, "nvim", "dotfiles")
+	if err == nil {
+		t.Fatal("expected a whitelist-filtered namespace to error with --repo")
+	}
+	if !strings.Contains(err.Error(), "nvim") || !strings.Contains(err.Error(), "whitelist") {
+		t.Fatalf("expected error naming the whitelist, got: %v", err)
+	}
+}
+
+func TestResolve_FilteredOutButInstalledStillResolves(t *testing.T) {
+	dataDir := t.TempDir()
+	repoDir := filepath.Join(dataDir, "dotfiles")
+	if _, err := Create(repoDir, "nvim"); err != nil {
+		t.Fatal(err)
+	}
+	repos := []manifest.Repo{{Name: "dotfiles", Namespaces: []string{"hyprland"}}}
+
+	loc, err := Resolve(dataDir, repos, "nvim", "")
+	if err != nil {
+		t.Fatalf("expected an installed namespace to resolve despite the whitelist: %v", err)
+	}
+	if !loc.Installed {
+		t.Fatal("expected the resolved namespace to be marked Installed")
 	}
 }
 

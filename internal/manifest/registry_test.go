@@ -162,6 +162,64 @@ func TestRegistry_RmFollowsOriginTag(t *testing.T) {
 	}
 }
 
+func TestRepoAllows_EmptyWhitelistAllowsAll(t *testing.T) {
+	r := Repo{Name: "dotfiles"}
+	if !r.Allows("anything", false) {
+		t.Fatal("expected empty whitelist to allow any name")
+	}
+}
+
+func TestRepoAllows_NonMatchingNameDenied(t *testing.T) {
+	r := Repo{Name: "dotfiles", Namespaces: []string{"hyprland"}}
+	if r.Allows("nvim", false) {
+		t.Fatal("expected a name outside the whitelist to be denied")
+	}
+}
+
+func TestRepoAllows_InstalledNonMatchingNameAllowed(t *testing.T) {
+	r := Repo{Name: "dotfiles", Namespaces: []string{"hyprland"}}
+	if !r.Allows("nvim", true) {
+		t.Fatal("expected an installed namespace to be allowed regardless of the whitelist")
+	}
+}
+
+func TestRepoAllows_CaseInsensitive(t *testing.T) {
+	r := Repo{Name: "dotfiles", Namespaces: []string{"Hyprland"}}
+	if !r.Allows("hyprland", false) {
+		t.Fatal("expected whitelist matching to be case-insensitive")
+	}
+}
+
+func TestRegistryRoundTrip_NamespacesWhitelist(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	r := Registry{Repos: []Repo{
+		{Name: "shared", URL: "https://example.com/a/shared", Namespaces: []string{"hyprland", "nvim"}},
+		{Name: "local", Origin: OriginLocal, Namespaces: []string{"tmux"}},
+	}}
+	if err := WriteRegistry(r); err != nil {
+		t.Fatalf("WriteRegistry: %v", err)
+	}
+
+	got, err := ReadRegistry()
+	if err != nil {
+		t.Fatalf("ReadRegistry: %v", err)
+	}
+	for _, repo := range got.Repos {
+		switch repo.Name {
+		case "shared":
+			if len(repo.Namespaces) != 2 || repo.Namespaces[0] != "hyprland" || repo.Namespaces[1] != "nvim" {
+				t.Fatalf("shared: got Namespaces %+v, want [hyprland nvim]", repo.Namespaces)
+			}
+		case "local":
+			if len(repo.Namespaces) != 1 || repo.Namespaces[0] != "tmux" {
+				t.Fatalf("local: got Namespaces %+v, want [tmux]", repo.Namespaces)
+			}
+		}
+	}
+}
+
 func TestReadRegistry_MissingFileIsEmpty(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 

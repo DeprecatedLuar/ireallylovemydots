@@ -88,6 +88,8 @@ func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Loca
 		}
 		dir := filepath.Join(dataDir, r.Name, name)
 		if _, err := os.Stat(dir); err == nil {
+			// Installed namespaces are always exposed, whatever the
+			// whitelist says.
 			return Located{Repo: r, Dir: dir, Installed: true}, nil
 		}
 		catalogue, err := repo.Namespaces(filepath.Join(dataDir, r.Name))
@@ -95,6 +97,9 @@ func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Loca
 			return Located{}, err
 		}
 		if slices.Contains(catalogue, name) {
+			if !r.Allows(name, false) {
+				return Located{}, whitelistError(name, r)
+			}
 			return Located{Repo: r, Dir: dir}, nil
 		}
 		return Located{}, fmt.Errorf("namespace %q not found in repository %q", name, r.Name)
@@ -128,7 +133,7 @@ func findCandidates(dataDir string, repos []manifest.Repo, name string) ([]Locat
 			return nil, err
 		}
 		for _, n := range names {
-			if n == name {
+			if n == name && r.Allows(name, true) {
 				candidates = append(candidates, Located{Repo: r, Dir: filepath.Join(dataDir, r.Name, name), Installed: true})
 			}
 		}
@@ -144,7 +149,7 @@ func findCandidates(dataDir string, repos []manifest.Repo, name string) ([]Locat
 				return nil, err
 			}
 			for _, n := range names {
-				if n == name {
+				if n == name && r.Allows(name, false) {
 					candidates = append(candidates, Located{Repo: r, Dir: filepath.Join(dataDir, r.Name, name)})
 				}
 			}
@@ -167,6 +172,19 @@ func Candidates(dataDir string, repos []manifest.Repo, name string) ([]manifest.
 		out[i] = c.Repo
 	}
 	return out, nil
+}
+
+// whitelistError reports that name exists in r but is filtered out by its
+// namespaces whitelist — naming the filter rather than claiming the
+// namespace does not exist, with a tip pointing at the registry file so the
+// whitelist is easy to find and edit.
+func whitelistError(name string, r manifest.Repo) error {
+	msg := fmt.Sprintf("namespace %q exists in repository %q but is not in its namespaces whitelist", name, r.Name)
+	path, err := manifest.RegistryPath()
+	if err != nil {
+		return fmt.Errorf("%s", msg)
+	}
+	return fmt.Errorf("%s; edit the whitelist in %s", msg, path)
 }
 
 // ambiguityError names every candidate repository and the --repo flag to
