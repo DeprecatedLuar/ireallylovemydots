@@ -58,8 +58,9 @@ var RepoOnlyVerbs = []string{"init", "adopt"}
 // machine" (concept.md "Install and uninstall"), which has no meaning for a
 // repository or profile. ignore and unignore declare a namespace explicitly
 // out of dots' scope (concept.md "Namespace"), likewise meaningless above
-// the namespace level.
-var NamespaceOnlyVerbs = []string{"install", "uninstall", "ignore", "unignore"}
+// the namespace level. restore replaces a namespace's symlinks with real
+// copies, which only ever applies to a namespace's own entries.
+var NamespaceOnlyVerbs = []string{"install", "uninstall", "ignore", "unignore", "restore"}
 
 // IsVerb reports whether tok is one of the verbs valid at any level, in
 // either its canonical or aliased spelling.

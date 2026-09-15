@@ -112,6 +112,11 @@ func handleNamespaceNounVerb(verb string, args []string, flags shared.Flags, fin
 			return fmt.Errorf("usage: namespace uninstall <name>...")
 		}
 		return uninstallNamespaces(args, flags)
+	case "restore":
+		if len(args) == 0 {
+			return fmt.Errorf("usage: namespace restore <name>...")
+		}
+		return HandleRestore(args, flags)
 	case "ignore":
 		if len(args) == 0 {
 			return renderIgnoredNamespaces()
@@ -166,6 +171,8 @@ func handleNamespaceVerb(name, verb string, args []string, flags shared.Flags, f
 		return installNamespaces([]string{name}, flags)
 	case "uninstall":
 		return uninstallNamespaces([]string{name}, flags)
+	case "restore":
+		return HandleRestore([]string{name}, flags)
 	case "ignore":
 		return ignoreNamespace(name, flags)
 	case "unignore":

@@ -30,6 +30,7 @@ func HandleHelp(args []string) error {
 			gohelp.Item("disable <namespace>", "Remove symlinks, keep files"),
 			gohelp.Item("install <namespace>...", "Put its files on disk, link nothing"),
 			gohelp.Item("uninstall <namespace>...", "Take its files off disk, keep it tracked"),
+			gohelp.Item("restore <namespace>...", "Replace its symlinks with real copies"),
 			gohelp.Item("add <namespace> <path>...", "Track files or directories"),
 			gohelp.Item("rm <namespace> <path>...", "Untrack files or directories"),
 			gohelp.Item("rn <namespace> <newname>, rename <namespace> <newname>", "Rename a namespace"),
@@ -65,6 +66,7 @@ func HandleHelp(args []string) error {
 			gohelp.Item("namespace <ns> disable", "Remove symlinks, keep files"),
 			gohelp.Item("namespace <ns> install", "Put its files on disk, link nothing"),
 			gohelp.Item("namespace <ns> uninstall", "Take its files off disk, keep it tracked"),
+			gohelp.Item("namespace <ns> restore", "Replace its symlinks with real copies"),
 		).
 		Section("Out of scope",
 			gohelp.Item("namespace ignore", "List every ignored namespace"),

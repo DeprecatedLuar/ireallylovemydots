@@ -85,6 +85,21 @@ func TestInstallUninstallAreReserved(t *testing.T) {
 	}
 }
 
+func TestRestoreIsNamespaceOnlyAndReserved(t *testing.T) {
+	if IsVerb("restore") {
+		t.Error(`IsVerb("restore") = true, want false: namespace-only`)
+	}
+	if !IsNamespaceVerb("restore") {
+		t.Error(`IsNamespaceVerb("restore") = false, want true`)
+	}
+	if !IsReserved("restore") {
+		t.Error(`IsReserved("restore") = false, want true`)
+	}
+	if !slices.Contains(Reserved(), "restore") {
+		t.Error(`Reserved() missing "restore"`)
+	}
+}
+
 func TestCpAndCopyAreReserved(t *testing.T) {
 	for _, tok := range []string{"cp", "copy"} {
 		if !IsReserved(tok) {
