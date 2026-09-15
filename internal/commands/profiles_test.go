@@ -292,7 +292,7 @@ func TestProfilesAdd_MainIsReserved(t *testing.T) {
 	}
 }
 
-func TestProfilesMv_ActiveProfile_RepointsDestinations(t *testing.T) {
+func TestProfilesRn_ActiveProfile_RepointsDestinations(t *testing.T) {
 	nsDir, entries := registerNamespaceWithFiles(t, "editors", []string{"gitconfig"})
 	enableForProfiles(t, "editors")
 	if err := profile.Write(nsDir, profile.Manifest{}); err != nil {
@@ -304,7 +304,7 @@ func TestProfilesMv_ActiveProfile_RepointsDestinations(t *testing.T) {
 			{"add", "dark"},
 			{"dark", "add", "gitconfig"},
 			{"dark", "enable"},
-			{"mv", "dark", "night"},
+			{"rn", "dark", "night"},
 		} {
 			if err := handleProfiles("editors", args, shared.Flags{}); err != nil {
 				t.Fatalf("profiles %v: %v", args, err)

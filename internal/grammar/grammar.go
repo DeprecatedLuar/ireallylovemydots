@@ -10,7 +10,7 @@ import (
 
 // Verbs apply at every level of the grammar: repository, namespace, and
 // profile. A name in verb position descends a level instead.
-var Verbs = []string{"add", "rm", "mv", "list", "edit", "enable", "disable"}
+var Verbs = []string{"add", "rm", "rn", "list", "edit", "enable", "disable"}
 
 // VerbAliases maps a short or alternate spelling to its canonical verb. See
 // concept.md "Verb aliases": link names the mechanism instead of the intent
@@ -18,7 +18,7 @@ var Verbs = []string{"add", "rm", "mv", "list", "edit", "enable", "disable"}
 var VerbAliases = map[string]string{
 	"a":      "add",
 	"remove": "rm",
-	"move":   "mv",
+	"rename": "rn",
 	"ls":     "list",
 	"e":      "edit",
 	"link":   "enable",
@@ -39,8 +39,11 @@ var NounAliases = map[string]string{
 // TopOnly are reserved words that are neither verbs nor nouns but still
 // occupy the top level: status aliases to list, sync has no target, doctor
 // takes no name at all, cp (aliased copy) copies a namespace between
-// repositories and takes two fully-qualified specs rather than a name.
-var TopOnly = []string{"status", "sync", "doctor", "cp", "copy"}
+// repositories and takes two fully-qualified specs rather than a name. mv
+// (aliased move) is cp's counterpart: it moves a namespace between
+// repositories, also as two fully-qualified specs, rather than renaming a
+// single namespace by name in argument position (that's rn, a shared Verb).
+var TopOnly = []string{"status", "sync", "doctor", "cp", "copy", "mv", "move"}
 
 // RepoOnlyVerbs are verbs valid only at the repository level: init takes a
 // local folder rather than a name, and has no meaning for a namespace or

@@ -9,7 +9,7 @@ func TestCanonical(t *testing.T) {
 	cases := map[string]string{
 		"a":      "add",
 		"remove": "rm",
-		"move":   "mv",
+		"rename": "rn",
 		"ls":     "list",
 		"e":      "edit",
 		"add":    "add",
@@ -87,6 +87,36 @@ func TestInstallUninstallAreReserved(t *testing.T) {
 
 func TestCpAndCopyAreReserved(t *testing.T) {
 	for _, tok := range []string{"cp", "copy"} {
+		if !IsReserved(tok) {
+			t.Errorf(`IsReserved(%q) = false, want true`, tok)
+		}
+		if !slices.Contains(Reserved(), tok) {
+			t.Errorf("Reserved() missing %q", tok)
+		}
+	}
+}
+
+// TestRenameResolvesToRn covers implementation-plan.md Phase 17: the
+// long-form rename alias canonicalizes to the shared rn verb.
+func TestRenameResolvesToRn(t *testing.T) {
+	if got := Canonical("rename"); got != "rn" {
+		t.Errorf(`Canonical("rename") = %q, want "rn"`, got)
+	}
+}
+
+// TestMoveResolvesToMv covers implementation-plan.md Phase 17: move is mv's
+// top-level alias, the same relationship copy has to cp — both spellings are
+// reserved top-only words with no per-level verb meaning.
+func TestMoveResolvesToMv(t *testing.T) {
+	if !slices.Contains(TopOnly, "mv") || !slices.Contains(TopOnly, "move") {
+		t.Fatal(`expected "mv" and "move" to both be top-level words`)
+	}
+}
+
+// TestMvMoveRnRenameAreReserved covers implementation-plan.md Phase 17's
+// "mv, move, rn, and rename are all reserved".
+func TestMvMoveRnRenameAreReserved(t *testing.T) {
+	for _, tok := range []string{"mv", "move", "rn", "rename"} {
 		if !IsReserved(tok) {
 			t.Errorf(`IsReserved(%q) = false, want true`, tok)
 		}

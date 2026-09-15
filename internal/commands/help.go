@@ -23,6 +23,7 @@ func HandleHelp(args []string) error {
 		Section("Top level",
 			gohelp.Item("sync", "Reconcile every registered repository"),
 			gohelp.Item("cp <repo/ns> <repo/ns>, copy <repo/ns> <repo/ns>", "Copy a namespace into another repository"),
+			gohelp.Item("mv <repo/ns> <repo/ns>, move <repo/ns> <repo/ns>", "Move a namespace into another repository"),
 			gohelp.Item("list, ls, status", "Every namespace, with state"),
 			gohelp.Item("doctor", "Every finding self-heal has on record"),
 			gohelp.Item("enable <namespace>...", "Materialize and link"),
@@ -31,7 +32,7 @@ func HandleHelp(args []string) error {
 			gohelp.Item("uninstall <namespace>...", "Take its files off disk, keep it tracked"),
 			gohelp.Item("add <namespace> <path>...", "Track files or directories"),
 			gohelp.Item("rm <namespace> <path>...", "Untrack files or directories"),
-			gohelp.Item("mv <namespace> <newname>", "Rename a namespace"),
+			gohelp.Item("rn <namespace> <newname>, rename <namespace> <newname>", "Rename a namespace"),
 			gohelp.Item("edit <namespace>", "Edit its manifest in $EDITOR"),
 			gohelp.Item("<namespace> <verb> [args]", "same, verb last"),
 		).
@@ -50,7 +51,7 @@ func HandleHelp(args []string) error {
 		Section("Manage namespaces",
 			gohelp.Item("namespace add <namespace>", "Create an empty namespace"),
 			gohelp.Item("namespace rm <namespace>", "Remove a namespace"),
-			gohelp.Item("namespace mv <namespace> <newname>", "Rename a namespace"),
+			gohelp.Item("namespace rn <namespace> <newname>", "Rename a namespace"),
 			gohelp.Item("namespace list", "List every namespace across every repository"),
 		).
 		Section("Namespace contents",
@@ -80,7 +81,7 @@ func HandleHelp(args []string) error {
 			gohelp.Item("namespace <ns> profiles add <profile>", "Create a profile, empty"),
 			gohelp.Item("namespace <ns> profiles add <profile> --from <source>", "Create it seeded from main or another profile"),
 			gohelp.Item("namespace <ns> profiles rm <profile>", "Remove a profile"),
-			gohelp.Item("namespace <ns> profiles mv <profile> <new>", "Rename a profile"),
+			gohelp.Item("namespace <ns> profiles rn <profile> <new>", "Rename a profile"),
 			gohelp.Item("namespace <ns> profiles <profile> enable", "Switch to a profile"),
 			gohelp.Item("namespace <ns> profiles <profile> disable", "Back to main"),
 		).

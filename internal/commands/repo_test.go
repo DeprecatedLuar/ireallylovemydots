@@ -1002,22 +1002,22 @@ func TestRenameRepo_CaseOnly(t *testing.T) {
 	}
 }
 
-func TestHandleRepo_MvRejectsReservedTarget(t *testing.T) {
+func TestHandleRepo_RnRejectsReservedTarget(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	setupRegisteredRepoWithNamespaces(t, "dotfiles")
 
-	if err := HandleRepo([]string{"mv", "dotfiles", "list"}, shared.Flags{}); err == nil {
+	if err := HandleRepo([]string{"rn", "dotfiles", "list"}, shared.Flags{}); err == nil {
 		t.Fatal("expected error renaming a repository to a reserved word")
 	}
-	if err := HandleRepo([]string{"dotfiles", "mv", "list"}, shared.Flags{}); err == nil {
+	if err := HandleRepo([]string{"dotfiles", "rn", "list"}, shared.Flags{}); err == nil {
 		t.Fatal("expected error renaming a repository to a reserved word (name-first spelling)")
 	}
 }
 
-func TestHandleRepo_MvBothSpellingsReachSameHandler(t *testing.T) {
+func TestHandleRepo_RnBothSpellingsReachSameHandler(t *testing.T) {
 	run := func(t *testing.T, args []string) {
 		t.Helper()
 		t.Setenv("XDG_STATE_HOME", t.TempDir())
@@ -1041,10 +1041,10 @@ func TestHandleRepo_MvBothSpellingsReachSameHandler(t *testing.T) {
 	}
 
 	t.Run("noun-first", func(t *testing.T) {
-		run(t, []string{"mv", "dotfiles", "renamed"})
+		run(t, []string{"rn", "dotfiles", "renamed"})
 	})
 	t.Run("name-first", func(t *testing.T) {
-		run(t, []string{"dotfiles", "mv", "renamed"})
+		run(t, []string{"dotfiles", "rn", "renamed"})
 	})
 }
 

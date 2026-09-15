@@ -21,8 +21,8 @@ func TestHandleNamespace_AddRejectsReservedName(t *testing.T) {
 	}
 }
 
-func TestHandleNamespace_MvRejectsReservedTarget(t *testing.T) {
-	err := HandleNamespace([]string{"mv", "neovim", "sync"}, shared.Flags{}, selfheal.Findings{})
+func TestHandleNamespace_RnRejectsReservedTarget(t *testing.T) {
+	err := HandleNamespace([]string{"rn", "neovim", "sync"}, shared.Flags{}, selfheal.Findings{})
 	if err == nil {
 		t.Fatal("expected error renaming a namespace to a reserved name")
 	}

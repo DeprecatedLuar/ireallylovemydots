@@ -38,9 +38,9 @@ func HandleRepo(args []string, flags shared.Flags) error {
 	switch grammar.Canonical(rest[0]) {
 	case "list":
 		return renderRepoNamespaces(name)
-	case "mv":
+	case "rn":
 		if len(rest[1:]) != 1 {
-			return fmt.Errorf("usage: repo %s mv <newname>", name)
+			return fmt.Errorf("usage: repo %s rn <newname>", name)
 		}
 		if grammar.IsReserved(rest[1]) {
 			return fmt.Errorf("%q is a reserved word and cannot be used as a repository name", rest[1])
@@ -63,9 +63,9 @@ func handleRepoNounVerb(verb string, args []string, flags shared.Flags) error {
 			return fmt.Errorf("usage: repo rm <repo>")
 		}
 		return rmRepo(args[0], flags)
-	case "mv":
+	case "rn":
 		if len(args) != 2 {
-			return fmt.Errorf("usage: repo mv <repo> <newname>")
+			return fmt.Errorf("usage: repo rn <repo> <newname>")
 		}
 		if grammar.IsReserved(args[1]) {
 			return fmt.Errorf("%q is a reserved word and cannot be used as a repository name", args[1])
@@ -508,7 +508,7 @@ func resolveNewRepoName(reg manifest.Registry, name string) (string, error) {
 	}
 }
 
-// renameRepo implements repo `mv`, reached from either spelling: resolve the
+// renameRepo implements repo `rn`, reached from either spelling: resolve the
 // registered repository, guard the new name against collisions, then rename
 // its on-disk clone, its registry entry, and every state key recorded under
 // its old name.

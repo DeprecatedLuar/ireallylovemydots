@@ -21,7 +21,7 @@ import (
 
 // HandleNamespace implements the namespace subtree: bare listing, the
 // noun-level verbs that operate on a namespace by name in an argument
-// (add, rm, mv, edit, enable, disable — the collection-level operand flip
+// (add, rm, rn, edit, enable, disable — the collection-level operand flip
 // from concept.md "Aliases"), and per-namespace verbs reached by naming the
 // namespace first (add, rm, list, edit, enable, disable, profiles). `add`
 // does not flip: its collection-level meaning (create) and member-level
@@ -80,9 +80,9 @@ func handleNamespaceNounVerb(verb string, args []string, flags shared.Flags, fin
 			return fmt.Errorf("usage: namespace rm <name>...")
 		}
 		return rmNamespaces(args, flags)
-	case "mv":
+	case "rn":
 		if len(args) != 2 {
-			return fmt.Errorf("usage: namespace mv <name> <newname>")
+			return fmt.Errorf("usage: namespace rn <name> <newname>")
 		}
 		if grammar.IsReserved(args[1]) {
 			return fmt.Errorf("%q is a reserved name and cannot be used for a namespace", args[1])
@@ -134,7 +134,7 @@ func handleNamespaceNounVerb(verb string, args []string, flags shared.Flags, fin
 // answers to by name — concept.md "Namespace": an explicit opt-out must
 // never look like "not found", so every other verb is refused, naming the
 // flag, instead of acting on a namespace that declared itself out of scope.
-var namespaceVerbsIgnoredMayUse = map[string]bool{"ignore": true, "unignore": true, "edit": true, "list": true, "mv": true}
+var namespaceVerbsIgnoredMayUse = map[string]bool{"ignore": true, "unignore": true, "edit": true, "list": true, "rn": true}
 
 func handleNamespaceVerb(name, verb string, args []string, flags shared.Flags, findings selfheal.Findings) error {
 	if !namespaceVerbsIgnoredMayUse[verb] {
@@ -170,9 +170,9 @@ func handleNamespaceVerb(name, verb string, args []string, flags shared.Flags, f
 		return ignoreNamespace(name, flags)
 	case "unignore":
 		return unignoreNamespace(name, flags)
-	case "mv":
+	case "rn":
 		if len(args) != 1 {
-			return fmt.Errorf("usage: namespace %s mv <newname>", name)
+			return fmt.Errorf("usage: namespace %s rn <newname>", name)
 		}
 		if grammar.IsReserved(args[0]) {
 			return fmt.Errorf("%q is a reserved name and cannot be used for a namespace", args[0])
@@ -314,7 +314,7 @@ func trackPaths(name string, args []string, flags shared.Flags) error {
 	return enableNamespace(name, flags)
 }
 
-// renameNamespace implements `mv`, reached from either spelling.
+// renameNamespace implements `rn`, reached from either spelling.
 //
 // Every symlink dots creates targets an absolute path built from the
 // namespace's own name (concept.md's data directory layout), so renaming it

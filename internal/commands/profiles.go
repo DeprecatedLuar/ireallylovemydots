@@ -17,7 +17,7 @@ import (
 
 // handleProfiles implements the profiles subtree of one namespace: bare
 // listing, the noun-level verbs that operate on a profile by name in an
-// argument (add, rm, mv), main's three membership verbs, and per-profile
+// argument (add, rm, rn), main's three membership verbs, and per-profile
 // verbs reached by naming the profile first (enable, disable, add, rm,
 // list) — concept.md "Profile level".
 func handleProfiles(namespace string, args []string, flags shared.Flags) error {
@@ -81,9 +81,9 @@ func handleProfilesNounVerb(namespace, verb string, args []string, flags shared.
 			return fmt.Errorf("usage: namespace %s profiles rm <profile>", namespace)
 		}
 		return rmProfile(namespace, args[0], flags)
-	case "mv":
+	case "rn":
 		if len(args) != 2 {
-			return fmt.Errorf("usage: namespace %s profiles mv <profile> <newname>", namespace)
+			return fmt.Errorf("usage: namespace %s profiles rn <profile> <newname>", namespace)
 		}
 		if grammar.IsReservedProfile(args[1]) {
 			return fmt.Errorf("%q is a reserved name and cannot be used for a profile", args[1])
