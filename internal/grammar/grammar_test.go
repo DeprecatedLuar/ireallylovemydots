@@ -85,6 +85,17 @@ func TestInstallUninstallAreReserved(t *testing.T) {
 	}
 }
 
+func TestCpAndCopyAreReserved(t *testing.T) {
+	for _, tok := range []string{"cp", "copy"} {
+		if !IsReserved(tok) {
+			t.Errorf(`IsReserved(%q) = false, want true`, tok)
+		}
+		if !slices.Contains(Reserved(), tok) {
+			t.Errorf("Reserved() missing %q", tok)
+		}
+	}
+}
+
 // main is reserved for profiles only: it names the namespace root there, but
 // means nothing at the namespace or repository level.
 func TestIsReservedProfile_MainOnlyAtTheProfileLevel(t *testing.T) {
