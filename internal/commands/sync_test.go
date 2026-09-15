@@ -13,7 +13,49 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/git"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 	"github.com/DeprecatedLuar/dotz/internal/repo"
+	"github.com/DeprecatedLuar/dotz/internal/state"
 )
+
+// markReadOnly records name as read-only in the machine access store — the
+// state a repository this machine cannot push to is in by the time sync
+// ever looks at it, per concept.md "Read-only repositories".
+func markReadOnly(t *testing.T, name string) {
+	t.Helper()
+	access, err := state.ReadAccess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	access.SetReadOnly(name, true)
+	if err := state.WriteAccess(access); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// installFakeGitPushAuthFailure prepends a directory to PATH holding a git
+// wrapper that fails "git push" with an authentication-shaped stderr
+// message and delegates every other invocation to the real git binary —
+// the only reliable way to exercise a rejected push without a real remote
+// that actually denies credentials.
+func installFakeGitPushAuthFailure(t *testing.T) {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"push\" ]; then\n" +
+		"  echo 'remote: Permission denied (publickey).' >&2\n" +
+		"  echo 'fatal: Authentication failed for repository' >&2\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"exec " + realGit + " \"$@\"\n"
+	path := filepath.Join(dir, "git")
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
 
 // setupSyncEnv points the three XDG directories dots uses at fresh temp
 // dirs and returns the data directory (where repository clones live) and
@@ -536,4 +578,156 @@ func syncGitRunErr(dir string, args ...string) (string, error) {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+func TestHandleSync_ReadOnlyCleanRepoFastForwardsAndReportsSuccess(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"ns"})
+	markReadOnly(t, "repo")
+
+	peer := filepath.Join(scratchRoot, "peer")
+	syncGitRun(t, scratchRoot, "clone", remote, peer)
+	syncGitRun(t, peer, "config", "user.name", "peer")
+	syncGitRun(t, peer, "config", "user.email", "peer@example.invalid")
+	if err := os.WriteFile(filepath.Join(peer, "ns", "file"), []byte("from peer"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	syncGitRun(t, peer, "add", "-A")
+	syncGitRun(t, peer, "commit", "-m", "peer edit")
+	syncGitRun(t, peer, "push", "origin", "main")
+	peerHead := strings.TrimSpace(syncGitRun(t, peer, "rev-parse", "HEAD"))
+
+	var err error
+	stdout, _ := captureStdoutStderr(t, func() {
+		err = HandleSync([]string{"repo"}, shared.Flags{})
+	})
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if !strings.Contains(stdout, "repo") {
+		t.Fatalf("expected the summary to report repo, got: %s", stdout)
+	}
+
+	localHead := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
+	if localHead != peerHead {
+		t.Fatalf("expected repo to fast-forward onto the peer's push and make no commit of its own, local=%s peer=%s", localHead, peerHead)
+	}
+	status := strings.TrimSpace(syncGitRun(t, repoDir, "status", "--porcelain"))
+	if status != "" {
+		t.Fatalf("expected a clean tree after fast-forward, got:\n%s", status)
+	}
+}
+
+func TestHandleSync_DirtyReadOnlyRepoWithYesSkipsAndExitsZero(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"ns"})
+	markReadOnly(t, "repo")
+
+	headBefore := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
+	remoteHeadBefore := strings.TrimSpace(syncGitRun(t, remote, "rev-parse", "main"))
+
+	if err := os.WriteFile(filepath.Join(repoDir, "ns", "file"), []byte("local edit"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var err error
+	stdout, _ := captureStdoutStderr(t, func() {
+		err = HandleSync([]string{"repo"}, shared.Flags{Yes: true})
+	})
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if !strings.Contains(stdout, "skipped") {
+		t.Fatalf("expected the summary to report the repository as skipped, got: %s", stdout)
+	}
+
+	content, readErr := os.ReadFile(filepath.Join(repoDir, "ns", "file"))
+	if readErr != nil || string(content) != "local edit" {
+		t.Fatalf("expected the local edit to remain untouched by a skip, got %q, err=%v", content, readErr)
+	}
+	headAfter := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
+	if headAfter != headBefore {
+		t.Fatalf("expected no fast-forward on a skip, before=%s after=%s", headBefore, headAfter)
+	}
+	remoteHead := strings.TrimSpace(syncGitRun(t, remote, "rev-parse", "main"))
+	if remoteHead != remoteHeadBefore {
+		t.Fatal("expected nothing to have been pushed for a read-only repository")
+	}
+}
+
+func TestHandleSync_DirtyReadOnlyRepoWithDiscardTrashesEditsAndFastForwards(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a", "b"})
+	markReadOnly(t, "repo")
+
+	if err := os.WriteFile(filepath.Join(repoDir, "a", "file"), []byte("local edit"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A peer edits a different namespace and pushes, so fast-forward has
+	// something real to bring in once the dirty edit above is discarded.
+	peer := filepath.Join(scratchRoot, "peer")
+	syncGitRun(t, scratchRoot, "clone", remote, peer)
+	syncGitRun(t, peer, "config", "user.name", "peer")
+	syncGitRun(t, peer, "config", "user.email", "peer@example.invalid")
+	if err := os.WriteFile(filepath.Join(peer, "b", "file"), []byte("from peer"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	syncGitRun(t, peer, "add", "-A")
+	syncGitRun(t, peer, "commit", "-m", "peer edit")
+	syncGitRun(t, peer, "push", "origin", "main")
+	peerHead := strings.TrimSpace(syncGitRun(t, peer, "rev-parse", "HEAD"))
+
+	var err error
+	stdout, _ := captureStdoutStderr(t, func() {
+		err = HandleSync([]string{"repo"}, shared.Flags{Discard: true})
+	})
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if !strings.Contains(stdout, "repo") {
+		t.Fatalf("expected the summary to report repo, got: %s", stdout)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(repoDir, "a", "file")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected the dirty local edit to have been trashed, stat err=%v", statErr)
+	}
+	content, readErr := os.ReadFile(filepath.Join(repoDir, "b", "file"))
+	if readErr != nil || string(content) != "from peer" {
+		t.Fatalf("expected the fast-forward to have brought in the peer's push, got %q, err=%v", content, readErr)
+	}
+	localHead := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
+	if localHead != peerHead {
+		t.Fatalf("expected repo to fast-forward onto the peer's push, local=%s peer=%s", localHead, peerHead)
+	}
+}
+
+func TestHandleSync_PushAuthFailureSetsReadOnlyFlag(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, _ := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"ns"})
+
+	if err := os.WriteFile(filepath.Join(repoDir, "ns", "file"), []byte("changed"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	installFakeGitPushAuthFailure(t)
+
+	var err error
+	stdout, _ := captureStdoutStderr(t, func() {
+		err = HandleSync([]string{"repo"}, shared.Flags{})
+	})
+	if !errors.Is(err, ErrSomeSkipped) {
+		t.Fatalf("expected ErrSomeSkipped when the push is rejected, got %v", err)
+	}
+	if !strings.Contains(stdout, "repo") {
+		t.Fatalf("expected the summary to report repo, got: %s", stdout)
+	}
+
+	access, err := state.ReadAccess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !access.IsReadOnly("repo") {
+		t.Fatal("expected the push authentication failure to flag repo read-only")
+	}
 }

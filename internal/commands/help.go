@@ -40,6 +40,7 @@ func HandleHelp(args []string) error {
 			gohelp.Item("--force", "Skip confirmation for a destructive default"),
 			gohelp.Item("--purge", "Trash instead of restore on removal"),
 			gohelp.Item("--yes", "Skip confirmation prompts"),
+			gohelp.Item("--discard", "Trash a dirty read-only repository's local edits during sync"),
 			gohelp.Item("--debug", "Verbose diagnostic output"),
 		)
 

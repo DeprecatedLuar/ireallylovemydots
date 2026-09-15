@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +22,22 @@ const remoteName = "origin"
 // it. Per concept.md "Sync" and implementation-plan.md's Phase 9 scope,
 // parameterized here rather than hardcoded inline.
 const recoveryRefNamespace = "refs/dots/sync"
+
+// pushAuthFailureMarkers are substrings git's push stderr is known to carry
+// when a push is rejected for lack of credentials, matched case-sensitively
+// against the exact wording git and the common forges (GitHub, GitLab,
+// Bitbucket) use for authentication and authorization rejections over both
+// SSH and HTTPS. Kept narrow on purpose, per concept.md "Read-only
+// repositories": "a push that fails for any other reason, or ambiguously,
+// changes nothing" — a marker only belongs here when it is unambiguous.
+var pushAuthFailureMarkers = []string{
+	"Permission denied (publickey)",
+	"Authentication failed",
+	"authentication failed",
+	"could not read Username",
+	"could not read Password",
+	"Access denied",
+}
 
 // Reconcile commits every tracked change in dir, then — if dir has a
 // remote — fetches and rebases local commits onto it, per concept.md
@@ -117,8 +134,65 @@ func Reconcile(dir string) (remoteConfigured bool, err error) {
 	return true, nil
 }
 
+// ErrNotFastForwardable is returned by FastForward when dir's local branch
+// has diverged from its upstream and cannot be moved onto it without a
+// commit, rebase, or push — none of which a read-only repository's fetch-
+// only sync is allowed to do, per concept.md "Read-only repositories".
+var ErrNotFastForwardable = errors.New("local branch has diverged and cannot be fast-forwarded")
+
+// ErrPushAuthFailed is returned by Push when the remote rejected the push
+// for lack of credentials, distinguished from any other push failure by
+// matching pushAuthFailureMarkers against the push's stderr. Callers use
+// this to flag a repository read-only, per concept.md "Read-only
+// repositories": "A push rejected for authentication flags the repository
+// read-only... a push that fails for any other reason, or ambiguously,
+// changes nothing."
+var ErrPushAuthFailed = errors.New("push rejected for authentication")
+
+// FastForward fetches dir's current branch's upstream and fast-forwards to
+// it. It never commits, never rebases, and never pushes — the fetch-only
+// sync path for a repository this machine cannot push to (concept.md
+// "Read-only repositories"). Returns ErrNotFastForwardable when the local
+// branch has diverged from its upstream; the caller is expected to have
+// already ruled out uncommitted local changes via Status, since FastForward
+// only resolves the branch history, not the working tree.
+func FastForward(dir string) (remoteConfigured bool, err error) {
+	remoteConfigured, err = hasRemote(dir)
+	if err != nil {
+		return false, err
+	}
+	if !remoteConfigured {
+		return false, nil
+	}
+
+	branch, err := getCurrentBranch(dir)
+	if err != nil || branch == "" {
+		return true, fmt.Errorf("sync requires an attached branch in %s", dir)
+	}
+
+	remoteHeads, err := gitCmd(dir, "ls-remote", "--heads", remoteName, "refs/heads/"+branch)
+	if err != nil {
+		return true, fmt.Errorf("inspect remote for %s: %s", dir, strings.TrimSpace(remoteHeads))
+	}
+	if strings.TrimSpace(remoteHeads) == "" {
+		// A new empty remote has nothing to fast-forward onto.
+		return true, nil
+	}
+
+	if err := fetch(dir, branch); err != nil {
+		return true, err
+	}
+
+	if out, err := gitCmd(dir, "merge", "--ff-only", remoteName+"/"+branch); err != nil {
+		return true, fmt.Errorf("%w: %s: %s", ErrNotFastForwardable, dir, strings.TrimSpace(out))
+	}
+	return true, nil
+}
+
 // Push pushes dir's current branch to origin, streaming output live
-// through gitutil.CappedWriter so a slow push is never silent.
+// through gitutil.CappedWriter so a slow push is never silent. A failure
+// rejected for authentication is wrapped in ErrPushAuthFailed so callers can
+// tell it apart from every other kind of push failure.
 func Push(dir string) error {
 	branch, err := getCurrentBranch(dir)
 	if err != nil || branch == "" {
@@ -130,9 +204,24 @@ func Push(dir string) error {
 	var tail gitutil.CappedWriter
 	cmd.Stderr = io.MultiWriter(os.Stderr, &tail)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("push %s: %s", dir, strings.TrimSpace(tail.String()))
+		msg := strings.TrimSpace(tail.String())
+		if isPushAuthFailure(msg) {
+			return fmt.Errorf("push %s: %s: %w", dir, msg, ErrPushAuthFailed)
+		}
+		return fmt.Errorf("push %s: %s", dir, msg)
 	}
 	return nil
+}
+
+// isPushAuthFailure reports whether a push's stderr names an authentication
+// or authorization rejection, per pushAuthFailureMarkers.
+func isPushAuthFailure(stderr string) bool {
+	for _, marker := range pushAuthFailureMarkers {
+		if strings.Contains(stderr, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // fetch fetches branch from origin, streaming output live through

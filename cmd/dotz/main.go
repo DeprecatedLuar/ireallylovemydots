@@ -147,6 +147,8 @@ func extractGlobalFlags(args []string) ([]string, shared.Flags, error) {
 			flags.Purge = true
 		case arg == "--yes":
 			flags.Yes = true
+		case arg == "--discard":
+			flags.Discard = true
 		case arg == "--debug":
 			flags.Debug = true
 		case arg == "--bootstrap":

@@ -10,6 +10,7 @@ type Flags struct {
 	Force     bool
 	Purge     bool
 	Yes       bool
+	Discard   bool
 	Debug     bool
 	Bootstrap bool
 	Install   bool
