@@ -6,9 +6,20 @@ package git
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
+
+// Environment that denies git every way it has of soliciting credentials:
+// the terminal prompt, and the askpass helpers it reaches for first — an
+// empty value reads as unset to git, and a graphical askpass would otherwise
+// block on a dialog even with the terminal prompt disabled.
+var nonInteractiveEnv = []string{
+	"GIT_TERMINAL_PROMPT=0",
+	"GIT_ASKPASS=",
+	"SSH_ASKPASS=",
+}
 
 // RepoStatus is the git state of a repository clone relevant to removal
 // safety.
@@ -124,7 +135,11 @@ func CanPush(repoDir string) (bool, error) {
 		return true, nil
 	}
 
-	cmd := exec.Command("git", "-C", repoDir, "push", "--dry-run", "--porcelain")
+	// A missing credential is an answer here ("cannot push"), not a reason to
+	// stop and ask: this probe runs in the middle of another command, so a
+	// prompt would block it indefinitely rather than leave it read-only.
+	cmd := exec.Command("git", "-C", repoDir, "-c", "core.askPass=", "push", "--dry-run", "--porcelain")
+	cmd.Env = append(os.Environ(), nonInteractiveEnv...)
 	if err := cmd.Run(); err != nil {
 		if _, ok := err.(*exec.ExitError); ok {
 			return false, nil
