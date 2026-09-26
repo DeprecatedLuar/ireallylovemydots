@@ -106,8 +106,8 @@ func TestEnable_CollisionDisablesWholeConflictingNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Preflight: %v", err)
 	}
-	if len(problems) != 1 || problems[0].Kind != Collision {
-		t.Fatalf("expected exactly one Collision problem, got %+v", problems)
+	if len(problems) != 1 || problems[0].Kind != NamespaceCollision {
+		t.Fatalf("expected exactly one NamespaceCollision problem, got %+v", problems)
 	}
 
 	if _, err := Enable(newKey, nsDir, nsDir, "new", entries, s, problems); err != nil {

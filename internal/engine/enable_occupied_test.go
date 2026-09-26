@@ -38,16 +38,16 @@ func TestEnable_OccupiedDestinationTrashedThenLinked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Preflight: %v", err)
 	}
-	if len(problems) != 1 || problems[0].Kind != Occupied {
-		t.Fatalf("expected exactly one Occupied problem, got %+v", problems)
+	if len(problems) != 1 || problems[0].Kind != RealFileCollision {
+		t.Fatalf("expected exactly one RealFileCollision problem, got %+v", problems)
 	}
 
-	trashed, err := Enable(key, nsDir, nsDir, "editors", entries, s, problems)
+	res, err := Enable(key, nsDir, nsDir, "editors", entries, s, problems)
 	if err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
-	if len(trashed) != 1 || trashed[0].Dest != dest {
-		t.Fatalf("expected Enable to report the trashed destination %s, got %+v", dest, trashed)
+	if len(res.Replaced) != 1 || res.Replaced[0].Dest != dest {
+		t.Fatalf("expected Enable to report the trashed destination %s, got %+v", dest, res.Replaced)
 	}
 
 	info, err := os.Lstat(dest)
@@ -111,15 +111,15 @@ func TestEnable_AbsorbsDanglingSymlinkEmptyDirAndLiveSymlink(t *testing.T) {
 		t.Fatalf("expected no pre-flight problems, got %+v", problems)
 	}
 
-	replaced, err := Enable(key, nsDir, nsDir, "editors", entries, s, problems)
+	res, err := Enable(key, nsDir, nsDir, "editors", entries, s, problems)
 	if err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
 	// Absorbing a symlink or an empty directory holds nothing of the user's
 	// and stays silent, per concept.md "Occupied destinations" — only real
 	// files/directories routed through the trash path are reported.
-	if len(replaced) != 0 {
-		t.Fatalf("expected nothing reported, got %+v", replaced)
+	if len(res.Replaced) != 0 {
+		t.Fatalf("expected nothing reported, got %+v", res.Replaced)
 	}
 
 	for _, e := range entries {

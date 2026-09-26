@@ -84,8 +84,8 @@ func TestPreflight_OccupiedRealFileAndNonEmptyDir(t *testing.T) {
 		t.Fatalf("expected 2 occupied problems, got %+v", problems)
 	}
 	for _, p := range problems {
-		if p.Kind != Occupied {
-			t.Fatalf("expected Occupied, got %+v", p)
+		if p.Kind != RealFileCollision {
+			t.Fatalf("expected RealFileCollision, got %+v", p)
 		}
 		if !strings.Contains(p.Message, "--force") || !strings.Contains(p.Message, "track the paths inside it") {
 			t.Fatalf("expected occupied message to name both --force and tracking the paths inside it, got: %s", p.Message)
@@ -165,7 +165,9 @@ func TestPreflight_EqualDestinationsGuard(t *testing.T) {
 	}
 }
 
-func TestPreflight_InsideDataDirGuard_ThroughExistingSymlink(t *testing.T) {
+// A parent link into the data directory that names no enabled namespace is
+// occupied at the link, not a link-guard failure: --force can remove it.
+func TestPreflight_ParentLinkIntoDataDir_NoEnabledNamespace_IsRealFileCollision(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	dataDir, err := paths.Data()
 	if err != nil {
@@ -198,8 +200,8 @@ func TestPreflight_InsideDataDirGuard_ThroughExistingSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Preflight: %v", err)
 	}
-	if len(problems) != 1 || problems[0].Kind != LinkGuard {
-		t.Fatalf("expected a LinkGuard problem for a destination resolving through an existing symlink into the data directory, got %+v", problems)
+	if len(problems) != 1 || problems[0].Kind != RealFileCollision || problems[0].Path != nvimDest {
+		t.Fatalf("expected a RealFileCollision at the parent link, got %+v", problems)
 	}
 }
 
@@ -218,8 +220,8 @@ func TestPreflight_Collision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Preflight: %v", err)
 	}
-	if len(problems) != 1 || problems[0].Kind != Collision {
-		t.Fatalf("expected one Collision problem, got %+v", problems)
+	if len(problems) != 1 || problems[0].Kind != NamespaceCollision {
+		t.Fatalf("expected one NamespaceCollision problem, got %+v", problems)
 	}
 	if problems[0].Conflicting == nil || problems[0].Conflicting.Namespace != "other" {
 		t.Fatalf("expected the conflicting namespace to be named, got %+v", problems[0].Conflicting)
@@ -289,11 +291,11 @@ func TestPreflight_UnwritableParent_NamedAlongsideOtherProblems(t *testing.T) {
 		if p.Kind == Unwritable && p.Entry.Dest == unwritableDest {
 			sawUnwritable = true
 		}
-		if p.Kind == Occupied && p.Entry.Dest == occupiedDest {
+		if p.Kind == RealFileCollision && p.Entry.Dest == occupiedDest {
 			sawOccupied = true
 		}
 	}
 	if !sawUnwritable || !sawOccupied {
-		t.Fatalf("expected both an Unwritable and an Occupied problem, got %+v", problems)
+		t.Fatalf("expected both an Unwritable and a RealFileCollision problem, got %+v", problems)
 	}
 }

@@ -288,7 +288,7 @@ func BlockedSummary(blocked []Blocked, state string) string {
 // names `dots krita`" — the one command that expands a BlockedSummary count
 // back into the per-entry detail a listing already knows how to render.
 // Returns base unchanged when names is empty, so a caller can call this
-// unconditionally.
+// unconditionally. An empty base ends the sentence after the clause.
 func BlockedTip(names []string, base string) string {
 	if len(names) == 0 {
 		return base
@@ -296,6 +296,9 @@ func BlockedTip(names []string, base string) string {
 	cmds := make([]string, len(names))
 	for i, name := range names {
 		cmds[i] = fmt.Sprintf("`dots %s`", name)
+	}
+	if base == "" {
+		return fmt.Sprintf("run %s to see them.", strings.Join(cmds, ", "))
 	}
 	return fmt.Sprintf("run %s to see them, %s", strings.Join(cmds, ", "), base)
 }

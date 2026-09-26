@@ -135,7 +135,7 @@ func moveEnabledNamespace(srcKey state.Key, srcRepo manifest.Repo, srcName, srcD
 		return err
 	}
 	for _, p := range problems {
-		if p.Kind == engine.Collision && p.Conflicting != nil && *p.Conflicting == srcKey {
+		if p.Kind == engine.NamespaceCollision && p.Conflicting != nil && *p.Conflicting == srcKey {
 			continue
 		}
 		return fmt.Errorf("cannot move %q into repository %q: %s", dstName, dstRepo.Name, p.Message)

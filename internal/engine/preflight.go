@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/link"
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
@@ -23,11 +24,13 @@ const (
 	// LinkGuard: the destination would resolve inside the data directory,
 	// directly or through another entry's link.
 	LinkGuard
-	// Collision: the destination is already claimed by another enabled
-	// namespace.
-	Collision
-	// Occupied: the destination holds a real file or a non-empty directory.
-	Occupied
+	// NamespaceCollision: the destination is held by another enabled
+	// namespace, either by claiming it or by linking one of its parents.
+	NamespaceCollision
+	// RealFileCollision: the destination, or a parent link, holds something
+	// that is not an enabled namespace: a real file, a non-empty directory,
+	// or a link into the data directory naming no enabled namespace.
+	RealFileCollision
 	// Unwritable: the destination's parent, or its nearest existing
 	// ancestor, cannot be written to.
 	Unwritable
@@ -37,11 +40,18 @@ const (
 type Problem struct {
 	Kind  ProblemKind
 	Entry manifest.Entry
-	// Conflicting is set only for Collision: the enabled namespace already
-	// holding the destination.
+	// Conflicting is set only for NamespaceCollision: the enabled namespace
+	// already holding the destination.
 	Conflicting *state.Key
-	Message     string
+	// Path is the path actually in the way: Entry.Dest for every problem
+	// except a parent-link RealFileCollision, where it is the link.
+	Path    string
+	Message string
 }
+
+// dataLinkKeyComponents is how many leading components of a data-directory
+// link's target name a namespace: "<repo>/<namespace>".
+const dataLinkKeyComponents = 2
 
 // Preflight collects every pre-flight problem for enabling a namespace's
 // entries, per concept.md "Pre-flight": every check runs before any link is
@@ -67,30 +77,39 @@ func Preflight(key state.Key, namespaceDir string, entries []manifest.Entry, s s
 			return nil, err
 		}
 		if protected {
-			problems = append(problems, Problem{Kind: ProtectedRoot, Entry: e,
+			problems = append(problems, Problem{Kind: ProtectedRoot, Entry: e, Path: e.Dest,
 				Message: fmt.Sprintf("%s: refusing a protected root (~, /, or an XDG root) as a destination", e.Dest)})
 			continue
 		}
 
 		if detail, ok := guarded[e.Name]; ok {
-			problems = append(problems, Problem{Kind: LinkGuard, Entry: e,
+			problems = append(problems, Problem{Kind: LinkGuard, Entry: e, Path: e.Dest,
 				Message: fmt.Sprintf("%s: in-repo link guard, %s", e.Dest, detail)})
 			continue
 		}
+		if otherKey, ok := idx.Conflict(e.Dest); ok && otherKey != key {
+			k := otherKey
+			problems = append(problems, Problem{Kind: NamespaceCollision, Entry: e, Conflicting: &k, Path: e.Dest,
+				Message: fmt.Sprintf("%s is already claimed by namespace %q in repository %q", e.Dest, otherKey.Namespace, otherKey.Repo)})
+			continue
+		}
+
+		parentProblems, err := parentLinkProblems(e, key, s)
+		if err != nil {
+			return nil, err
+		}
+		if len(parentProblems) > 0 {
+			problems = append(problems, parentProblems...)
+			continue
+		}
+
 		inside, err := paths.InsideDataDir(filepath.Dir(e.Dest))
 		if err != nil {
 			return nil, err
 		}
 		if inside {
-			problems = append(problems, Problem{Kind: LinkGuard, Entry: e,
+			problems = append(problems, Problem{Kind: LinkGuard, Entry: e, Path: e.Dest,
 				Message: fmt.Sprintf("%s: in-repo link guard, its parent resolves inside the data directory", e.Dest)})
-			continue
-		}
-
-		if otherKey, ok := idx.Conflict(e.Dest); ok && otherKey != key {
-			k := otherKey
-			problems = append(problems, Problem{Kind: Collision, Entry: e, Conflicting: &k,
-				Message: fmt.Sprintf("%s is already claimed by namespace %q in repository %q", e.Dest, otherKey.Namespace, otherKey.Repo)})
 			continue
 		}
 
@@ -100,7 +119,7 @@ func Preflight(key state.Key, namespaceDir string, entries []manifest.Entry, s s
 			return nil, err
 		}
 		if occupied {
-			problems = append(problems, Problem{Kind: Occupied, Entry: e,
+			problems = append(problems, Problem{Kind: RealFileCollision, Entry: e, Path: e.Dest,
 				Message: fmt.Sprintf("%s already exists (%s)\n  --force        trash it and link the whole directory\n  or track the paths inside it instead of the parent", e.Dest, detail)})
 		}
 
@@ -109,9 +128,47 @@ func Preflight(key state.Key, namespaceDir string, entries []manifest.Entry, s s
 			return nil, err
 		}
 		if !writable {
-			problems = append(problems, Problem{Kind: Unwritable, Entry: e,
+			problems = append(problems, Problem{Kind: Unwritable, Entry: e, Path: e.Dest,
 				Message: fmt.Sprintf("%s: permission denied", e.Dest)})
 		}
+	}
+	return problems, nil
+}
+
+// parentLinkProblems walks the ancestors of e.Dest for symlinks into the data
+// directory, per concept.md "Conflicts": a link naming an enabled namespace
+// other than key is a NamespaceCollision with that namespace; any other link
+// (a disabled namespace, the repository root, key itself) is a
+// RealFileCollision at the link, which --force removes without touching what
+// it points at.
+func parentLinkProblems(e manifest.Entry, key state.Key, s state.State) ([]Problem, error) {
+	links, err := paths.DataDirLinks(e.Dest)
+	if err != nil {
+		return nil, err
+	}
+	var problems []Problem
+	seen := map[state.Key]bool{}
+	for _, l := range links {
+		parts := strings.Split(filepath.ToSlash(l.Rel), "/")
+		if len(parts) >= dataLinkKeyComponents {
+			other := state.Key{Repo: parts[0], Namespace: parts[1]}
+			if other != key && s.Entries[other].Enabled {
+				if seen[other] {
+					continue
+				}
+				seen[other] = true
+				k := other
+				problems = append(problems, Problem{Kind: NamespaceCollision, Entry: e, Conflicting: &k, Path: e.Dest,
+					Message: fmt.Sprintf("%s is blocked by namespace %q in repository %q", e.Dest, other.Namespace, other.Repo)})
+				continue
+			}
+		}
+		target, readErr := link.Read(l.Path)
+		if readErr != nil {
+			return nil, readErr
+		}
+		problems = append(problems, Problem{Kind: RealFileCollision, Entry: e, Path: l.Path,
+			Message: fmt.Sprintf("%s already exists (link to %s)", l.Path, manifest.ContractHome(target))})
 	}
 	return problems, nil
 }

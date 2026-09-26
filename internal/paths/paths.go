@@ -78,6 +78,51 @@ func InsideDataDir(path string) (bool, error) {
 	return rel == "." || (rel != ".." && !hasParentPrefix(rel)), nil
 }
 
+// DataLink is one symlink found among a destination's ancestors that resolves
+// into the data directory. Path is the link itself; Rel is where it resolves,
+// relative to the data directory ("<repo>/<namespace>/..." in the ordinary
+// case).
+type DataLink struct{ Path, Rel string }
+
+// DataDirLinks walks every ancestor of dest, from its parent up to the
+// filesystem root, and returns each existing symlink whose resolved target
+// lies inside the data directory, nearest first. Symlinks resolving elsewhere,
+// dangling ones, and missing components are skipped. This is what lets
+// pre-flight name the namespace whose directory link sits between a
+// destination and the real filesystem.
+func DataDirLinks(dest string) ([]DataLink, error) {
+	dataDir, err := Data()
+	if err != nil {
+		return nil, err
+	}
+	resolvedData, err := filepath.EvalSymlinks(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve data directory: %w", err)
+	}
+	abs, err := filepath.Abs(dest)
+	if err != nil {
+		return nil, fmt.Errorf("resolve absolute path for %s: %w", dest, err)
+	}
+
+	var links []DataLink
+	for dir := filepath.Dir(abs); ; dir = filepath.Dir(dir) {
+		info, statErr := os.Lstat(dir)
+		if statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			resolved, evalErr := filepath.EvalSymlinks(dir)
+			if evalErr == nil {
+				rel, relErr := filepath.Rel(resolvedData, resolved)
+				if relErr == nil && (rel == "." || (rel != ".." && !hasParentPrefix(rel))) {
+					links = append(links, DataLink{Path: dir, Rel: rel})
+				}
+			}
+		}
+		if filepath.Dir(dir) == dir {
+			break
+		}
+	}
+	return links, nil
+}
+
 func hasParentPrefix(rel string) bool {
 	return len(rel) >= 3 && rel[:3] == ".."+string(filepath.Separator)
 }

@@ -143,36 +143,61 @@ type ReplacedDestination struct {
 	Detail string
 }
 
+// EnableResult is what Enable did beyond linking, for the caller to report:
+// every destination it removed first, and every namespace it disabled to make
+// room.
+type EnableResult struct {
+	Replaced []ReplacedDestination
+	Disabled []state.Key
+}
+
 // Enable materializes the namespace via sparse checkout if needed, disables
-// every namespace named by a Collision problem, trashes every destination
-// named by a confirmed Occupied problem, clears every destination pre-flight
+// every namespace named by a NamespaceCollision problem, removes every parent
+// link named by a RealFileCollision problem, trashes every destination
+// named by a confirmed RealFileCollision problem, clears every destination pre-flight
 // found absorbable (a symlink or an empty directory — concept.md "Occupied
 // destinations": neither holds data), then links every entry, parent before
 // child by path depth, per concept.md "Enable". It returns every destination
-// it trashed or cleared, in link order, for the caller to report.
+// it trashed or cleared, in link order, and every namespace it disabled, for
+// the caller to report.
 //
 // State is written only once every link has succeeded — never before,
 // unlike the narrative order in concept.md — so that a failure partway
 // through leaves neither a link nor a state entry behind: rolling back a
 // state entry that was already persisted is one more thing that could fail,
 // where never persisting it in the first place cannot.
-func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifest.Entry, s state.State, problems []Problem) ([]ReplacedDestination, error) {
+func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifest.Entry, s state.State, problems []Problem) (EnableResult, error) {
+	var result EnableResult
+	disabledSeen := map[state.Key]bool{}
 	for _, p := range problems {
-		if p.Kind == Collision {
+		if p.Kind == NamespaceCollision && !disabledSeen[*p.Conflicting] {
+			disabledSeen[*p.Conflicting] = true
 			if err := disableConflicting(*p.Conflicting, s); err != nil {
-				return nil, err
+				return result, err
 			}
+			result.Disabled = append(result.Disabled, *p.Conflicting)
 		}
 	}
 
 	if err := Materialize(repoDir, namespaceDir, name); err != nil {
-		return nil, err
+		return result, err
 	}
 
+	entryDests := map[string]bool{}
+	for _, e := range entries {
+		entryDests[e.Dest] = true
+	}
 	occupiedDetail := map[string]string{}
+	var parentLinks []Problem
+	linkSeen := map[string]bool{}
 	for _, p := range problems {
-		if p.Kind == Occupied {
-			occupiedDetail[p.Entry.Dest] = OccupancyDetail(p.Message)
+		if p.Kind != RealFileCollision {
+			continue
+		}
+		occupiedDetail[p.Path] = OccupancyDetail(p.Message)
+		if !entryDests[p.Path] && !linkSeen[p.Path] {
+			linkSeen[p.Path] = true
+			parentLinks = append(parentLinks, p)
 		}
 	}
 
@@ -199,6 +224,20 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 		}
 	}
 
+	// A parent link into the data directory is removed as the link it is,
+	// never followed: what it points at stays untouched.
+	for _, p := range parentLinks {
+		cleared, err := clearAbsorbable(p.Path)
+		if err != nil {
+			rollback()
+			return result, fmt.Errorf("clear %s: %w", p.Path, err)
+		}
+		if cleared != nil {
+			absorbed = append(absorbed, *cleared)
+		}
+		replaced = append(replaced, ReplacedDestination{Dest: p.Path, Detail: occupiedDetail[p.Path]})
+	}
+
 	for _, e := range sorted {
 		if !e.HasDestination() {
 			// An empty destination or manifest.DestNone names nothing to
@@ -209,13 +248,13 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 			trashedName, err := trash.Move(e.Dest)
 			if err != nil {
 				rollback()
-				return nil, fmt.Errorf("trash occupied destination %s: %w", e.Dest, err)
+				return result, fmt.Errorf("trash occupied destination %s: %w", e.Dest, err)
 			}
 			trashed = append(trashed, trashedEntry{dest: e.Dest, name: trashedName, detail: detail})
 			replaced = append(replaced, ReplacedDestination{Dest: e.Dest, Detail: detail + " -> trash"})
 		} else if cleared, err := clearAbsorbable(e.Dest); err != nil {
 			rollback()
-			return nil, fmt.Errorf("clear %s: %w", e.Dest, err)
+			return result, fmt.Errorf("clear %s: %w", e.Dest, err)
 		} else if cleared != nil {
 			absorbed = append(absorbed, *cleared)
 			// concept.md "Occupied destinations": an absorbed symlink or
@@ -225,16 +264,16 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 		}
 		if err := os.MkdirAll(filepath.Dir(e.Dest), dirPerm); err != nil {
 			rollback()
-			return nil, fmt.Errorf("create parent directory for %s: %w", e.Dest, err)
+			return result, fmt.Errorf("create parent directory for %s: %w", e.Dest, err)
 		}
 		payload, err := profile.Source(namespaceDir, e.Name, s.Entries[key].ActiveProfile)
 		if err != nil {
 			rollback()
-			return nil, err
+			return result, err
 		}
 		if err := link.Create(e.Dest, payload); err != nil {
 			rollback()
-			return nil, err
+			return result, err
 		}
 		created = append(created, e.Dest)
 	}
@@ -251,14 +290,15 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 	s.Entries[key] = state.Entry{Enabled: true, ActiveProfile: s.Entries[key].ActiveProfile, LinkedDests: dests}
 	if err := state.Write(s); err != nil {
 		rollback()
-		return nil, err
+		return result, err
 	}
 
-	return replaced, nil
+	result.Replaced = replaced
+	return result, nil
 }
 
 // OccupancyDetail pulls the parenthesised detail (e.g. "real directory, 340
-// files") out of an Occupied problem's message, so Enable's trash report —
+// files") out of a RealFileCollision problem's message, so Enable's trash report —
 // and any command's skip-report line, e.g. problemSummary in
 // internal/commands/enable.go — can reuse the same wording pre-flight
 // already computed rather than re-deriving it.

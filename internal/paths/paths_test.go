@@ -138,3 +138,88 @@ func TestInsideDataDir_ThroughIntermediateSymlink(t *testing.T) {
 		t.Fatalf("expected %s (through symlink) to be detected inside data dir", target)
 	}
 }
+
+func TestDataDirLinks_ParentLinkedIntoDataDir(t *testing.T) {
+	withXDGData(t, t.TempDir())
+	dataDir, _ := Data()
+	target := filepath.Join(dataDir, "repo", "ns")
+	if err := os.MkdirAll(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	linkPath := filepath.Join(home, "x")
+	if err := os.Symlink(target, linkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	links, err := DataDirLinks(filepath.Join(linkPath, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 1 || links[0].Path != linkPath || links[0].Rel != filepath.Join("repo", "ns") {
+		t.Fatalf("unexpected links: %+v", links)
+	}
+}
+
+func TestDataDirLinks_TwoLinkedAncestorsNearestFirst(t *testing.T) {
+	withXDGData(t, t.TempDir())
+	dataDir, _ := Data()
+	inner := filepath.Join(dataDir, "repo", "a", "inner")
+	if err := os.MkdirAll(inner, 0700); err != nil {
+		t.Fatal(err)
+	}
+	outer := filepath.Join(dataDir, "repo", "c")
+	if err := os.MkdirAll(outer, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// outer/sub -> data/repo/a (nearest link is reached via a link chain)
+	if err := os.Symlink(filepath.Join(dataDir, "repo", "a"), filepath.Join(outer, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	top := filepath.Join(home, "top")
+	if err := os.Symlink(outer, top); err != nil {
+		t.Fatal(err)
+	}
+
+	links, err := DataDirLinks(filepath.Join(top, "sub", "inner", "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("expected two links, got %+v", links)
+	}
+	if links[0].Path != filepath.Join(top, "sub") || links[0].Rel != filepath.Join("repo", "a") {
+		t.Fatalf("nearest link wrong: %+v", links[0])
+	}
+	if links[1].Path != top || links[1].Rel != filepath.Join("repo", "c") {
+		t.Fatalf("outer link wrong: %+v", links[1])
+	}
+}
+
+func TestDataDirLinks_ParentLinkedOutsideIsIgnored(t *testing.T) {
+	withXDGData(t, t.TempDir())
+	outside := t.TempDir()
+	linkPath := filepath.Join(t.TempDir(), "x")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Fatal(err)
+	}
+	links, err := DataDirLinks(filepath.Join(linkPath, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 0 {
+		t.Fatalf("expected none, got %+v", links)
+	}
+}
+
+func TestDataDirLinks_NoSymlink(t *testing.T) {
+	withXDGData(t, t.TempDir())
+	links, err := DataDirLinks(filepath.Join(t.TempDir(), "missing", "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 0 {
+		t.Fatalf("expected none, got %+v", links)
+	}
+}

@@ -621,9 +621,10 @@ func renderNamespaceEntries(name string, flags shared.Flags, findings selfheal.F
 	if err != nil {
 		return err
 	}
-	stateEntry := s.Entries[state.Key{Repo: loc.Repo.Name, Namespace: name}]
+	key := state.Key{Repo: loc.Repo.Name, Namespace: name}
+	stateEntry := s.Entries[key]
 
-	rows, suggestion, err := entryListing(loc.Dir, m.Entries, stateEntry.Enabled, stateEntry.ActiveProfile)
+	rows, suggestion, err := entryListing(key, s, loc.Dir, m.Entries, stateEntry.Enabled, stateEntry.ActiveProfile)
 	if err != nil {
 		return err
 	}

@@ -170,7 +170,7 @@ func namespaceRow(s state.State, repoName, nsName, namespaceDir string, entries 
 		marker = ui.MarkerEnabled
 	}
 
-	rows, _, _, err := namespaceProblems(namespaceDir, entries, stateEntry.Enabled, stateEntry.ActiveProfile, false)
+	rows, _, _, err := namespaceProblems(namespaceDir, entries, stateEntry.Enabled, stateEntry.ActiveProfile, false, nil)
 	if err != nil {
 		return ui.Entry{}, err
 	}
@@ -241,13 +241,20 @@ func repoListing(repos []manifest.Repo) ([]ui.Entry, error) {
 // almost certainly a rename. Listing may suggest it — the one place a
 // listing prints more than a marker and a name." The suggestion is a plain
 // string for the caller to print as a tip; entryListing never prints.
-func entryListing(namespaceDir string, entries []manifest.Entry, enabled bool, activeProfile string) (rows []ui.Entry, suggestion string, err error) {
+func entryListing(key state.Key, s state.State, namespaceDir string, entries []manifest.Entry, enabled bool, activeProfile string) (rows []ui.Entry, suggestion string, err error) {
 	// diagnoseOccupancy is true here: concept.md "What enable reports",
 	// "Listing one namespace is what that pointer resolves to" — the "!"
 	// entries in this one namespace's own listing must carry the destination
 	// and what occupies it, so `dots <ns>` after a collapsed count on the
 	// overview is a complete diagnostic path.
-	rows, orphans, untracked, err := namespaceProblems(namespaceDir, entries, enabled, activeProfile, true)
+	var blocked map[string]engine.Problem
+	if !enabled {
+		blocked, err = preflightProblems(key, namespaceDir, entries, s)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	rows, orphans, untracked, err := namespaceProblems(namespaceDir, entries, enabled, activeProfile, true, blocked)
 	if err != nil {
 		return nil, "", err
 	}
@@ -258,13 +265,31 @@ func entryListing(namespaceDir string, entries []manifest.Entry, enabled bool, a
 	return rows, suggestion, nil
 }
 
+// preflightProblems runs the same pre-flight enable would and keys the first
+// problem found for each entry by entry name, so a disabled namespace's
+// listing names exactly what enable would name: another namespace holding the
+// destination, a link in the way, or what occupies it.
+func preflightProblems(key state.Key, namespaceDir string, entries []manifest.Entry, s state.State) (map[string]engine.Problem, error) {
+	problems, err := engine.Preflight(key, namespaceDir, entries, s)
+	if err != nil {
+		return nil, err
+	}
+	byEntry := make(map[string]engine.Problem, len(problems))
+	for _, p := range problems {
+		if _, ok := byEntry[p.Entry.Name]; !ok {
+			byEntry[p.Entry.Name] = p
+		}
+	}
+	return byEntry, nil
+}
+
 // namespaceProblems classifies namespace's tracked entries and finds any
 // untracked payload beside them, per concept.md "Manual edits", from one
 // shared directory walk (namespace.Inspect) also used by self-heal's repair
 // warning. orphans and untracked name the entries/payloads driving each half
 // of the rename suggestion; a caller that only needs the namespace-level "!"
 // rollup (namespaceRow) ignores them.
-func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bool, activeProfile string, diagnoseOccupancy bool) (rows []ui.Entry, orphans, untracked []string, err error) {
+func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bool, activeProfile string, diagnoseOccupancy bool, blocked map[string]engine.Problem) (rows []ui.Entry, orphans, untracked []string, err error) {
 	report, err := namespace.Inspect(namespaceDir, entries)
 	if err != nil {
 		return nil, nil, nil, err
@@ -276,7 +301,7 @@ func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bo
 
 	rows = make([]ui.Entry, 0, len(entries)+len(report.Untracked))
 	for _, e := range entries {
-		rows = append(rows, classifyEntry(e, namespaceDir, enabled, activeProfile, invalid, orphaned, guarded, diagnoseOccupancy))
+		rows = append(rows, classifyEntry(e, namespaceDir, enabled, activeProfile, invalid, orphaned, guarded, diagnoseOccupancy, blocked))
 	}
 	for _, name := range report.Untracked {
 		rows = append(rows, ui.Entry{Marker: ui.MarkerProblem, Name: name})
@@ -324,7 +349,7 @@ func manifestGuardDetails(entries []manifest.Entry) map[string]string {
 // resolves to." namespaceRow's overview never sets it: concept.md "Listing
 // output" promotes a namespace to "!" only for an orphaned, invalid, or
 // untracked entry, not an occupied destination on an ordinary disabled one.
-func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, activeProfile string, invalid, orphaned map[string]bool, guarded map[string]string, diagnoseOccupancy bool) ui.Entry {
+func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, activeProfile string, invalid, orphaned map[string]bool, guarded map[string]string, diagnoseOccupancy bool, blocked map[string]engine.Problem) ui.Entry {
 	if invalid[e.Name] {
 		return ui.Entry{Marker: ui.MarkerProblem, Name: e.Name + ui.DetailSep + "destination not set"}
 	}
@@ -351,8 +376,8 @@ func classifyEntry(e manifest.Entry, namespaceDir string, enabled bool, activePr
 		// absent, or holding someone else's file, is ordinary. Occupied,
 		// the same test pre-flight applies, is not.
 		if diagnoseOccupancy {
-			if entry, ok := blockedEntry(e.Dest, payload); ok {
-				return entry
+			if p, ok := blocked[e.Name]; ok {
+				return ui.Entry{Marker: ui.MarkerProblem, Name: ui.BlockedSummary([]ui.Blocked{{Dest: p.Path, Detail: problemDetail(p)}}, "")}
 			}
 		}
 		return ui.Entry{Marker: ui.MarkerMaterialized, Name: e.Name}

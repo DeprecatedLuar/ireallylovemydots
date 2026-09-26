@@ -121,31 +121,40 @@ func runEnableBatch(names []string, all bool, flags shared.Flags) error {
 	// count line's tip points at `dots <ns>` only for those, since a single
 	// blocked destination already has its detail on the report line.
 	var collapsed []string
+	// skippedProblems holds each skipped target's problems for the footer,
+	// which offers --force only when one of them can still be forced. A target
+	// that failed while enabling under --force has already used it: nil.
+	var skippedProblems [][]engine.Problem
 	for _, t := range targets {
 		if hardBlocked(t.problems) || (len(t.problems) > 0 && !flags.Force) {
 			skipped++
+			skippedProblems = append(skippedProblems, t.problems)
 			lines = append(lines, ui.Operation(ui.MarkerProblem, t.display, problemSummary(t.problems)))
-			if len(t.problems) > 1 {
+			if collapsesToCount(t.problems) {
 				collapsed = append(collapsed, t.display)
 			}
 			continue
 		}
-		replaced, err := engine.Enable(t.key, t.repoDir, t.nsDir, t.name, t.entries, s, t.problems)
+		result, err := engine.Enable(t.key, t.repoDir, t.nsDir, t.name, t.entries, s, t.problems)
 		if err != nil {
 			skipped++
+			skippedProblems = append(skippedProblems, nil)
 			lines = append(lines, ui.Operation(ui.MarkerProblem, t.display, err.Error()))
 			continue
 		}
 		enabled++
 		lines = append(lines, ui.Operation(ui.MarkerEnabled, t.display, ""))
-		for _, rd := range replaced {
+		for _, k := range result.Disabled {
+			lines = append(lines, ui.Operation(ui.MarkerMaterialized, k.Namespace, ""))
+		}
+		for _, rd := range result.Replaced {
 			lines = append(lines, ui.Sub(ui.MarkerRemoved, rd.Dest, rd.Detail))
 		}
 	}
 
 	fmt.Print(ui.Report(lines, ""))
 	if skipped > 0 {
-		fmt.Fprintln(os.Stderr, enableFooter(enabled, skipped, collapsed))
+		fmt.Fprintln(os.Stderr, enableFooter(enabled, skipped, collapsed, skippedProblems))
 		return ErrSomeSkipped
 	}
 	return nil
@@ -154,16 +163,53 @@ func runEnableBatch(names []string, all bool, flags shared.Flags) error {
 // enableFooter builds the count line concept.md "What enable reports"
 // requires whenever a batch skips at least one namespace: the totals, plus
 // — only for a namespace whose report line collapsed to a count — the tip
-// naming the `dots <ns>` that expands it back into per-entry detail.
-func enableFooter(enabled, skipped int, collapsed []string) string {
-	tip := ui.BlockedTip(collapsed, "--force to override.")
-	if len(collapsed) > 0 {
-		// BlockedTip's clause always starts lowercase ("run `dots ...`"),
-		// meant for embedding after a "Tip: " prefix elsewhere; here it
-		// opens a new sentence of its own.
-		tip = strings.ToUpper(tip[:1]) + tip[1:]
+// naming the `dots <ns>` that expands it back into per-entry detail, plus a
+// --force clause only when at least one skip can be forced. When every
+// forceable skip is a namespace collision the clause names the namespaces
+// --force would disable.
+func enableFooter(enabled, skipped int, collapsed []string, skippedProblems [][]engine.Problem) string {
+	tip := ui.BlockedTip(collapsed, forceClause(skippedProblems))
+	if tip == "" {
+		return fmt.Sprintf("%d enabled, %d skipped.", enabled, skipped)
 	}
+	// BlockedTip's clause always starts lowercase ("run `dots ...`"), meant
+	// for embedding after a "Tip: " prefix elsewhere; here it opens a new
+	// sentence of its own.
+	tip = strings.ToUpper(tip[:1]) + tip[1:]
 	return fmt.Sprintf("%d enabled, %d skipped. %s", enabled, skipped, tip)
+}
+
+// forceClause is the footer's --force clause: empty when no skipped target can
+// be forced, "try with --force to disable <names>." when every forceable skip
+// is only namespace collisions, and "--force to override." otherwise.
+func forceClause(skippedProblems [][]engine.Problem) string {
+	var names []string
+	seen := map[string]bool{}
+	forceable, allNamespace := false, true
+	for _, problems := range skippedProblems {
+		if len(problems) == 0 || hardBlocked(problems) {
+			continue
+		}
+		forceable = true
+		if !allNamespaceCollisions(problems) {
+			allNamespace = false
+			continue
+		}
+		for _, name := range conflictingNames(problems) {
+			if !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
+		}
+	}
+	switch {
+	case !forceable:
+		return ""
+	case allNamespace:
+		return fmt.Sprintf("try with --force to disable %s.", strings.Join(names, ", "))
+	default:
+		return "--force to override."
+	}
 }
 
 // discoverAllTargets finds every namespace, across every registered
@@ -265,11 +311,15 @@ func resolveExplicitTargets(dataDir string, reg manifest.Registry, names []strin
 // since a link-guard skip (two entries claiming one destination) is not
 // occupied by anything.
 func problemSummary(problems []engine.Problem) string {
+	if allNamespaceCollisions(problems) {
+		return "blocked by " + strings.Join(conflictingNames(problems), ", ")
+	}
+	problems = dedupeByPath(problems)
 	blocked := make([]ui.Blocked, len(problems))
 	allOccupied := true
 	for i, p := range problems {
-		blocked[i] = ui.Blocked{Dest: p.Entry.Dest, Detail: problemDetail(p)}
-		if p.Kind != engine.Occupied {
+		blocked[i] = ui.Blocked{Dest: p.Path, Detail: problemDetail(p)}
+		if p.Kind != engine.RealFileCollision {
 			allOccupied = false
 		}
 	}
@@ -288,13 +338,64 @@ func problemSummary(problems []engine.Problem) string {
 // rather than the raw sentence, which also carries a remedy paragraph meant
 // for pre-flight's own context, not a report line.
 func problemDetail(p engine.Problem) string {
-	if p.Kind == engine.Occupied {
+	if p.Kind == engine.NamespaceCollision {
+		return "blocked by " + p.Conflicting.Namespace
+	}
+	if p.Kind == engine.RealFileCollision {
 		return engine.OccupancyDetail(p.Message)
 	}
 	reason := strings.SplitN(p.Message, "\n", 2)[0]
 	reason = strings.TrimPrefix(reason, p.Entry.Dest)
 	reason = strings.TrimPrefix(reason, ":")
 	return strings.TrimSpace(reason)
+}
+
+// allNamespaceCollisions reports whether problems is non-empty and made only
+// of namespace collisions.
+func allNamespaceCollisions(problems []engine.Problem) bool {
+	for _, p := range problems {
+		if p.Kind != engine.NamespaceCollision {
+			return false
+		}
+	}
+	return len(problems) > 0
+}
+
+// conflictingNames lists the distinct conflicting namespaces named by
+// problems, in order.
+func conflictingNames(problems []engine.Problem) []string {
+	var names []string
+	seen := map[string]bool{}
+	for _, p := range problems {
+		if p.Kind != engine.NamespaceCollision || seen[p.Conflicting.Namespace] {
+			continue
+		}
+		seen[p.Conflicting.Namespace] = true
+		names = append(names, p.Conflicting.Namespace)
+	}
+	return names
+}
+
+// dedupeByPath keeps the first problem for each distinct blocking path, so
+// several entries behind one parent link count as one blocked destination.
+func dedupeByPath(problems []engine.Problem) []engine.Problem {
+	seen := map[string]bool{}
+	var out []engine.Problem
+	for _, p := range problems {
+		if seen[p.Path] {
+			continue
+		}
+		seen[p.Path] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+// collapsesToCount reports whether a skipped namespace's report line renders
+// as a count rather than inline detail: more than one distinct blocking path,
+// and not the all-namespace-collision form, which names its blockers.
+func collapsesToCount(problems []engine.Problem) bool {
+	return !allNamespaceCollisions(problems) && len(dedupeByPath(problems)) > 1
 }
 
 // namespaceInstalled reports whether a namespace is materialized on disk —
