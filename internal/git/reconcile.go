@@ -17,16 +17,9 @@ import (
 // and repo init's `git remote add` both name origin.
 const remoteName = "origin"
 
-// recoveryRefNamespace is where Reconcile parks the local commit a rebase
-// is about to move away from, so it stays reachable even if the rebase
-// stops with conflicts. Deleted once the rebase completes without needing
-// it. Per concept.md "Sync" and implementation-plan.md's Phase 9 scope,
-// parameterized here rather than hardcoded inline.
-const recoveryRefNamespace = "refs/dots/sync"
-
 // Side names which side of a sync conflict wins, from the user's point of
 // view (concept.md "Resolving a conflict"): never git's ours/theirs, whose
-// meaning inverts during a rebase.
+// meaning depends on which argument a merge was given first.
 type Side int
 
 const (
@@ -38,11 +31,10 @@ const (
 	SideRemote
 )
 
-// rebaseStrategyOption maps a Side to the `-X` merge strategy option that
-// picks it. Git's names invert during a rebase: the branch being rebased onto
-// (the remote) is "ours" and the commits being replayed (local) are "theirs",
-// so keeping local means `theirs` and keeping remote means `ours`.
-var rebaseStrategyOption = map[Side]string{
+// mergeStrategyOption maps a Side to the `-X` merge strategy option that
+// picks it. merge-tree is given the remote first, so the remote is "ours" and
+// local is "theirs": keeping local means `theirs`, keeping remote `ours`.
+var mergeStrategyOption = map[Side]string{
 	SideLocal:  "theirs",
 	SideRemote: "ours",
 }
@@ -51,18 +43,21 @@ var rebaseStrategyOption = map[Side]string{
 // that the merge has conflicts, as opposed to failing outright.
 const mergeTreeConflictExit = 1
 
-// Index stages of an unmerged path: 1 is the common base, 2 the side being
-// rebased onto, 3 the commit being replayed. A content conflict has all three;
+// mergeBaseNotAncestorExit is the exit status `git merge-base --is-ancestor`
+// uses for "not an ancestor", as opposed to failing outright.
+const mergeBaseNotAncestorExit = 1
+
+// Stages of a conflicted path: 1 is the common base, 2 the remote side (merge-
+// tree's first argument), 3 the local side. A content conflict has all three;
 // an add/add conflict has 2 and 3 but no base. A path missing stage 2 or 3 is
 // a modify/delete or rename conflict, which a side flag cannot settle.
 const (
-	stageBase   = 1
 	stageOurs   = 2
 	stageTheirs = 3
 )
 
 // ConflictError reports that local and remote changed the same paths and the
-// rebase could not settle them. Paths lists every conflicted path, sorted.
+// merge could not settle them. Paths lists every conflicted path, sorted.
 // Resolvable is true only when every conflict is a content conflict a side
 // flag can settle. Callers detect it with errors.As; the command layer does
 // the user-facing formatting.
@@ -103,30 +98,34 @@ var pushAuthFailureMarkers = []string{
 }
 
 // Reconcile commits every tracked change in dir, then — if dir has a
-// remote — fetches and rebases local commits onto it, per concept.md
-// "Sync": "commit everything, fetch, rebase onto the remote, push." It
-// never pushes and never reapplies dir's sparse-checkout cone: both are
-// the caller's job, in that order, once Reconcile returns cleanly — a
-// rebase can materialize paths outside the cone, and reapplying before the
-// push is what keeps that from being published as deletions (concept.md
-// "Sync": "Sync runs `git sparse-checkout reapply` after rebasing and
-// before pushing.").
+// remote — fetches and merges remote and local in memory, per concept.md
+// "Sync". It never pushes and never reapplies dir's sparse-checkout cone:
+// both are the caller's job, in that order, once Reconcile returns cleanly —
+// moving the working tree can materialize paths outside the cone, and
+// reapplying before the push is what keeps that from being published as
+// deletions (concept.md "Sync": "Sync runs `git sparse-checkout reapply`
+// after applying the result and before pushing.").
 //
 // RemoteConfigured reports whether dir has a remote at all: a repository
 // with none (the ordinary result of `repo init`) commits locally and has
 // nothing left to do, which is not an error.
 //
-// A plain rebase is always attempted first. On conflict it is aborted before
-// returning so dir's working tree is left clean — dotz cannot leave a rebase
-// in progress the way dredge does, because the conflicted path may be
-// symlinked live into the user's home (concept.md "Sync": "A stopped rebase
-// is aborted before sync returns."). Both states stay reachable through a
-// local recovery ref and the remote-tracking branch, and the failure is a
-// *ConflictError; the repository is not pushed, which is the caller's
-// responsibility to skip on error. When side names a winner and every
-// conflict is a content conflict, the rebase is rerun preferring that side
-// and the settled paths are reported in Overridden (concept.md "Resolving a
-// conflict"). side has no effect when the plain rebase succeeds.
+// Sync never writes an intermediate state into the working tree, because a
+// conflicted path may be symlinked live into the user's home and a watching
+// application can read it (concept.md "Sync"). After fetch:
+//   - only the remote moved: `reset --keep` straight to the remote head.
+//   - only local moved: nothing to apply.
+//   - diverged: `git merge-tree` merges both sides in memory. A conflict with
+//     no side named, or one a side flag cannot settle, is a *ConflictError and
+//     nothing moved. Otherwise the merged tree is committed on top of the
+//     remote as one commit and the working tree moves to it in one
+//     `reset --keep`. When side names a winner and every conflict is a
+//     content conflict, the merge is rerun preferring that side and the
+//     settled paths are reported in Overridden (concept.md "Resolving a
+//     conflict"). side has no effect when the plain merge is clean.
+//
+// The repository is not pushed on a conflict, which is the caller's
+// responsibility to skip on error.
 func Reconcile(dir string, side Side) (ReconcileResult, error) {
 	if isRebaseInProgress(dir) {
 		if out, err := gitCmd(dir, "rebase", "--abort"); err != nil {
@@ -179,93 +178,141 @@ func Reconcile(dir string, side Side) (ReconcileResult, error) {
 		return result, nil
 	}
 
-	recoveryRef := recoveryRefNamespace + "/" + localHead
-	if out, err := gitCmd(dir, "update-ref", recoveryRef, localHead); err != nil {
-		return result, fmt.Errorf("preserve local head %s in %s: %s", localHead, dir, strings.TrimSpace(out))
-	}
-
-	stopped, err := rebaseAborting(dir, remoteHead, branch)
+	localBehind, err := isAncestor(dir, localHead, remoteHead)
 	if err != nil {
 		return result, err
 	}
-	if stopped == nil {
-		_, _ = gitCmd(dir, "update-ref", "-d", recoveryRef)
+	if localBehind {
+		return result, resetKeep(dir, remoteHead)
+	}
+	remoteBehind, err := isAncestor(dir, remoteHead, localHead)
+	if err != nil {
+		return result, err
+	}
+	if remoteBehind {
 		return result, nil
 	}
 
-	paths, err := conflictedPaths(dir, remoteHead, localHead)
+	tree, overridden, err := mergeDiverged(dir, branch, remoteHead, localHead, side)
 	if err != nil {
 		return result, err
 	}
-	if len(paths) == 0 {
-		// merge-tree saw no conflict the rebase did; report what the rebase
-		// itself stopped on rather than an empty list.
-		paths = stopped.paths
-	}
-	conflict := &ConflictError{Dir: dir, Branch: branch, Paths: paths, Resolvable: stopped.resolvable}
-	if side == SideNone || !stopped.resolvable {
-		return result, conflict
-	}
+	result.Overridden = overridden
 
-	stopped, err = rebaseAborting(dir, remoteHead, branch, "-X", rebaseStrategyOption[side])
+	msg, err := commitMessage(dir, remoteHead, tree)
 	if err != nil {
 		return result, err
 	}
-	if stopped != nil {
-		return result, &ConflictError{Dir: dir, Branch: branch, Paths: stopped.paths, Resolvable: false}
+	out, err := gitCmd(dir, "commit-tree", tree, "-p", remoteHead, "-m", msg)
+	if err != nil {
+		return result, fmt.Errorf("commit merge in %s: %s", dir, strings.TrimSpace(out))
 	}
-	_, _ = gitCmd(dir, "update-ref", "-d", recoveryRef)
-	result.Overridden = paths
-	return result, nil
+	return result, resetKeep(dir, strings.TrimSpace(out))
 }
 
-// stoppedRebase describes a rebase that stopped on conflicts, captured while
-// it was still stopped and before it was aborted.
-type stoppedRebase struct {
-	// paths are the unmerged paths of the commit the rebase stopped on.
+// isAncestor reports whether ancestor is reachable from descendant in dir.
+// `merge-base --is-ancestor` exits 1 for "no"; any other failure is an error.
+func isAncestor(dir, ancestor, descendant string) (bool, error) {
+	out, err := gitCmd(dir, "merge-base", "--is-ancestor", ancestor, descendant)
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == mergeBaseNotAncestorExit {
+		return false, nil
+	}
+	return false, fmt.Errorf("compare %s and %s in %s: %s", ancestor, descendant, dir, strings.TrimSpace(out))
+}
+
+// resetKeep moves dir's branch and working tree to commit in one step,
+// writing only the files that differ and refusing to overwrite local edits.
+func resetKeep(dir, commit string) error {
+	if out, err := gitCmd(dir, "reset", "--keep", commit); err != nil {
+		return fmt.Errorf("apply sync result in %s: %s", dir, strings.TrimSpace(out))
+	}
+	return nil
+}
+
+// mergeDiverged merges localHead into remoteHead in memory and returns the
+// merged tree. On a conflict it returns a *ConflictError unless side names a
+// winner and every conflict is settleable, in which case it returns the
+// side-preferring tree and the paths that were settled.
+func mergeDiverged(dir, branch, remoteHead, localHead string, side Side) (tree string, overridden []string, err error) {
+	tree, conflicts, err := mergeTree(dir, remoteHead, localHead)
+	if err != nil {
+		return "", nil, err
+	}
+	if conflicts == nil {
+		return tree, nil, nil
+	}
+
+	conflict := &ConflictError{Dir: dir, Branch: branch, Paths: conflicts.paths, Resolvable: conflicts.resolvable}
+	if side == SideNone || !conflicts.resolvable {
+		return "", nil, conflict
+	}
+
+	tree, again, err := mergeTree(dir, remoteHead, localHead, "--strategy-option="+mergeStrategyOption[side])
+	if err != nil {
+		return "", nil, err
+	}
+	if again != nil {
+		return "", nil, &ConflictError{Dir: dir, Branch: branch, Paths: again.paths, Resolvable: false}
+	}
+	return tree, conflicts.paths, nil
+}
+
+// conflictSet describes the conflicts of an in-memory merge.
+type conflictSet struct {
+	// paths are the conflicted paths, sorted.
 	paths []string
-	// resolvable is true when every unmerged path is a content conflict.
+	// resolvable is true when every conflicted path is a content conflict.
 	resolvable bool
 }
 
-// rebaseAborting runs `git rebase [extra...] onto branch`. On success it
-// returns a nil *stoppedRebase. On conflict it reads the unmerged index, then
-// aborts so the tree is left clean, and returns what it read. A failure to
-// abort, or a failure that left no rebase in progress, is an error.
-func rebaseAborting(dir, onto, branch string, extra ...string) (*stoppedRebase, error) {
-	args := append([]string{"rebase"}, extra...)
-	args = append(args, onto, branch)
-	out, err := gitCmd(dir, args...)
+// mergeTree runs `git merge-tree --write-tree extra... remoteHead localHead`.
+// A clean merge returns the merged tree OID and nil conflicts. A conflicted
+// one returns the parsed conflicts; any other failure is an error. Remote is
+// the first argument, so it is "ours" to -X (see mergeStrategyOption).
+func mergeTree(dir, remoteHead, localHead string, extra ...string) (string, *conflictSet, error) {
+	args := append([]string{"merge-tree", "--write-tree"}, extra...)
+	args = append(args, remoteHead, localHead)
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
 	if err == nil {
-		return nil, nil
+		return strings.TrimSpace(string(out)), nil, nil
 	}
-	if !isRebaseInProgress(dir) {
-		return nil, fmt.Errorf("rebase failed in %s: %s", dir, strings.TrimSpace(out))
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return "", nil, fmt.Errorf("merge in memory in %s: %w", dir, err)
+	}
+	if exitErr.ExitCode() != mergeTreeConflictExit {
+		return "", nil, fmt.Errorf("merge in memory in %s: %w: %s", dir, err, strings.TrimSpace(string(exitErr.Stderr)))
 	}
 
-	stopped, err := readUnmerged(dir)
+	// The first line is the tree OID; conflict stage lines follow until the
+	// first blank line, after which come informational messages.
+	lines := strings.Split(string(out), "\n")
+	var stageLines []string
+	for _, line := range lines[1:] {
+		if line == "" {
+			break
+		}
+		stageLines = append(stageLines, line)
+	}
+	conflicts, err := parseUnmerged(stageLines)
 	if err != nil {
-		_, _ = gitCmd(dir, "rebase", "--abort")
-		return nil, err
+		return "", nil, fmt.Errorf("read conflicts in %s: %w", dir, err)
 	}
-	if abortOut, abortErr := gitCmd(dir, "rebase", "--abort"); abortErr != nil {
-		return nil, fmt.Errorf(
-			"sync stopped with conflicts in %s and failed to abort the rebase: %s",
-			dir, strings.TrimSpace(abortOut),
-		)
-	}
-	return stopped, nil
+	return "", conflicts, nil
 }
 
-// readUnmerged reads `git ls-files -u` in dir: every unmerged path, sorted,
-// and whether each one carries all three index stages.
-func readUnmerged(dir string) (*stoppedRebase, error) {
-	out, err := gitCmd(dir, "ls-files", "-u")
-	if err != nil {
-		return nil, fmt.Errorf("read unmerged paths in %s: %s", dir, strings.TrimSpace(out))
-	}
+// parseUnmerged parses `<mode> <oid> <stage>\t<path>` lines (the `ls-files -u`
+// format, also used by merge-tree) into the conflicted paths, sorted, and
+// whether each one carries both sides' stages.
+func parseUnmerged(lines []string) (*conflictSet, error) {
 	stages := map[string]map[int]bool{}
-	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+	for _, line := range lines {
 		if line == "" {
 			continue
 		}
@@ -275,57 +322,26 @@ func readUnmerged(dir string) (*stoppedRebase, error) {
 		}
 		fields := strings.Fields(meta)
 		if len(fields) != 3 {
-			return nil, fmt.Errorf("unexpected ls-files -u line in %s: %q", dir, line)
+			return nil, fmt.Errorf("unexpected conflict line %q", line)
 		}
 		stage, convErr := strconv.Atoi(fields[2])
 		if convErr != nil {
-			return nil, fmt.Errorf("unexpected ls-files -u stage in %s: %q", dir, line)
+			return nil, fmt.Errorf("unexpected conflict stage in %q", line)
 		}
 		if stages[path] == nil {
 			stages[path] = map[int]bool{}
 		}
 		stages[path][stage] = true
 	}
-	stopped := &stoppedRebase{resolvable: len(stages) > 0}
+	conflicts := &conflictSet{resolvable: len(stages) > 0}
 	for path, have := range stages {
-		stopped.paths = append(stopped.paths, path)
+		conflicts.paths = append(conflicts.paths, path)
 		if !have[stageOurs] || !have[stageTheirs] {
-			stopped.resolvable = false
+			conflicts.resolvable = false
 		}
 	}
-	sort.Strings(stopped.paths)
-	return stopped, nil
-}
-
-// conflictedPaths lists every path a merge of localHead into remoteHead
-// conflicts on, sorted. It uses merge-tree rather than the stopped rebase so
-// conflicts in later local commits are listed too, not only the first commit
-// the rebase stopped on. No conflict yields no paths and no error.
-func conflictedPaths(dir, remoteHead, localHead string) ([]string, error) {
-	cmd := exec.Command("git", "merge-tree", "--write-tree", "--name-only", "--no-messages", remoteHead, localHead)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if !errors.As(err, &exitErr) || exitErr.ExitCode() != mergeTreeConflictExit {
-			return nil, fmt.Errorf("list conflicted paths in %s: %w", dir, err)
-		}
-	} else {
-		return nil, nil
-	}
-
-	lines := strings.Split(string(out), "\n")
-	var paths []string
-	// The first line is the resulting tree's OID; paths follow until the
-	// first blank line.
-	for _, line := range lines[1:] {
-		if line == "" {
-			break
-		}
-		paths = append(paths, line)
-	}
-	sort.Strings(paths)
-	return paths, nil
+	sort.Strings(conflicts.paths)
+	return conflicts, nil
 }
 
 // ErrNotFastForwardable is returned by FastForward when dir's local branch
@@ -461,7 +477,7 @@ func commitStaged(dir string) error {
 		return nil
 	}
 
-	msg, err := commitMessage(dir)
+	msg, err := commitMessage(dir, "--cached")
 	if err != nil {
 		return err
 	}
@@ -471,10 +487,10 @@ func commitStaged(dir string) error {
 	return nil
 }
 
-// stagedNamespaceClasses classifies every namespace touched by dir's staged
-// changes as added, updated, or removed, per concept.md "Sync": "derived
-// from the namespaces the commit touches... no item-level detail, no
-// machine name." A namespace is the first path segment of every tracked
+// namespaceClasses classifies every namespace touched by the changes
+// `git diff diffArgs...` reports in dir as added, updated, or removed, per
+// concept.md "Sync": "derived from the namespaces the commit touches... no
+// item-level detail, no machine name." A namespace is the first path segment of every tracked
 // path in a repository (concept.md "Namespace"), so per-namespace
 // classification comes from the git status letters seen among its changed
 // paths: a namespace whose paths are all newly added reads as added, all
@@ -482,10 +498,10 @@ func commitStaged(dir string) error {
 // or a rename, which carries both an old and a new path — reads as
 // updated. Shared by commitMessage, which reports all three, and
 // StagedRemovals, which only needs the removed set.
-func stagedNamespaceClasses(dir string) (added, updated, removed []string, err error) {
-	out, err := gitCmd(dir, "diff", "--cached", "--name-status")
+func namespaceClasses(dir string, diffArgs ...string) (added, updated, removed []string, err error) {
+	out, err := gitCmd(dir, append([]string{"diff", "--name-status"}, diffArgs...)...)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("inspect staged changes in %s: %s", dir, strings.TrimSpace(out))
+		return nil, nil, nil, fmt.Errorf("inspect changes in %s: %s", dir, strings.TrimSpace(out))
 	}
 
 	statuses := map[string]map[byte]bool{}
@@ -530,8 +546,8 @@ func stagedNamespaceClasses(dir string) (added, updated, removed []string, err e
 // commitMessage summarizes dir's staged change by the namespaces it
 // touches, per concept.md "Sync": "derived from the namespaces the commit
 // touches... no item-level detail, no machine name."
-func commitMessage(dir string) (string, error) {
-	added, updated, removed, err := stagedNamespaceClasses(dir)
+func commitMessage(dir string, diffArgs ...string) (string, error) {
+	added, updated, removed, err := namespaceClasses(dir, diffArgs...)
 	if err != nil {
 		return "", err
 	}
@@ -558,6 +574,6 @@ func commitMessage(dir string) (string, error) {
 // committing to decide whether any of them needs RewindAndRecommit instead
 // of an ordinary commit.
 func StagedRemovals(dir string) ([]string, error) {
-	_, _, removed, err := stagedNamespaceClasses(dir)
+	_, _, removed, err := namespaceClasses(dir, "--cached")
 	return removed, err
 }

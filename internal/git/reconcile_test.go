@@ -158,8 +158,14 @@ func TestReconcile_SameFileConflictStopsBothStatesReachableAndNotPushed(t *testi
 		t.Fatalf("Push(first): %v", err)
 	}
 
+	preSyncHead := strings.TrimSpace(gitRun(t, second, "rev-parse", "HEAD"))
 	writeReconcileFile(t, second, "namespace-a/same", "from second")
-	_, err := Reconcile(second, SideNone)
+	info, err := os.Stat(filepath.Join(second, "namespace-a", "same"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mtimeBefore := info.ModTime()
+	_, err = Reconcile(second, SideNone)
 	if err == nil {
 		t.Fatal("expected Reconcile to report a conflict")
 	}
@@ -188,19 +194,26 @@ func TestReconcile_SameFileConflictStopsBothStatesReachableAndNotPushed(t *testi
 		t.Fatalf("expected no conflict markers, got:\n%s", content)
 	}
 
-	// Both states are reachable: local HEAD is still the offline commit,
-	// and the remote-tracking branch still names the pushed commit.
+	// Both states are reachable: local HEAD is still the offline commit on
+	// top of the pre-sync head, and the remote-tracking branch names the
+	// pushed commit.
 	head := strings.TrimSpace(gitRun(t, second, "rev-parse", "HEAD"))
 	if head == localHead {
-		t.Fatalf("HEAD moved to the local recovery target %s; expected the offline commit to remain HEAD", localHead)
+		t.Fatalf("HEAD moved to the remote commit %s; expected the offline commit to remain HEAD", localHead)
+	}
+	if parent := strings.TrimSpace(gitRun(t, second, "rev-parse", "HEAD~1")); parent != preSyncHead {
+		t.Fatalf("HEAD~1 = %s, want the pre-sync head %s", parent, preSyncHead)
 	}
 	remoteRef := strings.TrimSpace(gitRun(t, second, "rev-parse", "refs/remotes/origin/main"))
 	if remoteRef != localHead {
 		t.Fatalf("refs/remotes/origin/main = %s, want %s (unchanged, not pushed to)", remoteRef, localHead)
 	}
-	recoveryRef := strings.TrimSpace(gitRun(t, second, "rev-parse", recoveryRefNamespace+"/"+head))
-	if recoveryRef != head {
-		t.Fatalf("recovery ref = %s, want %s", recoveryRef, head)
+	after, statErr := os.Stat(filepath.Join(second, "namespace-a", "same"))
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if !after.ModTime().Equal(mtimeBefore) || string(content) != "from second" {
+		t.Fatalf("conflicted file was rewritten: mtime %v -> %v, content %q", mtimeBefore, after.ModTime(), content)
 	}
 
 	// Not pushed: the remote's own history has not moved.
@@ -370,11 +383,6 @@ func readFileString(t *testing.T, dir, rel string) string {
 	return string(b)
 }
 
-func recoveryRefs(t *testing.T, dir string) string {
-	t.Helper()
-	return strings.TrimSpace(gitRun(t, dir, "for-each-ref", recoveryRefNamespace))
-}
-
 func TestReconcile_SideLocalKeepsLocalLineAndEverythingElseFromRemote(t *testing.T) {
 	_, second := conflictSetup(t)
 
@@ -392,9 +400,6 @@ func TestReconcile_SideLocalKeepsLocalLineAndEverythingElseFromRemote(t *testing
 		t.Fatalf("b = %q", got)
 	}
 	assertSettledCleanly(t, second)
-	if refs := recoveryRefs(t, second); refs != "" {
-		t.Fatalf("expected the recovery ref deleted, got %q", refs)
-	}
 }
 
 func TestReconcile_SideRemoteKeepsRemoteLine(t *testing.T) {
@@ -414,9 +419,6 @@ func TestReconcile_SideRemoteKeepsRemoteLine(t *testing.T) {
 		t.Fatalf("b = %q", got)
 	}
 	assertSettledCleanly(t, second)
-	if refs := recoveryRefs(t, second); refs != "" {
-		t.Fatalf("expected the recovery ref deleted, got %q", refs)
-	}
 }
 
 func TestReconcile_TwoLocalCommitsConflictingOnDifferentFilesListsBoth(t *testing.T) {
@@ -562,5 +564,93 @@ func TestReconcile_SideWithoutConflictOverridesNothing(t *testing.T) {
 	}
 	if len(result.Overridden) != 0 {
 		t.Fatalf("Overridden = %v, want empty", result.Overridden)
+	}
+}
+
+func TestReconcile_DivergedSyncDoesNotRewriteLocallyChangedFile(t *testing.T) {
+	_, first, second := newReconcileClones(t)
+	writeReconcileFile(t, first, "remote-only", "remote")
+	gitRun(t, first, "add", "-A")
+	gitRun(t, first, "commit", "-m", "remote")
+	gitRun(t, first, "push", "origin", "main")
+
+	writeReconcileFile(t, second, "local-only", "local")
+	info, err := os.Stat(filepath.Join(second, "local-only"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reconcile(second, SideNone); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	after, err := os.Stat(filepath.Join(second, "local-only"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(info.ModTime()) {
+		t.Fatalf("local-only mtime changed: %v -> %v", info.ModTime(), after.ModTime())
+	}
+	if got := readFileString(t, second, "remote-only"); got != "remote" {
+		t.Fatalf("remote-only = %q", got)
+	}
+}
+
+func TestReconcile_TwoLocalCommitsAndDivergedRemoteEndAsOneCommitOnRemote(t *testing.T) {
+	_, first, second := newReconcileClones(t)
+	writeReconcileFile(t, first, "remote-only", "remote")
+	gitRun(t, first, "add", "-A")
+	gitRun(t, first, "commit", "-m", "remote")
+	gitRun(t, first, "push", "origin", "main")
+	remoteHead := strings.TrimSpace(gitRun(t, first, "rev-parse", "HEAD"))
+
+	writeReconcileFile(t, second, "l1", "1")
+	gitRun(t, second, "add", "-A")
+	gitRun(t, second, "commit", "-m", "local 1")
+	writeReconcileFile(t, second, "l2", "2")
+	gitRun(t, second, "add", "-A")
+	gitRun(t, second, "commit", "-m", "local 2")
+
+	if _, err := Reconcile(second, SideNone); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if parent := strings.TrimSpace(gitRun(t, second, "rev-parse", "HEAD~1")); parent != remoteHead {
+		t.Fatalf("HEAD~1 = %s, want remote head %s", parent, remoteHead)
+	}
+	for _, f := range []string{"l1", "l2", "remote-only"} {
+		readFileString(t, second, f)
+	}
+	assertSettledCleanly(t, second)
+}
+
+func TestReconcile_OnlyRemoteMovedFastForwards(t *testing.T) {
+	_, first, second := newReconcileClones(t)
+	writeReconcileFile(t, first, "new", "x")
+	gitRun(t, first, "add", "-A")
+	gitRun(t, first, "commit", "-m", "remote")
+	gitRun(t, first, "push", "origin", "main")
+	remoteHead := strings.TrimSpace(gitRun(t, first, "rev-parse", "HEAD"))
+
+	if _, err := Reconcile(second, SideNone); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if head := strings.TrimSpace(gitRun(t, second, "rev-parse", "HEAD")); head != remoteHead {
+		t.Fatalf("HEAD = %s, want %s", head, remoteHead)
+	}
+	if got := readFileString(t, second, "new"); got != "x" {
+		t.Fatalf("new = %q", got)
+	}
+}
+
+func TestReconcile_OnlyLocalMovedLeavesHeadUnchanged(t *testing.T) {
+	_, _, second := newReconcileClones(t)
+	writeReconcileFile(t, second, "new", "x")
+	gitRun(t, second, "add", "-A")
+	gitRun(t, second, "commit", "-m", "local")
+	localHead := strings.TrimSpace(gitRun(t, second, "rev-parse", "HEAD"))
+
+	if _, err := Reconcile(second, SideNone); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if head := strings.TrimSpace(gitRun(t, second, "rev-parse", "HEAD")); head != localHead {
+		t.Fatalf("HEAD = %s, want %s", head, localHead)
 	}
 }
