@@ -5,12 +5,16 @@ package shared
 // Flags carries the global flags extracted by the router from anywhere in
 // os.Args. Command handlers read these instead of re-parsing argv.
 type Flags struct {
-	Repo      string
-	All       bool
-	Force     bool
-	Purge     bool
-	Yes       bool
-	Discard   bool
+	Repo    string
+	All     bool
+	Force   bool
+	Purge   bool
+	Yes     bool
+	Discard bool
+	// Local and Remote pick the winning side of a sync conflict, per
+	// concept.md "Resolving a conflict".
+	Local     bool
+	Remote    bool
 	Debug     bool
 	Bootstrap bool
 	Install   bool

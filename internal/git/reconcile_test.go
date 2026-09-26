@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,7 +63,8 @@ func TestReconcile_NoRemoteCommitsLocallyAndReportsNoRemote(t *testing.T) {
 	configureReconcileRepo(t, dir)
 	writeReconcileFile(t, dir, "namespace-a/file", "content")
 
-	hasRemote, err := Reconcile(dir)
+	result, err := Reconcile(dir, SideNone)
+	hasRemote := result.RemoteConfigured
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -84,23 +86,23 @@ func TestReconcile_DivergingDifferentFilesSyncsBothDirections(t *testing.T) {
 	_, first, second := newReconcileClones(t)
 
 	writeReconcileFile(t, first, "namespace-a/file", "from first")
-	if _, err := Reconcile(first); err != nil {
-		t.Fatalf("Reconcile(first): %v", err)
+	if _, err := Reconcile(first, SideNone); err != nil {
+		t.Fatalf("Reconcile(first, SideNone): %v", err)
 	}
 	if err := Push(first); err != nil {
 		t.Fatalf("Push(first): %v", err)
 	}
 
 	writeReconcileFile(t, second, "namespace-b/file", "from second")
-	if _, err := Reconcile(second); err != nil {
-		t.Fatalf("Reconcile(second): %v", err)
+	if _, err := Reconcile(second, SideNone); err != nil {
+		t.Fatalf("Reconcile(second, SideNone): %v", err)
 	}
 	if err := Push(second); err != nil {
 		t.Fatalf("Push(second): %v", err)
 	}
 
-	if _, err := Reconcile(first); err != nil {
-		t.Fatalf("Reconcile(first) second pass: %v", err)
+	if _, err := Reconcile(first, SideNone); err != nil {
+		t.Fatalf("Reconcile(first, SideNone) second pass: %v", err)
 	}
 
 	gotA, err := os.ReadFile(filepath.Join(first, "namespace-a", "file"))
@@ -125,7 +127,8 @@ func TestReconcile_FastPathWhenLocalEqualsRemote(t *testing.T) {
 	_, first, second := newReconcileClones(t)
 	_ = second
 
-	hasRemote, err := Reconcile(first)
+	result, err := Reconcile(first, SideNone)
+	hasRemote := result.RemoteConfigured
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -138,9 +141,17 @@ func TestReconcile_SameFileConflictStopsBothStatesReachableAndNotPushed(t *testi
 	remote, first, second := newReconcileClones(t)
 	_ = remote
 
+	// The file exists on both sides first: an add/add conflict has no base
+	// stage and is not a content conflict a side flag can settle.
+	writeReconcileFile(t, first, "namespace-a/same", "base")
+	gitRun(t, first, "add", "-A")
+	gitRun(t, first, "commit", "-m", "base")
+	gitRun(t, first, "push", "origin", "main")
+	gitRun(t, second, "pull", "--rebase", "origin", "main")
+
 	writeReconcileFile(t, first, "namespace-a/same", "from first")
-	if _, err := Reconcile(first); err != nil {
-		t.Fatalf("Reconcile(first): %v", err)
+	if _, err := Reconcile(first, SideNone); err != nil {
+		t.Fatalf("Reconcile(first, SideNone): %v", err)
 	}
 	localHead := strings.TrimSpace(gitRun(t, first, "rev-parse", "HEAD"))
 	if err := Push(first); err != nil {
@@ -148,12 +159,16 @@ func TestReconcile_SameFileConflictStopsBothStatesReachableAndNotPushed(t *testi
 	}
 
 	writeReconcileFile(t, second, "namespace-a/same", "from second")
-	_, err := Reconcile(second)
+	_, err := Reconcile(second, SideNone)
 	if err == nil {
 		t.Fatal("expected Reconcile to report a conflict")
 	}
-	if !strings.Contains(err.Error(), "both states are recoverable") {
-		t.Fatalf("expected a recoverable-conflict message, got: %v", err)
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected a *ConflictError, got: %v", err)
+	}
+	if !conflict.Resolvable || len(conflict.Paths) != 1 || conflict.Paths[0] != "namespace-a/same" {
+		t.Fatalf("conflict = %+v, want resolvable with Paths [namespace-a/same]", conflict)
 	}
 
 	// Working tree left clean, no rebase in progress, no conflict markers
@@ -199,8 +214,8 @@ func TestReconcile_InterruptedRebaseIsAbortedAndRecoveredOnNextRun(t *testing.T)
 	_, first, second := newReconcileClones(t)
 
 	writeReconcileFile(t, first, "namespace-a/same", "from first")
-	if _, err := Reconcile(first); err != nil {
-		t.Fatalf("Reconcile(first): %v", err)
+	if _, err := Reconcile(first, SideNone); err != nil {
+		t.Fatalf("Reconcile(first, SideNone): %v", err)
 	}
 	if err := Push(first); err != nil {
 		t.Fatalf("Push(first): %v", err)
@@ -222,9 +237,10 @@ func TestReconcile_InterruptedRebaseIsAbortedAndRecoveredOnNextRun(t *testing.T)
 	// than silently pick a side — "recovered" means the stale rebase is
 	// aborted first, leaving a clean tree with both states reachable,
 	// not that the conflict resolves itself.
-	_, err := Reconcile(second)
-	if err == nil || !strings.Contains(err.Error(), "both states are recoverable") {
-		t.Fatalf("expected the same recoverable-conflict report, got: %v", err)
+	_, err := Reconcile(second, SideNone)
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected the same conflict report, got: %v", err)
 	}
 	if isRebaseInProgress(second) {
 		t.Fatal("expected no rebase left in progress after recovery")
@@ -239,8 +255,8 @@ func TestReconcile_AbortsStaleRebaseBeforeReconciling(t *testing.T) {
 	_, first, second := newReconcileClones(t)
 
 	writeReconcileFile(t, first, "namespace-a/same", "from first")
-	if _, err := Reconcile(first); err != nil {
-		t.Fatalf("Reconcile(first): %v", err)
+	if _, err := Reconcile(first, SideNone); err != nil {
+		t.Fatalf("Reconcile(first, SideNone): %v", err)
 	}
 	if err := Push(first); err != nil {
 		t.Fatalf("Push(first): %v", err)
@@ -259,7 +275,7 @@ func TestReconcile_AbortsStaleRebaseBeforeReconciling(t *testing.T) {
 	// The stale rebase recurs into the same genuine conflict, so Reconcile
 	// reports it again — but the abort-then-commit ordering must still
 	// have committed the unrelated uncommitted change first.
-	if _, err := Reconcile(second); err == nil {
+	if _, err := Reconcile(second, SideNone); err == nil {
 		t.Fatal("expected the same conflict to resurface after the stale rebase is aborted")
 	}
 	out := gitRun(t, second, "log", "--all", "--pretty=%H", "-1", "--", "namespace-c/new")
@@ -276,7 +292,7 @@ func TestReconcile_CommitMessageClassifiesNamespaces(t *testing.T) {
 	_, first, _ := newReconcileClones(t)
 
 	writeReconcileFile(t, first, "namespace-added/file", "new")
-	if _, err := Reconcile(first); err != nil {
+	if _, err := Reconcile(first, SideNone); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	msg := strings.TrimSpace(gitRun(t, first, "log", "-1", "--pretty=%s"))
@@ -287,7 +303,7 @@ func TestReconcile_CommitMessageClassifiesNamespaces(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(first, "namespace-added", "file"), []byte("changed"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Reconcile(first); err != nil {
+	if _, err := Reconcile(first, SideNone); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	msg = strings.TrimSpace(gitRun(t, first, "log", "-1", "--pretty=%s"))
@@ -301,11 +317,193 @@ func TestReconcile_CommitMessageClassifiesNamespaces(t *testing.T) {
 	if err := os.Remove(filepath.Join(first, "namespace-added")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Reconcile(first); err != nil {
+	if _, err := Reconcile(first, SideNone); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	msg = strings.TrimSpace(gitRun(t, first, "log", "-1", "--pretty=%s"))
 	if !strings.Contains(msg, "del namespace-added") {
 		t.Fatalf("commit message = %q, want it to classify namespace-added as removed", msg)
+	}
+}
+
+// conflictSetup builds the shared fixture for side-flag tests: a file "a" of
+// three lines and a file "b" seeded on both clones. first then changes a's
+// line 1 and pushes; b is added on first; second's local commit changes a's
+// line 1 differently. Returns second, whose local edit is committed by the
+// Reconcile under test.
+func conflictSetup(t *testing.T) (first, second string) {
+	t.Helper()
+	_, first, second = newReconcileClones(t)
+	writeReconcileFile(t, first, "a", "one\ntwo\nthree\n")
+	gitRun(t, first, "add", "-A")
+	gitRun(t, first, "commit", "-m", "add a")
+	gitRun(t, first, "push", "origin", "main")
+	gitRun(t, second, "pull", "--rebase", "origin", "main")
+
+	// remote: edits line 1 (conflicting) and line 3 (not), and adds b.
+	writeReconcileFile(t, first, "a", "remote one\ntwo\nremote three\n")
+	writeReconcileFile(t, first, "b", "remote b")
+	gitRun(t, first, "add", "-A")
+	gitRun(t, first, "commit", "-m", "remote edits")
+	gitRun(t, first, "push", "origin", "main")
+
+	writeReconcileFile(t, second, "a", "local one\ntwo\nthree\n")
+	return first, second
+}
+
+func assertSettledCleanly(t *testing.T, dir string) {
+	t.Helper()
+	if isRebaseInProgress(dir) {
+		t.Fatal("expected no rebase in progress")
+	}
+	if status := strings.TrimSpace(gitRun(t, dir, "status", "--porcelain")); status != "" {
+		t.Fatalf("expected a clean tree, got:\n%s", status)
+	}
+}
+
+func readFileString(t *testing.T, dir, rel string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func recoveryRefs(t *testing.T, dir string) string {
+	t.Helper()
+	return strings.TrimSpace(gitRun(t, dir, "for-each-ref", recoveryRefNamespace))
+}
+
+func TestReconcile_SideLocalKeepsLocalLineAndEverythingElseFromRemote(t *testing.T) {
+	_, second := conflictSetup(t)
+
+	result, err := Reconcile(second, SideLocal)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(result.Overridden) != 1 || result.Overridden[0] != "a" {
+		t.Fatalf("Overridden = %v, want [a]", result.Overridden)
+	}
+	if got := readFileString(t, second, "a"); got != "local one\ntwo\nremote three\n" {
+		t.Fatalf("a = %q, want local's line with remote's other line", got)
+	}
+	if got := readFileString(t, second, "b"); got != "remote b" {
+		t.Fatalf("b = %q", got)
+	}
+	assertSettledCleanly(t, second)
+	if refs := recoveryRefs(t, second); refs != "" {
+		t.Fatalf("expected the recovery ref deleted, got %q", refs)
+	}
+}
+
+func TestReconcile_SideRemoteKeepsRemoteLine(t *testing.T) {
+	_, second := conflictSetup(t)
+
+	result, err := Reconcile(second, SideRemote)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(result.Overridden) != 1 || result.Overridden[0] != "a" {
+		t.Fatalf("Overridden = %v, want [a]", result.Overridden)
+	}
+	if got := readFileString(t, second, "a"); got != "remote one\ntwo\nremote three\n" {
+		t.Fatalf("a = %q, want remote's lines", got)
+	}
+	if got := readFileString(t, second, "b"); got != "remote b" {
+		t.Fatalf("b = %q", got)
+	}
+	assertSettledCleanly(t, second)
+	if refs := recoveryRefs(t, second); refs != "" {
+		t.Fatalf("expected the recovery ref deleted, got %q", refs)
+	}
+}
+
+func TestReconcile_TwoLocalCommitsConflictingOnDifferentFilesListsBoth(t *testing.T) {
+	_, first, second := newReconcileClones(t)
+	writeReconcileFile(t, first, "a", "a base")
+	writeReconcileFile(t, first, "b", "b base")
+	gitRun(t, first, "add", "-A")
+	gitRun(t, first, "commit", "-m", "base")
+	gitRun(t, first, "push", "origin", "main")
+	gitRun(t, second, "pull", "--rebase", "origin", "main")
+
+	writeReconcileFile(t, first, "a", "a remote")
+	writeReconcileFile(t, first, "b", "b remote")
+	gitRun(t, first, "add", "-A")
+	gitRun(t, first, "commit", "-m", "remote")
+	gitRun(t, first, "push", "origin", "main")
+
+	writeReconcileFile(t, second, "a", "a local")
+	gitRun(t, second, "add", "-A")
+	gitRun(t, second, "commit", "-m", "local a")
+	writeReconcileFile(t, second, "b", "b local")
+	gitRun(t, second, "add", "-A")
+	gitRun(t, second, "commit", "-m", "local b")
+
+	_, err := Reconcile(second, SideNone)
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected a *ConflictError, got %v", err)
+	}
+	if strings.Join(conflict.Paths, ",") != "a,b" {
+		t.Fatalf("Paths = %v, want [a b]", conflict.Paths)
+	}
+
+	// Settling with a side must settle both.
+	result, err := Reconcile(second, SideLocal)
+	if err != nil {
+		t.Fatalf("Reconcile(SideLocal): %v", err)
+	}
+	if strings.Join(result.Overridden, ",") != "a,b" {
+		t.Fatalf("Overridden = %v, want [a b]", result.Overridden)
+	}
+	if readFileString(t, second, "a") != "a local" || readFileString(t, second, "b") != "b local" {
+		t.Fatal("expected local content to win in both files")
+	}
+}
+
+func TestReconcile_ModifyDeleteConflictIsNotResolvableBySide(t *testing.T) {
+	_, first, second := newReconcileClones(t)
+	writeReconcileFile(t, first, "a", "base")
+	gitRun(t, first, "add", "-A")
+	gitRun(t, first, "commit", "-m", "base")
+	gitRun(t, first, "push", "origin", "main")
+	gitRun(t, second, "pull", "--rebase", "origin", "main")
+
+	gitRun(t, first, "rm", "a")
+	gitRun(t, first, "commit", "-m", "remote deletes a")
+	gitRun(t, first, "push", "origin", "main")
+
+	writeReconcileFile(t, second, "a", "local edit")
+
+	_, err := Reconcile(second, SideLocal)
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected a *ConflictError, got %v", err)
+	}
+	if conflict.Resolvable {
+		t.Fatal("expected Resolvable=false for a modify/delete conflict")
+	}
+	if len(conflict.Paths) != 1 || conflict.Paths[0] != "a" {
+		t.Fatalf("Paths = %v, want [a]", conflict.Paths)
+	}
+	assertSettledCleanly(t, second)
+}
+
+func TestReconcile_SideWithoutConflictOverridesNothing(t *testing.T) {
+	_, first, second := newReconcileClones(t)
+	writeReconcileFile(t, first, "x", "from first")
+	gitRun(t, first, "add", "-A")
+	gitRun(t, first, "commit", "-m", "x")
+	gitRun(t, first, "push", "origin", "main")
+	writeReconcileFile(t, second, "y", "from second")
+
+	result, err := Reconcile(second, SideLocal)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(result.Overridden) != 0 {
+		t.Fatalf("Overridden = %v, want empty", result.Overridden)
 	}
 }

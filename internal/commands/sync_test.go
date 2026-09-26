@@ -731,3 +731,103 @@ func TestHandleSync_PushAuthFailureSetsReadOnlyFlag(t *testing.T) {
 		t.Fatal("expected the push authentication failure to flag repo read-only")
 	}
 }
+
+// conflictedRepo registers a repository whose "ns/file" was edited on the
+// same line by a peer (pushed) and locally (uncommitted), so a plain sync
+// stops on a content conflict. Returns the repo dir and remote.
+func conflictedRepo(t *testing.T, dataDir, scratchRoot string) (repoDir, remote string) {
+	t.Helper()
+	repoDir, remote = newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"ns"})
+
+	peer := filepath.Join(scratchRoot, "peer")
+	syncGitRun(t, scratchRoot, "clone", remote, peer)
+	syncGitRun(t, peer, "config", "user.name", "peer")
+	syncGitRun(t, peer, "config", "user.email", "peer@example.invalid")
+	if err := os.WriteFile(filepath.Join(peer, "ns", "file"), []byte("from peer"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	syncGitRun(t, peer, "add", "-A")
+	syncGitRun(t, peer, "commit", "-m", "peer edit")
+	syncGitRun(t, peer, "push", "origin", "main")
+
+	if err := os.WriteFile(filepath.Join(repoDir, "ns", "file"), []byte("from local"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return repoDir, remote
+}
+
+func TestHandleSync_SideFlagWithoutRepoArgErrorsAndTouchesNothing(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, _ := conflictedRepo(t, dataDir, scratchRoot)
+	headBefore := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
+
+	err := HandleSync(nil, shared.Flags{Local: true})
+	if err == nil || !strings.Contains(err.Error(), "require naming the repository") {
+		t.Fatalf("expected a naming-the-repository error, got %v", err)
+	}
+	if head := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD")); head != headBefore {
+		t.Fatal("expected nothing to be committed")
+	}
+	if status := strings.TrimSpace(syncGitRun(t, repoDir, "status", "--porcelain")); status == "" {
+		t.Fatal("expected the local edit to remain uncommitted")
+	}
+}
+
+func TestHandleSync_LocalWithRemoteErrors(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	conflictedRepo(t, dataDir, scratchRoot)
+
+	err := HandleSync([]string{"repo"}, shared.Flags{Local: true, Remote: true})
+	if err == nil || !strings.Contains(err.Error(), "contradictory") {
+		t.Fatalf("expected a contradictory-flags error, got %v", err)
+	}
+}
+
+func TestHandleSync_SideFlagOnReadOnlyRepoErrors(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, _ := conflictedRepo(t, dataDir, scratchRoot)
+	markReadOnly(t, "repo")
+
+	err := HandleSync([]string{"repo"}, shared.Flags{Local: true})
+	if err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("expected a read-only error, got %v", err)
+	}
+	content, readErr := os.ReadFile(filepath.Join(repoDir, "ns", "file"))
+	if readErr != nil || string(content) != "from local" {
+		t.Fatalf("expected the local edit untouched, got %q, %v", content, readErr)
+	}
+}
+
+func TestHandleSync_ConflictSummaryNamesPathAndBothRunLinesThenLocalResolves(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := conflictedRepo(t, dataDir, scratchRoot)
+
+	var err error
+	stdout, _ := captureStdoutStderr(t, func() {
+		err = HandleSync([]string{"repo"}, shared.Flags{})
+	})
+	if !errors.Is(err, ErrSomeSkipped) {
+		t.Fatalf("expected ErrSomeSkipped, got %v", err)
+	}
+	for _, want := range []string{"conflict", "ns/file", "dots sync repo --local", "dots sync repo --remote"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("expected the summary to contain %q, got:\n%s", want, stdout)
+		}
+	}
+
+	stdout, _ = captureStdoutStderr(t, func() {
+		err = HandleSync([]string{"repo"}, shared.Flags{Local: true})
+	})
+	if err != nil {
+		t.Fatalf("HandleSync --local: %v", err)
+	}
+	if !strings.Contains(stdout, "kept local: ns/file") {
+		t.Fatalf("expected the summary to report kept local: ns/file, got:\n%s", stdout)
+	}
+	if got := strings.TrimSpace(syncGitRun(t, remote, "show", "main:ns/file")); got != "from local" {
+		t.Fatalf("remote ns/file = %q, want the local content pushed", got)
+	}
+	if status := strings.TrimSpace(syncGitRun(t, repoDir, "status", "--porcelain")); status != "" {
+		t.Fatalf("expected a clean tree, got:\n%s", status)
+	}
+}

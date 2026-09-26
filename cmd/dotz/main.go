@@ -155,6 +155,10 @@ func extractGlobalFlags(args []string) ([]string, shared.Flags, error) {
 			flags.Yes = true
 		case arg == "--discard":
 			flags.Discard = true
+		case arg == "--local":
+			flags.Local = true
+		case arg == "--remote":
+			flags.Remote = true
 		case arg == "--debug":
 			flags.Debug = true
 		case arg == "--bootstrap":

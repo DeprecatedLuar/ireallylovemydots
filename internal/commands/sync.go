@@ -29,6 +29,31 @@ const dirtyReadOnlyTip = "dots cp <repo>/<namespace> <yourrepo>/<namespace>, the
 // were never fetched against, so both facts are named.
 const readOnlySkippedDetail = "skipped: read-only with local edits sync cannot fast-forward over; left unfetched, possibly behind the remote"
 
+// sideNeedsRepoMessage is the error for --local/--remote given with no
+// repository named.
+const sideNeedsRepoMessage = "--local/--remote require naming the repository: dots sync <repo> --local"
+
+// sideNames spells each git.Side the way the summary reports it.
+var sideNames = map[git.Side]string{
+	git.SideLocal:  "local",
+	git.SideRemote: "remote",
+}
+
+// conflictRunLines and conflictManualLines are the summary's guidance under
+// a conflicted repository, per concept.md "Resolving a conflict". Their
+// indexed verbs are: 1 repository name, 2 clone directory, 3 remote name,
+// 4 branch.
+const (
+	conflictRemoteName = "origin"
+	conflictRunLines   = "  run: dots sync %[1]s --local   (keep this machine)\n" +
+		"       dots sync %[1]s --remote  (keep remote)"
+	conflictManualLines = "  cannot be auto-resolved (edited on one side, deleted or renamed on the other):\n" +
+		"    cd %[2]s && git rebase %[3]s/%[4]s\n" +
+		"    resolve, then: dots sync %[1]s"
+	conflictPathIndent = "    "
+	conflictLabel      = "conflict"
+)
+
 // syncResult is one repository's sync outcome, held until every named
 // repository has been attempted so the summary prints once at the end,
 // per concept.md "Sync": "Each repository prints a header and streams its
@@ -71,6 +96,11 @@ func HandleSync(args []string, flags shared.Flags) error {
 		return err
 	}
 
+	side, err := resolveConflictSide(targets, args, flags)
+	if err != nil {
+		return err
+	}
+
 	discard, err := resolveDirtyReadOnly(dataDir, targets, flags)
 	if err != nil {
 		return err
@@ -79,7 +109,7 @@ func HandleSync(args []string, flags shared.Flags) error {
 	results := make([]syncResult, 0, len(targets))
 	for _, r := range targets {
 		fmt.Printf("\n%s\n", r.Name)
-		results = append(results, syncRepo(dataDir, r.Name, flags, discard))
+		results = append(results, syncRepo(dataDir, r.Name, flags, discard, side))
 	}
 
 	printSyncSummary(results)
@@ -121,7 +151,7 @@ func syncTargets(repos []manifest.Repo, args []string) ([]manifest.Repo, error) 
 // cleanly, per concept.md: "A repository with no remote... commits
 // locally, reports that it has nothing to fetch or push, and is not a
 // failure."
-func syncRepo(dataDir, name string, flags shared.Flags, discard map[string]bool) syncResult {
+func syncRepo(dataDir, name string, flags shared.Flags, discard map[string]bool, side git.Side) syncResult {
 	repoDir := filepath.Join(dataDir, name)
 
 	access, err := state.ReadAccess()
@@ -136,11 +166,11 @@ func syncRepo(dataDir, name string, flags shared.Flags, discard map[string]bool)
 		return syncResult{name: name, err: err}
 	}
 
-	hasRemote, err := git.Reconcile(repoDir)
+	reconciled, err := git.Reconcile(repoDir, side)
 	if err != nil {
 		return syncResult{name: name, err: err}
 	}
-	if !hasRemote {
+	if !reconciled.RemoteConfigured {
 		return syncResult{name: name}
 	}
 
@@ -154,7 +184,48 @@ func syncRepo(dataDir, name string, flags shared.Flags, discard map[string]bool)
 		return syncResult{name: name, err: err}
 	}
 	recordReadOnly(name, false)
-	return syncResult{name: name}
+	return syncResult{name: name, detail: overriddenDetail(side, reconciled.Overridden)}
+}
+
+// overriddenDetail is the summary detail for a conflict a side flag settled,
+// per concept.md "Resolving a conflict": "an override is never silent."
+func overriddenDetail(side git.Side, overridden []string) string {
+	if len(overridden) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("kept %s: %s", sideNames[side], strings.Join(overridden, ", "))
+}
+
+// resolveConflictSide validates --local/--remote and maps them to a
+// git.Side, per concept.md "Resolving a conflict". Nothing syncs on error:
+// both flags together are contradictory, a bare `dots sync --local` would
+// override conflicts in every repository at once, and read-only repositories
+// never rebase so have no conflict to settle.
+func resolveConflictSide(targets []manifest.Repo, args []string, flags shared.Flags) (git.Side, error) {
+	if !flags.Local && !flags.Remote {
+		return git.SideNone, nil
+	}
+	if flags.Local && flags.Remote {
+		return git.SideNone, errors.New("--local and --remote are contradictory; pick one")
+	}
+	if len(args) == 0 {
+		return git.SideNone, errors.New(sideNeedsRepoMessage)
+	}
+
+	access, err := state.ReadAccess()
+	if err != nil {
+		return git.SideNone, err
+	}
+	for _, r := range targets {
+		if access.IsReadOnly(r.Name) {
+			return git.SideNone, fmt.Errorf("%q is read-only on this machine and never rebases; --local/--remote do not apply", r.Name)
+		}
+	}
+
+	if flags.Local {
+		return git.SideLocal, nil
+	}
+	return git.SideRemote, nil
 }
 
 // syncReadOnlyRepo runs the fetch-only sync path for a repository this
@@ -363,6 +434,11 @@ func rewindRemovedNamespaces(repoDir, repoName string, flags shared.Flags) error
 func printSyncSummary(results []syncResult) {
 	lines := make([]string, 0, len(results))
 	for _, res := range results {
+		var conflict *git.ConflictError
+		if errors.As(res.err, &conflict) {
+			lines = append(lines, ui.Operation(ui.MarkerProblem, res.name, conflictDetail(res.name, conflict)))
+			continue
+		}
 		if res.err != nil {
 			lines = append(lines, ui.Operation(ui.MarkerProblem, res.name, res.err.Error()))
 			continue
@@ -370,4 +446,21 @@ func printSyncSummary(results []syncResult) {
 		lines = append(lines, ui.Operation(ui.MarkerEnabled, res.name, res.detail))
 	}
 	fmt.Print(ui.Report(lines, ""))
+}
+
+// conflictDetail renders a conflicted repository's summary detail: the label,
+// every conflicted path one per line, then either the exact commands that
+// resolve it or, when a side flag cannot settle it, the manual steps.
+func conflictDetail(name string, c *git.ConflictError) string {
+	var b strings.Builder
+	b.WriteString(conflictLabel)
+	for _, p := range c.Paths {
+		b.WriteString("\n" + conflictPathIndent + p)
+	}
+	if c.Resolvable {
+		fmt.Fprintf(&b, "\n"+conflictRunLines, name)
+	} else {
+		fmt.Fprintf(&b, "\n"+conflictManualLines, name, c.Dir, conflictRemoteName, c.Branch)
+	}
+	return b.String()
 }

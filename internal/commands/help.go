@@ -44,6 +44,8 @@ func HandleHelp(args []string) error {
 			gohelp.Item("--purge", "Trash instead of restore on removal"),
 			gohelp.Item("--yes", "Skip confirmation prompts"),
 			gohelp.Item("--discard", "Trash a dirty read-only repository's local edits during sync"),
+			gohelp.Item("--local", "On a sync conflict, keep this machine's side (needs a repository name)"),
+			gohelp.Item("--remote", "On a sync conflict, keep the remote's side (needs a repository name)"),
 			gohelp.Item("--debug", "Verbose diagnostic output"),
 		)
 
