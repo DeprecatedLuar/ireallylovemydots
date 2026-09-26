@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/gitutil"
@@ -50,10 +51,15 @@ var rebaseStrategyOption = map[Side]string{
 // that the merge has conflicts, as opposed to failing outright.
 const mergeTreeConflictExit = 1
 
-// unmergedStageCount is how many index stages a content conflict carries
-// (base, ours, theirs). A path missing one is a modify/delete or rename
-// conflict, which a side flag cannot settle.
-const unmergedStageCount = 3
+// Index stages of an unmerged path: 1 is the common base, 2 the side being
+// rebased onto, 3 the commit being replayed. A content conflict has all three;
+// an add/add conflict has 2 and 3 but no base. A path missing stage 2 or 3 is
+// a modify/delete or rename conflict, which a side flag cannot settle.
+const (
+	stageBase   = 1
+	stageOurs   = 2
+	stageTheirs = 3
+)
 
 // ConflictError reports that local and remote changed the same paths and the
 // rebase could not settle them. Paths lists every conflicted path, sorted.
@@ -258,21 +264,32 @@ func readUnmerged(dir string) (*stoppedRebase, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read unmerged paths in %s: %s", dir, strings.TrimSpace(out))
 	}
-	stages := map[string]int{}
+	stages := map[string]map[int]bool{}
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
 		if line == "" {
 			continue
 		}
-		_, path, ok := strings.Cut(line, "\t")
+		meta, path, ok := strings.Cut(line, "\t")
 		if !ok {
 			continue
 		}
-		stages[path]++
+		fields := strings.Fields(meta)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("unexpected ls-files -u line in %s: %q", dir, line)
+		}
+		stage, convErr := strconv.Atoi(fields[2])
+		if convErr != nil {
+			return nil, fmt.Errorf("unexpected ls-files -u stage in %s: %q", dir, line)
+		}
+		if stages[path] == nil {
+			stages[path] = map[int]bool{}
+		}
+		stages[path][stage] = true
 	}
 	stopped := &stoppedRebase{resolvable: len(stages) > 0}
-	for path, n := range stages {
+	for path, have := range stages {
 		stopped.paths = append(stopped.paths, path)
-		if n != unmergedStageCount {
+		if !have[stageOurs] || !have[stageTheirs] {
 			stopped.resolvable = false
 		}
 	}

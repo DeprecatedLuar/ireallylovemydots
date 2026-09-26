@@ -491,6 +491,63 @@ func TestReconcile_ModifyDeleteConflictIsNotResolvableBySide(t *testing.T) {
 	assertSettledCleanly(t, second)
 }
 
+// addAddSetup makes both clones create "n" with different content. Returns
+// second, whose local file is committed by the Reconcile under test.
+func addAddSetup(t *testing.T) string {
+	t.Helper()
+	_, first, second := newReconcileClones(t)
+	writeReconcileFile(t, first, "n", "remote new")
+	gitRun(t, first, "add", "-A")
+	gitRun(t, first, "commit", "-m", "remote adds n")
+	gitRun(t, first, "push", "origin", "main")
+	writeReconcileFile(t, second, "n", "local new")
+	return second
+}
+
+func TestReconcile_AddAddConflictIsResolvableBySide(t *testing.T) {
+	second := addAddSetup(t)
+
+	_, err := Reconcile(second, SideNone)
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected a *ConflictError, got %v", err)
+	}
+	if !conflict.Resolvable {
+		t.Fatal("expected Resolvable=true for an add/add conflict")
+	}
+	if len(conflict.Paths) != 1 || conflict.Paths[0] != "n" {
+		t.Fatalf("Paths = %v, want [n]", conflict.Paths)
+	}
+	assertSettledCleanly(t, second)
+}
+
+func TestReconcile_AddAddSideLocalAndSideRemoteKeepChosenContent(t *testing.T) {
+	cases := []struct {
+		name string
+		side Side
+		want string
+	}{
+		{"local", SideLocal, "local new"},
+		{"remote", SideRemote, "remote new"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			second := addAddSetup(t)
+			result, err := Reconcile(second, tc.side)
+			if err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if len(result.Overridden) != 1 || result.Overridden[0] != "n" {
+				t.Fatalf("Overridden = %v, want [n]", result.Overridden)
+			}
+			if got := readFileString(t, second, "n"); got != tc.want {
+				t.Fatalf("n = %q, want %q", got, tc.want)
+			}
+			assertSettledCleanly(t, second)
+		})
+	}
+}
+
 func TestReconcile_SideWithoutConflictOverridesNothing(t *testing.T) {
 	_, first, second := newReconcileClones(t)
 	writeReconcileFile(t, first, "x", "from first")
