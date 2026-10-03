@@ -5,7 +5,7 @@
 <p align=center> A dead-simple CLI dotfile manager in ~~bash~~ Go</p>
 
 > **This is a complete reimplementation of the [original bash project](https://github.com/DeprecatedLuar/ireallylovemydots/tree/legacy-bash).**
-> The bash version lives on in the [`legacy-bash`](https://github.com/DeprecatedLuar/ireallylovemydots/tree/legacy-bash) branch. Struck-through text below is what the bash README said that no longer holds, followed by what replaces it.
+> The bash version lives on in the [`legacy-bash`](https://github.com/DeprecatedLuar/ireallylovemydots/tree/legacy-bash) branch.
 
 <p align="center">
   <a href="https://github.com/DeprecatedLuar/ireallylovemydots/stargazers">
