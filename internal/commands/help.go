@@ -21,7 +21,8 @@ func HandleHelp(args []string) error {
 			gohelp.Item("repo <repo> list", "List that repository's namespaces"),
 		).
 		Section("Top level",
-			gohelp.Item("sync", "Reconcile every registered repository"),
+			gohelp.Item("sync [<namespace>...]", "Sync every repository, or only these namespaces"),
+			gohelp.Item("syncmode <namespace> [<mode>]", "Show or save its sync mode on this machine"),
 			gohelp.Item("cp <repo/ns> <repo/ns>, copy <repo/ns> <repo/ns>", "Copy a namespace into another repository"),
 			gohelp.Item("mv <repo/ns> <repo/ns>, move <repo/ns> <repo/ns>", "Move a namespace into another repository"),
 			gohelp.Item("list, ls, status", "Every namespace, with state"),
@@ -39,13 +40,14 @@ func HandleHelp(args []string) error {
 		).
 		Section("Flags",
 			gohelp.Item("-A, --all", "Enable every disabled namespace"),
-			gohelp.Item("--repo", "Disambiguate a namespace name shared by several repositories"),
+			gohelp.Item("--repo", "Pick a repository: disambiguate a namespace, or sync one repository"),
 			gohelp.Item("--force", "Skip confirmation for a destructive default"),
 			gohelp.Item("--purge", "Trash instead of restore on removal"),
 			gohelp.Item("--yes", "Skip confirmation prompts"),
-			gohelp.Item("--discard", "Trash a dirty read-only repository's local edits during sync"),
-			gohelp.Item("--local", "On a sync conflict, keep this machine's side (needs a repository name)"),
-			gohelp.Item("--remote", "On a sync conflict, keep the remote's side (needs a repository name)"),
+			gohelp.Item("--merge", "Sync: merge both sides (default)"),
+			gohelp.Item("--overlay", "Sync: take remote, keep this machine's edits on top, never push"),
+			gohelp.Item("--overwrite-local", "Sync: take remote, trash this machine's edits"),
+			gohelp.Item("--overwrite-remote", "Sync: push this machine's version over the remote"),
 			gohelp.Item("--debug", "Verbose diagnostic output"),
 		)
 
@@ -69,6 +71,7 @@ func HandleHelp(args []string) error {
 			gohelp.Item("namespace <ns> install", "Put its files on disk, link nothing"),
 			gohelp.Item("namespace <ns> uninstall", "Take its files off disk, keep it tracked"),
 			gohelp.Item("namespace <ns> restore", "Replace its symlinks with real copies"),
+			gohelp.Item("namespace <ns> syncmode [<mode>]", "Show or save its sync mode on this machine"),
 		).
 		Section("Out of scope",
 			gohelp.Item("namespace ignore", "List every ignored namespace"),

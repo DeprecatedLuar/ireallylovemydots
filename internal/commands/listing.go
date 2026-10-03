@@ -183,7 +183,7 @@ func namespaceRow(s state.State, repoName, nsName, namespaceDir string, entries 
 	if marker != ui.MarkerProblem && len(findings.For(repoName, nsName)) > 0 {
 		marker = ui.MarkerProblem
 	}
-	return ui.Entry{Marker: marker, Name: nsName, Profile: stateEntry.ActiveProfile}, nil
+	return ui.Entry{Marker: marker, Name: nsName, Profile: stateEntry.ActiveProfile, Starred: stateEntry.SyncMode != ""}, nil
 }
 
 // catalogueNamespaceIgnored reports whether a namespace not materialized

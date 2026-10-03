@@ -11,6 +11,9 @@ import (
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
 )
 
+// starredSuffix marks a namespace carrying a saved sync mode.
+const starredSuffix = "*"
+
 // Markers used by the listing renderer. One character of state per line,
 // nothing else — see concept.md "Listing output".
 const (
@@ -69,6 +72,8 @@ type Entry struct {
 	Count   int
 	Repo    string
 	Profile string
+	// Starred marks a namespace with a saved sync mode.
+	Starred bool
 }
 
 // Interactive reports whether both stdin and stdout are attached to a
@@ -209,7 +214,11 @@ func RenderLines(entries []Entry, f *os.File) []string {
 // alignment above must measure this, never coloredPrefix, since an ANSI
 // escape sequence would otherwise count toward the padding.
 func plainPrefix(e Entry) string {
-	p := fmt.Sprintf("%s %s", e.Marker, e.Name)
+	name := e.Name
+	if e.Starred {
+		name += starredSuffix
+	}
+	p := fmt.Sprintf("%s %s", e.Marker, name)
 	if e.Profile != "" {
 		p += fmt.Sprintf(" [%s]", e.Profile)
 	}
@@ -222,7 +231,11 @@ func plainPrefix(e Entry) string {
 // something else." The marker and name still pick up the row's marker tone
 // afterward, from colorLine wrapping the whole line.
 func coloredPrefix(e Entry, f *os.File) string {
-	p := fmt.Sprintf("%s %s", e.Marker, e.Name)
+	name := e.Name
+	if e.Starred {
+		name += starredSuffix
+	}
+	p := fmt.Sprintf("%s %s", e.Marker, name)
 	if e.Profile != "" {
 		p += " " + blueTone(fmt.Sprintf("[%s]", e.Profile), f)
 	}

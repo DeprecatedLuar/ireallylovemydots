@@ -60,7 +60,7 @@ var RepoOnlyVerbs = []string{"init", "adopt"}
 // out of dots' scope (concept.md "Namespace"), likewise meaningless above
 // the namespace level. restore replaces a namespace's symlinks with real
 // copies, which only ever applies to a namespace's own entries.
-var NamespaceOnlyVerbs = []string{"install", "uninstall", "ignore", "unignore", "restore"}
+var NamespaceOnlyVerbs = []string{"install", "uninstall", "ignore", "unignore", "restore", "syncmode"}
 
 // IsVerb reports whether tok is one of the verbs valid at any level, in
 // either its canonical or aliased spelling.

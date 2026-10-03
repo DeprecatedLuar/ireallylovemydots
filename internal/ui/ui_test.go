@@ -147,3 +147,10 @@ func TestMarkerRemoved_UsesErrorTone(t *testing.T) {
 		t.Fatalf("Operation(MarkerRemoved) = %q, want %q", got, "x editors\n")
 	}
 }
+
+func TestRender_StarredNameGetsAsterisk(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	if got := Render([]Entry{{Marker: MarkerEnabled, Name: "noctalia", Starred: true}}); got != "+ noctalia*\n" {
+		t.Fatalf("Render = %q, want %q", got, "+ noctalia*\n")
+	}
+}
