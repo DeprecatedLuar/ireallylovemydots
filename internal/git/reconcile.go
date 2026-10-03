@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/DeprecatedLuar/dotz/internal/gitutil"
@@ -39,22 +38,9 @@ var mergeStrategyOption = map[Side]string{
 	SideRemote: "ours",
 }
 
-// mergeTreeConflictExit is the exit status `git merge-tree` uses to report
-// that the merge has conflicts, as opposed to failing outright.
-const mergeTreeConflictExit = 1
-
 // mergeBaseNotAncestorExit is the exit status `git merge-base --is-ancestor`
 // uses for "not an ancestor", as opposed to failing outright.
 const mergeBaseNotAncestorExit = 1
-
-// Stages of a conflicted path: 1 is the common base, 2 the remote side (merge-
-// tree's first argument), 3 the local side. A content conflict has all three;
-// an add/add conflict has 2 and 3 but no base. A path missing stage 2 or 3 is
-// a modify/delete or rename conflict, which a side flag cannot settle.
-const (
-	stageOurs   = 2
-	stageTheirs = 3
-)
 
 // ConflictError reports that local and remote changed the same paths and the
 // merge could not settle them. Paths lists every conflicted path, sorted.
@@ -193,21 +179,7 @@ func Reconcile(dir string, side Side) (ReconcileResult, error) {
 		return result, nil
 	}
 
-	tree, overridden, err := mergeDiverged(dir, branch, remoteHead, localHead, side)
-	if err != nil {
-		return result, err
-	}
-	result.Overridden = overridden
-
-	msg, err := commitMessage(dir, remoteHead, tree)
-	if err != nil {
-		return result, err
-	}
-	out, err := gitCmd(dir, "commit-tree", tree, "-p", remoteHead, "-m", msg)
-	if err != nil {
-		return result, fmt.Errorf("commit merge in %s: %s", dir, strings.TrimSpace(out))
-	}
-	return result, resetKeep(dir, strings.TrimSpace(out))
+	return result, fmt.Errorf("diverged sync not available in %s", dir)
 }
 
 // isAncestor reports whether ancestor is reachable from descendant in dir.
@@ -231,117 +203,6 @@ func resetKeep(dir, commit string) error {
 		return fmt.Errorf("apply sync result in %s: %s", dir, strings.TrimSpace(out))
 	}
 	return nil
-}
-
-// mergeDiverged merges localHead into remoteHead in memory and returns the
-// merged tree. On a conflict it returns a *ConflictError unless side names a
-// winner and every conflict is settleable, in which case it returns the
-// side-preferring tree and the paths that were settled.
-func mergeDiverged(dir, branch, remoteHead, localHead string, side Side) (tree string, overridden []string, err error) {
-	tree, conflicts, err := mergeTree(dir, remoteHead, localHead)
-	if err != nil {
-		return "", nil, err
-	}
-	if conflicts == nil {
-		return tree, nil, nil
-	}
-
-	conflict := &ConflictError{Dir: dir, Branch: branch, Paths: conflicts.paths, Resolvable: conflicts.resolvable}
-	if side == SideNone || !conflicts.resolvable {
-		return "", nil, conflict
-	}
-
-	tree, again, err := mergeTree(dir, remoteHead, localHead, "--strategy-option="+mergeStrategyOption[side])
-	if err != nil {
-		return "", nil, err
-	}
-	if again != nil {
-		return "", nil, &ConflictError{Dir: dir, Branch: branch, Paths: again.paths, Resolvable: false}
-	}
-	return tree, conflicts.paths, nil
-}
-
-// conflictSet describes the conflicts of an in-memory merge.
-type conflictSet struct {
-	// paths are the conflicted paths, sorted.
-	paths []string
-	// resolvable is true when every conflicted path is a content conflict.
-	resolvable bool
-}
-
-// mergeTree runs `git merge-tree --write-tree extra... remoteHead localHead`.
-// A clean merge returns the merged tree OID and nil conflicts. A conflicted
-// one returns the parsed conflicts; any other failure is an error. Remote is
-// the first argument, so it is "ours" to -X (see mergeStrategyOption).
-func mergeTree(dir, remoteHead, localHead string, extra ...string) (string, *conflictSet, error) {
-	args := append([]string{"merge-tree", "--write-tree"}, extra...)
-	args = append(args, remoteHead, localHead)
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err == nil {
-		return strings.TrimSpace(string(out)), nil, nil
-	}
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) {
-		return "", nil, fmt.Errorf("merge in memory in %s: %w", dir, err)
-	}
-	if exitErr.ExitCode() != mergeTreeConflictExit {
-		return "", nil, fmt.Errorf("merge in memory in %s: %w: %s", dir, err, strings.TrimSpace(string(exitErr.Stderr)))
-	}
-
-	// The first line is the tree OID; conflict stage lines follow until the
-	// first blank line, after which come informational messages.
-	lines := strings.Split(string(out), "\n")
-	var stageLines []string
-	for _, line := range lines[1:] {
-		if line == "" {
-			break
-		}
-		stageLines = append(stageLines, line)
-	}
-	conflicts, err := parseUnmerged(stageLines)
-	if err != nil {
-		return "", nil, fmt.Errorf("read conflicts in %s: %w", dir, err)
-	}
-	return "", conflicts, nil
-}
-
-// parseUnmerged parses `<mode> <oid> <stage>\t<path>` lines (the `ls-files -u`
-// format, also used by merge-tree) into the conflicted paths, sorted, and
-// whether each one carries both sides' stages.
-func parseUnmerged(lines []string) (*conflictSet, error) {
-	stages := map[string]map[int]bool{}
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		meta, path, ok := strings.Cut(line, "\t")
-		if !ok {
-			continue
-		}
-		fields := strings.Fields(meta)
-		if len(fields) != 3 {
-			return nil, fmt.Errorf("unexpected conflict line %q", line)
-		}
-		stage, convErr := strconv.Atoi(fields[2])
-		if convErr != nil {
-			return nil, fmt.Errorf("unexpected conflict stage in %q", line)
-		}
-		if stages[path] == nil {
-			stages[path] = map[int]bool{}
-		}
-		stages[path][stage] = true
-	}
-	conflicts := &conflictSet{resolvable: len(stages) > 0}
-	for path, have := range stages {
-		conflicts.paths = append(conflicts.paths, path)
-		if !have[stageOurs] || !have[stageTheirs] {
-			conflicts.resolvable = false
-		}
-	}
-	sort.Strings(conflicts.paths)
-	return conflicts, nil
 }
 
 // ErrNotFastForwardable is returned by FastForward when dir's local branch
