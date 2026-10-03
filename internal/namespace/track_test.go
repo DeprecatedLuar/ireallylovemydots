@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
 )
 
 func TestAdd_File(t *testing.T) {

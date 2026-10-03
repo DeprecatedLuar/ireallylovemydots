@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/DeprecatedLuar/dotz/internal/grammar"
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/paths"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/grammar"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
 )
 
 // Add tracks path into the namespace at namespaceDir: it moves the payload
@@ -124,7 +124,7 @@ func adopt(namespaceDir string, m manifest.Manifest, name, dest string) error {
 // leading "/", no ".."/"." component, no separator at all. That shape is the
 // only one a move into the namespace's flat per-file layout preserves
 // correctly: the link text itself never changes, so "CLAUDE.md" still means
-// "the sibling payload" once both live in namespaceDir. Every dotz-owned
+// "the sibling payload" once both live in namespaceDir. Every dots-owned
 // symlink is always absolute (see concept.md), so this never mistakes one
 // for a foreign alias.
 func isSameDirAlias(dest string) bool {

@@ -7,16 +7,16 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
-	"github.com/DeprecatedLuar/dotz/internal/engine"
-	"github.com/DeprecatedLuar/dotz/internal/grammar"
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/namespace"
-	"github.com/DeprecatedLuar/dotz/internal/paths"
-	"github.com/DeprecatedLuar/dotz/internal/repo"
-	"github.com/DeprecatedLuar/dotz/internal/selfheal"
-	"github.com/DeprecatedLuar/dotz/internal/state"
-	"github.com/DeprecatedLuar/dotz/internal/ui"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/engine"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/grammar"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/namespace"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/repo"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/selfheal"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
 // HandleNamespace implements the namespace subtree: bare listing, the
@@ -679,7 +679,7 @@ func NamespaceNames() ([]string, error) {
 // NamespaceRepoCandidates returns the names of every repository holding a
 // namespace called name, mirroring namespace.Resolve's own candidate
 // search. It exists for the router's ambiguity handling
-// (cmd/dotz/main.go's ambiguityChooser), which needs to know — ahead of
+// (cmd/dots/main.go's ambiguityChooser), which needs to know — ahead of
 // asking whether a token means the namespace or the repository — whether
 // the namespace reading is already ambiguous by itself across
 // repositories.

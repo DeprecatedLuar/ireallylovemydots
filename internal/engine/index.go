@@ -5,8 +5,8 @@
 package engine
 
 import (
-	"github.com/DeprecatedLuar/dotz/internal/paths"
-	"github.com/DeprecatedLuar/dotz/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 )
 
 // claim is one destination currently linked by an enabled namespace.

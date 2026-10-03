@@ -5,10 +5,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/DeprecatedLuar/dotz/internal/link"
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/state"
-	"github.com/DeprecatedLuar/dotz/internal/trash"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/link"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/trash"
 )
 
 // RestoreProblem is one occupied-destination finding against a single entry

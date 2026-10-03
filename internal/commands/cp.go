@@ -7,15 +7,15 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
-	"github.com/DeprecatedLuar/dotz/internal/fscopy"
-	"github.com/DeprecatedLuar/dotz/internal/git"
-	"github.com/DeprecatedLuar/dotz/internal/grammar"
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/paths"
-	"github.com/DeprecatedLuar/dotz/internal/repo"
-	"github.com/DeprecatedLuar/dotz/internal/state"
-	"github.com/DeprecatedLuar/dotz/internal/ui"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/fscopy"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/git"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/grammar"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/repo"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
 // filePerm is the mode written for a file read out of git — git.ShowFile

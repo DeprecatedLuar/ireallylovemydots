@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/DeprecatedLuar/dotz/internal/git"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/git"
 )
 
 func TestParse(t *testing.T) {

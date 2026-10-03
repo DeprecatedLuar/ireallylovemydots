@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
-	"github.com/DeprecatedLuar/dotz/internal/engine"
-	"github.com/DeprecatedLuar/dotz/internal/grammar"
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/profile"
-	"github.com/DeprecatedLuar/dotz/internal/state"
-	"github.com/DeprecatedLuar/dotz/internal/ui"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/engine"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/grammar"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/profile"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
 // handleProfiles implements the profiles subtree of one namespace: bare

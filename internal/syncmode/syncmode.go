@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/DeprecatedLuar/dotz/internal/git"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/git"
 )
 
 // Mode is how one namespace syncs.

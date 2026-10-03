@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/paths"
-	"github.com/DeprecatedLuar/dotz/internal/selfheal"
-	"github.com/DeprecatedLuar/dotz/internal/state"
-	"github.com/DeprecatedLuar/dotz/internal/ui"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/selfheal"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
 func captureStdoutStderr(t *testing.T, f func()) (stdout, stderr string) {
@@ -331,7 +331,7 @@ func TestRenderRepoNamespaces_MatchesUnscopedMarkers(t *testing.T) {
 
 // TestHandleList_StatusAliasIsByteIdentical proves `dots` and `dots status`
 // produce byte-identical output: both route to HandleList with the same
-// argument shape (cmd/dotz's resolveRoute maps "status" to targetList, same
+// argument shape (cmd/dots's resolveRoute maps "status" to targetList, same
 // as bare invocation), so calling it twice with the request's own args must
 // come back identical.
 func TestHandleList_StatusAliasIsByteIdentical(t *testing.T) {
@@ -367,7 +367,7 @@ func TestHandleList_StatusAliasIsByteIdentical(t *testing.T) {
 			t.Fatalf("HandleList(nil, selfheal.Findings{}): %v", err)
 		}
 	})
-	// cmd/dotz's resolveRoute passes args[1:] of ["status"] through, an
+	// cmd/dots's resolveRoute passes args[1:] of ["status"] through, an
 	// empty (non-nil) slice — HandleList treats it the same as nil, which
 	// is exactly the byte-identical guarantee under test.
 	statusOut, statusErr := captureStdoutStderr(t, func() {

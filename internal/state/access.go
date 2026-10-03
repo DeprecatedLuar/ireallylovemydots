@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/DeprecatedLuar/dotz/internal/paths"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
 )
 
 const accessFileName = "access.json"

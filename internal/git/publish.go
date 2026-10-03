@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/DeprecatedLuar/dotz/internal/gitutil"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/gitutil"
 )
 
 // remoteName is the only remote sync ever talks to — the one repo.Clone

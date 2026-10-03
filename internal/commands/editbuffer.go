@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/DeprecatedLuar/dotz/internal/ui"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
 // editBuffer runs the $EDITOR loop shared by every manual-edit escape hatch

@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
 )
 
 // starredSuffix marks a namespace carrying a saved sync mode.

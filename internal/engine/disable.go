@@ -3,8 +3,8 @@ package engine
 import (
 	"os"
 
-	"github.com/DeprecatedLuar/dotz/internal/link"
-	"github.com/DeprecatedLuar/dotz/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/link"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 )
 
 // Disable removes every symlink recorded for a namespace's state entry,

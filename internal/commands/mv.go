@@ -5,14 +5,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
-	"github.com/DeprecatedLuar/dotz/internal/engine"
-	"github.com/DeprecatedLuar/dotz/internal/fscopy"
-	"github.com/DeprecatedLuar/dotz/internal/grammar"
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/paths"
-	"github.com/DeprecatedLuar/dotz/internal/state"
-	"github.com/DeprecatedLuar/dotz/internal/ui"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/engine"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/fscopy"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/grammar"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
 // HandleMv implements `dots mv <src> <dst>`, aliased `move`: moves a whole

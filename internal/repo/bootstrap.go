@@ -10,7 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
 )
 
 // namespaceDirPerm is the mode Apply creates each new namespace folder with,

@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DeprecatedLuar/dotz/internal/link"
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/profile"
-	"github.com/DeprecatedLuar/dotz/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/link"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/profile"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 )
 
 // profiledNamespace builds an enabled namespace with four entries:

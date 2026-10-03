@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/DeprecatedLuar/dotz/internal/selfheal"
-	"github.com/DeprecatedLuar/dotz/internal/ui"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/selfheal"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
 // RenderSelfHealFindings prints the two self-heal findings that print on

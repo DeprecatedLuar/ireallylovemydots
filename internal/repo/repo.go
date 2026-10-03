@@ -14,8 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/DeprecatedLuar/dotz/internal/gitutil"
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/gitutil"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
 )
 
 // DeriveNameOwner parses a repository URL into a default local name (the

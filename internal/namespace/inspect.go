@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
 )
 
 // dotsManifestFile and gitignoreFile name the two per-namespace files Inspect

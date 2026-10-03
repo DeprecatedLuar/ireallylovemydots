@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 )
 
 // initGitRepo turns dir into a git repository with everything currently in

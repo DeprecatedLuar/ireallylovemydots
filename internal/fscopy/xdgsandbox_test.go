@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/DeprecatedLuar/dotz/internal/xdgtest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/xdgtest"
 )
 
 // fscopy's tests never touch XDG directories, but every test package is

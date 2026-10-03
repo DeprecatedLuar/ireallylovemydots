@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/DeprecatedLuar/dotz/internal/xdgtest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/xdgtest"
 )
 
 // Every test in this package resolves dots's directories from the

@@ -1,7 +1,7 @@
 // git.go holds the small, low-level git primitives sync is built
 // from: running a command in a repository, reading its current branch,
 // detecting an interrupted rebase, and resolving a ref to its commit hash.
-// Adapted from dredge's internal/git/git.go, not ported — dotz's version
+// Adapted from dredge's internal/git/git.go, not ported — dots' version
 // drops runGitCommand in favor of streaming commands (fetch, push) through
 // gitutil.CappedWriter so a slow network call is never silent; see
 // reconcile.go.

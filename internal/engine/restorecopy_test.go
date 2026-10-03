@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/profile"
-	"github.com/DeprecatedLuar/dotz/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/profile"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 )
 
 func TestRestoreCopy_EnabledFileAndDirectoryEntries_EndAsRealCopies(t *testing.T) {

@@ -7,17 +7,17 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/DeprecatedLuar/dotz/internal/engine"
-	"github.com/DeprecatedLuar/dotz/internal/git"
-	"github.com/DeprecatedLuar/dotz/internal/link"
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/namespace"
-	"github.com/DeprecatedLuar/dotz/internal/paths"
-	"github.com/DeprecatedLuar/dotz/internal/profile"
-	"github.com/DeprecatedLuar/dotz/internal/repo"
-	"github.com/DeprecatedLuar/dotz/internal/selfheal"
-	"github.com/DeprecatedLuar/dotz/internal/state"
-	"github.com/DeprecatedLuar/dotz/internal/ui"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/engine"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/git"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/link"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/namespace"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/profile"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/repo"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/selfheal"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
 // This file owns every row dots's listings produce. concept.md "Listing
@@ -51,7 +51,7 @@ func (o listOptions) wantState(marker string) bool {
 // a repository when "="
 // is excluded by opts.States. Every materialized namespace's manifest is
 // read regardless of opts.Counts now, since deciding "+"/"-" vs "!" needs
-// it; self-heal (run once ahead of every dispatch, in cmd/dotz/main.go) has
+// it; self-heal (run once ahead of every dispatch, in cmd/dots/main.go) has
 // already corrected whatever it could by the time this runs, so what is
 // left to find here is exactly what self-heal would not touch.
 func namespaceListing(repos []manifest.Repo, opts listOptions, findings selfheal.Findings) ([]ui.Entry, error) {

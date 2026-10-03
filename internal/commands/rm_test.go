@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/repo"
-	"github.com/DeprecatedLuar/dotz/internal/selfheal"
-	"github.com/DeprecatedLuar/dotz/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/repo"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/selfheal"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 )
 
 // TestRmNamespaces_BatchInSameRepo_DoesNotSelfBlockOnGitSafety reproduces

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/DeprecatedLuar/dotz/internal/selfheal"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/selfheal"
 )
 
 // emptyRegistryHint is the one line concept.md "Listing output" requires

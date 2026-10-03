@@ -8,12 +8,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/DeprecatedLuar/dotz/internal/link"
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/profile"
-	"github.com/DeprecatedLuar/dotz/internal/repo"
-	"github.com/DeprecatedLuar/dotz/internal/state"
-	"github.com/DeprecatedLuar/dotz/internal/trash"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/link"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/profile"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/repo"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/trash"
 )
 
 const dirPerm = 0755
@@ -54,7 +54,7 @@ func ManifestEntries(repoDir, namespaceDir, name string) (entries []manifest.Ent
 // a namespace that has never been synced anywhere else, and for a
 // namespace being enabled a second time after a disable. Disk presence
 // implying cone membership is not this function's own guarantee: self-heal
-// runs ReconcileCone ahead of every command (cmd/dotz/main.go), including
+// runs ReconcileCone ahead of every command (cmd/dots/main.go), including
 // the one that just created or renamed a namespace directly on the
 // worktree, so the cone is already caught up with disk by the time
 // Materialize ever sees it. Testing that here too would mean an

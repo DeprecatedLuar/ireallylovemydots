@@ -3,7 +3,7 @@ package engine
 import (
 	"testing"
 
-	"github.com/DeprecatedLuar/dotz/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 )
 
 func TestBuildIndex_SkipsDisabledNamespaces(t *testing.T) {

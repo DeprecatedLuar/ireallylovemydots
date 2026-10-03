@@ -1,4 +1,4 @@
-// Package paths resolves dotz's three XDG directories and creates them on demand.
+// Package paths resolves dots' three XDG directories and creates them on demand.
 package paths
 
 import (

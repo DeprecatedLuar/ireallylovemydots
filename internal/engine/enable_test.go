@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/DeprecatedLuar/dotz/internal/manifest"
-	"github.com/DeprecatedLuar/dotz/internal/state"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 )
 
 // gitRepoWithNamespaces builds a small committed git repository holding two

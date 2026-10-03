@@ -9,7 +9,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/DeprecatedLuar/dotz/internal/paths"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
 )
 
 const (

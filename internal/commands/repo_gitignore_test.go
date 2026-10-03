@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DeprecatedLuar/dotz/internal/repo"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/repo"
 )
 
 // TestRenderGitignorePreview_ShowsAllThreeOutcomes covers concept.md

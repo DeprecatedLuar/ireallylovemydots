@@ -1,4 +1,4 @@
-// Command dotz is the entrypoint and sole router for dots. Flag extraction,
+// Command dots is the entrypoint and sole router for dots. Flag extraction,
 // token resolution, alias rewriting, ambiguity handling, and dispatch all
 // live here - see CLAUDE.md's orchestrator pattern. internal/commands holds
 // only command implementations; every other internal package is a
@@ -12,11 +12,11 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/DeprecatedLuar/dotz/internal/commands"
-	"github.com/DeprecatedLuar/dotz/internal/commands/shared"
-	"github.com/DeprecatedLuar/dotz/internal/grammar"
-	"github.com/DeprecatedLuar/dotz/internal/selfheal"
-	"github.com/DeprecatedLuar/dotz/internal/ui"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/grammar"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/selfheal"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...", per

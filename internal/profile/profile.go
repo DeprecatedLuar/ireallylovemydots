@@ -8,7 +8,7 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/DeprecatedLuar/dotz/internal/trash"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/trash"
 )
 
 // Create declares a new profile. from is empty for an empty profile, or

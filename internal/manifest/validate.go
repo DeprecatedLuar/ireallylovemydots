@@ -3,7 +3,7 @@ package manifest
 import (
 	"fmt"
 
-	"github.com/DeprecatedLuar/dotz/internal/paths"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
 )
 
 // Problem is one way a manifest, though syntactically valid TOML, does not
