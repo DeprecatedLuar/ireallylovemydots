@@ -1,4 +1,4 @@
-// git.go holds the small, low-level git primitives Reconcile is built
+// git.go holds the small, low-level git primitives sync is built
 // from: running a command in a repository, reading its current branch,
 // detecting an interrupted rebase, and resolving a ref to its commit hash.
 // Adapted from dredge's internal/git/git.go, not ported — dotz's version
