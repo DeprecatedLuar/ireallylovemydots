@@ -68,3 +68,19 @@ func TestRead_MissingFileIsEmpty(t *testing.T) {
 		t.Fatalf("got %d entries, want 0", len(s.Entries))
 	}
 }
+
+func TestWriteRead_RoundTripsSyncModeAndHeldBase(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	key := Key{Repo: "dots", Namespace: "noctalia"}
+	s := State{Entries: map[Key]Entry{key: {SyncMode: "overlay", HeldBase: "abc123"}}}
+	if err := Write(s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := got.Entries[key]; e.SyncMode != "overlay" || e.HeldBase != "abc123" {
+		t.Fatalf("entry = %+v, want SyncMode overlay and HeldBase abc123", e)
+	}
+}

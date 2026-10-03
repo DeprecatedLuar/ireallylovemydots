@@ -53,6 +53,18 @@ func TestHandleMv_EnabledSource_RelinksAndRemovesSource(t *testing.T) {
 		t.Fatalf("expected the symlink to point into src/nvim before the move, target=%q err=%v", target, err)
 	}
 
+	st, err := state.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcKey := state.Key{Repo: "src", Namespace: "nvim"}
+	srcEntry := st.Entries[srcKey]
+	srcEntry.SyncMode = "overlay"
+	st.Entries[srcKey] = srcEntry
+	if err := state.Write(st); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := HandleMv([]string{"src/nvim", "dst/nvim"}, shared.Flags{}); err != nil {
 		t.Fatalf("mv src/nvim dst/nvim: %v", err)
 	}
@@ -79,6 +91,9 @@ func TestHandleMv_EnabledSource_RelinksAndRemovesSource(t *testing.T) {
 	dstEntry, ok := s.Entries[state.Key{Repo: "dst", Namespace: "nvim"}]
 	if !ok || !dstEntry.Enabled {
 		t.Fatalf("expected the destination enabled in state, got %+v (ok=%v)", dstEntry, ok)
+	}
+	if dstEntry.SyncMode != "" {
+		t.Fatalf("expected the destination to start without a sync mode, got %q", dstEntry.SyncMode)
 	}
 }
 

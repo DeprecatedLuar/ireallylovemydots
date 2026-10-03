@@ -27,6 +27,10 @@ type Entry struct {
 	Enabled       bool     `json:"enabled"`
 	ActiveProfile string   `json:"activeProfile,omitempty"`
 	LinkedDests   []string `json:"linkedDests,omitempty"`
+	// SyncMode is the namespace's saved sync mode; empty means the default.
+	SyncMode string `json:"syncMode,omitempty"`
+	// HeldBase is the commit sync held the namespace at; empty when not held.
+	HeldBase string `json:"heldBase,omitempty"`
 }
 
 // State is the full set of recorded namespace entries, keyed by repo plus
@@ -43,6 +47,10 @@ type record struct {
 	Enabled       bool     `json:"enabled"`
 	ActiveProfile string   `json:"activeProfile,omitempty"`
 	LinkedDests   []string `json:"linkedDests,omitempty"`
+	// SyncMode is the namespace's saved sync mode; empty means the default.
+	SyncMode string `json:"syncMode,omitempty"`
+	// HeldBase is the commit sync held the namespace at; empty when not held.
+	HeldBase string `json:"heldBase,omitempty"`
 }
 
 // Path returns the state file's path in the state directory.
@@ -81,6 +89,8 @@ func Read() (State, error) {
 			Enabled:       r.Enabled,
 			ActiveProfile: r.ActiveProfile,
 			LinkedDests:   r.LinkedDests,
+			SyncMode:      r.SyncMode,
+			HeldBase:      r.HeldBase,
 		}
 	}
 	return State{Entries: entries}, nil
@@ -102,6 +112,8 @@ func Write(s State) error {
 			Enabled:       e.Enabled,
 			ActiveProfile: e.ActiveProfile,
 			LinkedDests:   e.LinkedDests,
+			SyncMode:      e.SyncMode,
+			HeldBase:      e.HeldBase,
 		})
 	}
 	sort.Slice(records, func(i, j int) bool {

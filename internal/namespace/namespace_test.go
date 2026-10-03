@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/DeprecatedLuar/dotz/internal/manifest"
+	"github.com/DeprecatedLuar/dotz/internal/state"
 )
 
 // initCatalogueOnlyNamespace commits a namespace folder to a fresh git
@@ -236,5 +237,31 @@ func TestDelete(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("expected namespace folder gone, got err=%v", err)
+	}
+}
+
+func TestRename_CarriesSyncModeAndHeldBase(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repoDir := t.TempDir()
+	if _, err := Create(repoDir, "editors"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := state.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Entries[state.Key{Repo: "dotfiles", Namespace: "editors"}] = state.Entry{SyncMode: "overlay", HeldBase: "abc"}
+	if err := state.Write(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := Rename(repoDir, "dotfiles", "editors", "tools"); err != nil {
+		t.Fatal(err)
+	}
+	s, err = state.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := s.Entries[state.Key{Repo: "dotfiles", Namespace: "tools"}]; e.SyncMode != "overlay" || e.HeldBase != "abc" {
+		t.Fatalf("renamed entry = %+v, want sync mode and held base carried", e)
 	}
 }
