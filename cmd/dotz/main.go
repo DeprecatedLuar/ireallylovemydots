@@ -25,6 +25,11 @@ import (
 // still identifies itself as such rather than lying about its provenance.
 var version = "dev"
 
+// syncModeFlags are the long flags that pick a sync mode for one run.
+var syncModeFlags = map[string]bool{
+	"--merge": true, "--overlay": true, "--overwrite-local": true, "--overwrite-remote": true,
+}
+
 // versionDirtySuffix is git describe --dirty's own marker; checking for it
 // avoids needing a second ldflags variable to carry a dirty bit.
 const versionDirtySuffix = "-dirty"
@@ -153,12 +158,12 @@ func extractGlobalFlags(args []string) ([]string, shared.Flags, error) {
 			flags.Purge = true
 		case arg == "--yes":
 			flags.Yes = true
-		case arg == "--discard":
-			flags.Discard = true
-		case arg == "--local":
-			flags.Local = true
-		case arg == "--remote":
-			flags.Remote = true
+		case syncModeFlags[arg]:
+			mode := strings.TrimPrefix(arg, "--")
+			if flags.SyncMode != "" && flags.SyncMode != mode {
+				return nil, shared.Flags{}, fmt.Errorf("--%s and %s are contradictory; pick one", flags.SyncMode, arg)
+			}
+			flags.SyncMode = mode
 		case arg == "--debug":
 			flags.Debug = true
 		case arg == "--bootstrap":

@@ -164,7 +164,7 @@ func TestHandleSync_NamedRepoOnlySyncsThatRepoAndLeavesOthersUntouched(t *testin
 	}
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := HandleSync([]string{"repo-a"}, shared.Flags{}); err != nil {
+		if err := HandleSync(nil, shared.Flags{Repo: "repo-a"}); err != nil {
 			t.Fatalf("HandleSync: %v", err)
 		}
 	})
@@ -193,101 +193,6 @@ func TestHandleSync_NamedRepoOnlySyncsThatRepoAndLeavesOthersUntouched(t *testin
 	localBHeadBeforeSync := strings.TrimSpace(syncGitRun(t, repoB, "rev-parse", "HEAD"))
 	if remoteBHead != localBHeadBeforeSync {
 		t.Fatal("expected repo-b to not have been pushed")
-	}
-}
-
-func TestHandleSync_DivergingRepoStopsUncommittedAndExitsNonZeroWhileOthersSucceed(t *testing.T) {
-	dataDir, scratchRoot := setupSyncEnv(t)
-
-	var repoDirs []string
-	var remotes []string
-	for i := 0; i < 5; i++ {
-		name := "repo-" + strconv.Itoa(i)
-		repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, name, []string{"ns"})
-		repoDirs = append(repoDirs, repoDir)
-		remotes = append(remotes, remote)
-	}
-
-	// repo-2 (the third) diverges: a peer clone changes the same file and
-	// pushes, while the registered clone changes it differently and is
-	// left uncommitted for HandleSync to commit itself.
-	divergeIdx := 2
-	peer := filepath.Join(scratchRoot, "peer")
-	syncGitRun(t, scratchRoot, "clone", remotes[divergeIdx], peer)
-	syncGitRun(t, peer, "config", "user.name", "peer")
-	syncGitRun(t, peer, "config", "user.email", "peer@example.invalid")
-	if err := os.WriteFile(filepath.Join(peer, "ns", "file"), []byte("from peer"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	syncGitRun(t, peer, "add", "-A")
-	syncGitRun(t, peer, "commit", "-m", "peer edit")
-	syncGitRun(t, peer, "push", "origin", "main")
-
-	if err := os.WriteFile(filepath.Join(repoDirs[divergeIdx], "ns", "file"), []byte("from local"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// The other four also get a local edit, to prove they still sync and
-	// push despite repo-2's failure.
-	for i, dir := range repoDirs {
-		if i == divergeIdx {
-			continue
-		}
-		if err := os.WriteFile(filepath.Join(dir, "ns", "file"), []byte("edit "+strconv.Itoa(i)), 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	var err error
-	stdout, _ := captureStdoutStderr(t, func() {
-		err = HandleSync(nil, shared.Flags{})
-	})
-	if !errors.Is(err, ErrSomeSkipped) {
-		t.Fatalf("expected ErrSomeSkipped for a run with one diverging repository, got %v", err)
-	}
-	for i := 0; i < 5; i++ {
-		name := "repo-" + strconv.Itoa(i)
-		if !strings.Contains(stdout, name) {
-			t.Fatalf("expected the summary to report %s, got: %s", name, stdout)
-		}
-	}
-
-	// repo-2 stopped: not pushed, working tree clean, no rebase left in
-	// progress, no conflict markers.
-	statusDiverged := strings.TrimSpace(syncGitRun(t, repoDirs[divergeIdx], "status", "--porcelain"))
-	if statusDiverged != "" {
-		t.Fatalf("expected repo-2's tree to be clean after the stopped rebase, got:\n%s", statusDiverged)
-	}
-	if _, err := os.Stat(filepath.Join(repoDirs[divergeIdx], ".git", "rebase-merge")); err == nil {
-		t.Fatal("expected no rebase left in progress on repo-2")
-	}
-	content, err := os.ReadFile(filepath.Join(repoDirs[divergeIdx], "ns", "file"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(content), "<<<<<<<") {
-		t.Fatalf("expected no conflict markers, got:\n%s", content)
-	}
-	remoteDivergedHead := strings.TrimSpace(syncGitRun(t, remotes[divergeIdx], "rev-parse", "main"))
-	peerHead := strings.TrimSpace(syncGitRun(t, peer, "rev-parse", "HEAD"))
-	if remoteDivergedHead != peerHead {
-		t.Fatalf("expected repo-2 to not have been pushed: remote=%s peer=%s", remoteDivergedHead, peerHead)
-	}
-
-	// The other four synced and pushed cleanly.
-	for i, dir := range repoDirs {
-		if i == divergeIdx {
-			continue
-		}
-		status := strings.TrimSpace(syncGitRun(t, dir, "status", "--porcelain"))
-		if status != "" {
-			t.Fatalf("repo-%d: expected a clean tree, got:\n%s", i, status)
-		}
-		localHead := strings.TrimSpace(syncGitRun(t, dir, "rev-parse", "HEAD"))
-		remoteHead := strings.TrimSpace(syncGitRun(t, remotes[i], "rev-parse", "main"))
-		if localHead != remoteHead {
-			t.Fatalf("repo-%d: expected to have been pushed, local=%s remote=%s", i, localHead, remoteHead)
-		}
 	}
 }
 
@@ -393,7 +298,7 @@ func TestHandleSync_SparseRepoRebasesCleanlyWithNoStagedDeletionsAndRemoteGainsN
 	}
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := HandleSync([]string{"big"}, shared.Flags{}); err != nil {
+		if err := HandleSync(nil, shared.Flags{Repo: "big"}); err != nil {
 			t.Fatalf("HandleSync: %v", err)
 		}
 	})
@@ -462,7 +367,6 @@ func TestHandleSync_RewindsRemovedNamespaceStillOnlyInUnpushedCommits(t *testing
 	writeSyncNamespace(t, repoDir, "extra")
 	syncGitRun(t, repoDir, "add", "-A")
 	syncGitRun(t, repoDir, "commit", "-m", "add extra")
-	extraCommit := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
 
 	writeSyncNamespace(t, repoDir, "secret")
 	syncGitRun(t, repoDir, "add", "-A")
@@ -479,7 +383,7 @@ func TestHandleSync_RewindsRemovedNamespaceStillOnlyInUnpushedCommits(t *testing
 	}
 
 	stdout, _ := captureStdoutStderr(t, func() {
-		if err := HandleSync([]string{"repo"}, shared.Flags{Yes: true}); err != nil {
+		if err := HandleSync(nil, shared.Flags{Yes: true, Repo: "repo"}); err != nil {
 			t.Fatalf("HandleSync: %v", err)
 		}
 	})
@@ -491,8 +395,8 @@ func TestHandleSync_RewindsRemovedNamespaceStillOnlyInUnpushedCommits(t *testing
 	if log != "" {
 		t.Fatalf("expected no commit reachable from HEAD to touch secret, got:\n%s", log)
 	}
-	if _, err := syncGitRunErr(repoDir, "merge-base", "--is-ancestor", extraCommit, "HEAD"); err != nil {
-		t.Fatalf("expected the unrelated 'add extra' commit to still be an ancestor of HEAD: %v", err)
+	if got := remoteFile(t, remote, "extra/file"); got != "extra" {
+		t.Fatalf("expected the unrelated 'extra' namespace to reach the remote, got %q", got)
 	}
 	if content, err := os.ReadFile(filepath.Join(repoDir, "keep", "file")); err != nil || string(content) != "changed keep" {
 		t.Fatalf("expected keep/file's edit to have been carried into the recommit, got %q, err=%v", content, err)
@@ -519,7 +423,7 @@ func TestHandleSync_RefusesRewindAndReportsWhenRemovedNamespaceAlreadyPushed(t *
 	stageNamespaceRemoval(t, repoDir, "secret")
 
 	stdout, stderr := captureStdoutStderr(t, func() {
-		if err := HandleSync([]string{"repo"}, shared.Flags{Yes: true}); err != nil {
+		if err := HandleSync(nil, shared.Flags{Yes: true, Repo: "repo"}); err != nil {
 			t.Fatalf("HandleSync: %v", err)
 		}
 	})
@@ -551,7 +455,7 @@ func TestHandleSync_NonInteractiveWithoutYesLeavesRewindUndone(t *testing.T) {
 
 	stageNamespaceRemoval(t, repoDir, "secret")
 
-	err := HandleSync([]string{"repo"}, shared.Flags{})
+	err := HandleSync(nil, shared.Flags{Repo: "repo"})
 	if err == nil {
 		t.Fatal("expected an error requiring -y in a non-interactive run")
 	}
@@ -599,7 +503,7 @@ func TestHandleSync_ReadOnlyCleanRepoFastForwardsAndReportsSuccess(t *testing.T)
 
 	var err error
 	stdout, _ := captureStdoutStderr(t, func() {
-		err = HandleSync([]string{"repo"}, shared.Flags{})
+		err = HandleSync(nil, shared.Flags{Repo: "repo"})
 	})
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)
@@ -618,90 +522,6 @@ func TestHandleSync_ReadOnlyCleanRepoFastForwardsAndReportsSuccess(t *testing.T)
 	}
 }
 
-func TestHandleSync_DirtyReadOnlyRepoWithYesSkipsAndExitsZero(t *testing.T) {
-	dataDir, scratchRoot := setupSyncEnv(t)
-	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"ns"})
-	markReadOnly(t, "repo")
-
-	headBefore := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
-	remoteHeadBefore := strings.TrimSpace(syncGitRun(t, remote, "rev-parse", "main"))
-
-	if err := os.WriteFile(filepath.Join(repoDir, "ns", "file"), []byte("local edit"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	var err error
-	stdout, _ := captureStdoutStderr(t, func() {
-		err = HandleSync([]string{"repo"}, shared.Flags{Yes: true})
-	})
-	if err != nil {
-		t.Fatalf("HandleSync: %v", err)
-	}
-	if !strings.Contains(stdout, "skipped") {
-		t.Fatalf("expected the summary to report the repository as skipped, got: %s", stdout)
-	}
-
-	content, readErr := os.ReadFile(filepath.Join(repoDir, "ns", "file"))
-	if readErr != nil || string(content) != "local edit" {
-		t.Fatalf("expected the local edit to remain untouched by a skip, got %q, err=%v", content, readErr)
-	}
-	headAfter := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
-	if headAfter != headBefore {
-		t.Fatalf("expected no fast-forward on a skip, before=%s after=%s", headBefore, headAfter)
-	}
-	remoteHead := strings.TrimSpace(syncGitRun(t, remote, "rev-parse", "main"))
-	if remoteHead != remoteHeadBefore {
-		t.Fatal("expected nothing to have been pushed for a read-only repository")
-	}
-}
-
-func TestHandleSync_DirtyReadOnlyRepoWithDiscardTrashesEditsAndFastForwards(t *testing.T) {
-	dataDir, scratchRoot := setupSyncEnv(t)
-	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a", "b"})
-	markReadOnly(t, "repo")
-
-	if err := os.WriteFile(filepath.Join(repoDir, "a", "file"), []byte("local edit"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// A peer edits a different namespace and pushes, so fast-forward has
-	// something real to bring in once the dirty edit above is discarded.
-	peer := filepath.Join(scratchRoot, "peer")
-	syncGitRun(t, scratchRoot, "clone", remote, peer)
-	syncGitRun(t, peer, "config", "user.name", "peer")
-	syncGitRun(t, peer, "config", "user.email", "peer@example.invalid")
-	if err := os.WriteFile(filepath.Join(peer, "b", "file"), []byte("from peer"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	syncGitRun(t, peer, "add", "-A")
-	syncGitRun(t, peer, "commit", "-m", "peer edit")
-	syncGitRun(t, peer, "push", "origin", "main")
-	peerHead := strings.TrimSpace(syncGitRun(t, peer, "rev-parse", "HEAD"))
-
-	var err error
-	stdout, _ := captureStdoutStderr(t, func() {
-		err = HandleSync([]string{"repo"}, shared.Flags{Discard: true})
-	})
-	if err != nil {
-		t.Fatalf("HandleSync: %v", err)
-	}
-	if !strings.Contains(stdout, "repo") {
-		t.Fatalf("expected the summary to report repo, got: %s", stdout)
-	}
-
-	if _, statErr := os.Stat(filepath.Join(repoDir, "a", "file")); !os.IsNotExist(statErr) {
-		t.Fatalf("expected the dirty local edit to have been trashed, stat err=%v", statErr)
-	}
-	content, readErr := os.ReadFile(filepath.Join(repoDir, "b", "file"))
-	if readErr != nil || string(content) != "from peer" {
-		t.Fatalf("expected the fast-forward to have brought in the peer's push, got %q, err=%v", content, readErr)
-	}
-	localHead := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
-	if localHead != peerHead {
-		t.Fatalf("expected repo to fast-forward onto the peer's push, local=%s peer=%s", localHead, peerHead)
-	}
-}
-
 func TestHandleSync_PushAuthFailureSetsReadOnlyFlag(t *testing.T) {
 	dataDir, scratchRoot := setupSyncEnv(t)
 	repoDir, _ := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"ns"})
@@ -714,7 +534,7 @@ func TestHandleSync_PushAuthFailureSetsReadOnlyFlag(t *testing.T) {
 
 	var err error
 	stdout, _ := captureStdoutStderr(t, func() {
-		err = HandleSync([]string{"repo"}, shared.Flags{})
+		err = HandleSync(nil, shared.Flags{Repo: "repo"})
 	})
 	if !errors.Is(err, ErrSomeSkipped) {
 		t.Fatalf("expected ErrSomeSkipped when the push is rejected, got %v", err)
@@ -732,102 +552,267 @@ func TestHandleSync_PushAuthFailureSetsReadOnlyFlag(t *testing.T) {
 	}
 }
 
-// conflictedRepo registers a repository whose "ns/file" was edited on the
-// same line by a peer (pushed) and locally (uncommitted), so a plain sync
-// stops on a content conflict. Returns the repo dir and remote.
-func conflictedRepo(t *testing.T, dataDir, scratchRoot string) (repoDir, remote string) {
+// pushPeerEdit clones remote, writes rel, commits and pushes, standing in
+// for another machine.
+func pushPeerEdit(t *testing.T, scratchRoot, remote, rel, content string) {
 	t.Helper()
-	repoDir, remote = newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"ns"})
-
-	peer := filepath.Join(scratchRoot, "peer")
+	peer := filepath.Join(t.TempDir(), "peer")
 	syncGitRun(t, scratchRoot, "clone", remote, peer)
 	syncGitRun(t, peer, "config", "user.name", "peer")
 	syncGitRun(t, peer, "config", "user.email", "peer@example.invalid")
-	if err := os.WriteFile(filepath.Join(peer, "ns", "file"), []byte("from peer"), 0644); err != nil {
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(peer, rel)), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(peer, rel), []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
 	syncGitRun(t, peer, "add", "-A")
 	syncGitRun(t, peer, "commit", "-m", "peer edit")
 	syncGitRun(t, peer, "push", "origin", "main")
+}
 
-	if err := os.WriteFile(filepath.Join(repoDir, "ns", "file"), []byte("from local"), 0644); err != nil {
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}
-	return repoDir, remote
-}
-
-func TestHandleSync_SideFlagWithoutRepoArgErrorsAndTouchesNothing(t *testing.T) {
-	dataDir, scratchRoot := setupSyncEnv(t)
-	repoDir, _ := conflictedRepo(t, dataDir, scratchRoot)
-	headBefore := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
-
-	err := HandleSync(nil, shared.Flags{Local: true})
-	if err == nil || !strings.Contains(err.Error(), "require naming the repository") {
-		t.Fatalf("expected a naming-the-repository error, got %v", err)
-	}
-	if head := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD")); head != headBefore {
-		t.Fatal("expected nothing to be committed")
-	}
-	if status := strings.TrimSpace(syncGitRun(t, repoDir, "status", "--porcelain")); status == "" {
-		t.Fatal("expected the local edit to remain uncommitted")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestHandleSync_LocalWithRemoteErrors(t *testing.T) {
-	dataDir, scratchRoot := setupSyncEnv(t)
-	conflictedRepo(t, dataDir, scratchRoot)
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
 
-	err := HandleSync([]string{"repo"}, shared.Flags{Local: true, Remote: true})
-	if err == nil || !strings.Contains(err.Error(), "contradictory") {
-		t.Fatalf("expected a contradictory-flags error, got %v", err)
+func saveSyncMode(t *testing.T, repoName, ns, mode string) {
+	t.Helper()
+	s, err := state.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := state.Key{Repo: repoName, Namespace: ns}
+	e := s.Entries[key]
+	e.SyncMode = mode
+	s.Entries[key] = e
+	if err := state.Write(s); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestHandleSync_SideFlagOnReadOnlyRepoErrors(t *testing.T) {
-	dataDir, scratchRoot := setupSyncEnv(t)
-	repoDir, _ := conflictedRepo(t, dataDir, scratchRoot)
-	markReadOnly(t, "repo")
-
-	err := HandleSync([]string{"repo"}, shared.Flags{Local: true})
-	if err == nil || !strings.Contains(err.Error(), "read-only") {
-		t.Fatalf("expected a read-only error, got %v", err)
-	}
-	content, readErr := os.ReadFile(filepath.Join(repoDir, "ns", "file"))
-	if readErr != nil || string(content) != "from local" {
-		t.Fatalf("expected the local edit untouched, got %q, %v", content, readErr)
-	}
+func remoteFile(t *testing.T, remote, rel string) string {
+	t.Helper()
+	return syncGitRun(t, remote, "show", "main:"+rel)
 }
 
-func TestHandleSync_ConflictSummaryNamesPathAndBothRunLinesThenLocalResolves(t *testing.T) {
+func TestHandleSync_ConflictHoldsOnlyThatNamespaceAndRecordsItsBase(t *testing.T) {
 	dataDir, scratchRoot := setupSyncEnv(t)
-	repoDir, remote := conflictedRepo(t, dataDir, scratchRoot)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a", "b"})
+	pushPeerEdit(t, scratchRoot, remote, "a/file", "peer a")
+	writeTestFile(t, filepath.Join(repoDir, "a", "file"), "local a")
+	writeTestFile(t, filepath.Join(repoDir, "b", "file"), "local b")
 
 	var err error
-	stdout, _ := captureStdoutStderr(t, func() {
-		err = HandleSync([]string{"repo"}, shared.Flags{})
-	})
+	stdout, _ := captureStdoutStderr(t, func() { err = HandleSync(nil, shared.Flags{}) })
 	if !errors.Is(err, ErrSomeSkipped) {
-		t.Fatalf("expected ErrSomeSkipped, got %v", err)
+		t.Fatalf("err = %v, want ErrSomeSkipped for a held conflict", err)
 	}
-	for _, want := range []string{"conflict", "ns/file", "dots sync repo --local", "dots sync repo --remote"} {
+	for _, want := range []string{"held", "a: file", "dots sync a --overlay"} {
 		if !strings.Contains(stdout, want) {
-			t.Fatalf("expected the summary to contain %q, got:\n%s", want, stdout)
+			t.Fatalf("summary missing %q:\n%s", want, stdout)
 		}
 	}
+	if got := remoteFile(t, remote, "b/file"); got != "local b" {
+		t.Fatalf("remote b/file = %q, want b pushed despite a's conflict", got)
+	}
+	if got := remoteFile(t, remote, "a/file"); got != "peer a" {
+		t.Fatalf("remote a/file = %q, want the peer's version kept", got)
+	}
+	if got := readFile(t, filepath.Join(repoDir, "a", "file")); got != "local a" {
+		t.Fatalf("held a/file = %q, want untouched", got)
+	}
+	s, _ := state.Read()
+	if s.Entries[state.Key{Repo: "repo", Namespace: "a"}].HeldBase == "" {
+		t.Fatal("expected a held base recorded for a")
+	}
 
-	stdout, _ = captureStdoutStderr(t, func() {
-		err = HandleSync([]string{"repo"}, shared.Flags{Local: true})
-	})
+	// Next sync must not silently overwrite the peer's version.
+	captureStdoutStderr(t, func() { err = HandleSync(nil, shared.Flags{}) })
+	if !errors.Is(err, ErrSomeSkipped) {
+		t.Fatalf("second sync err = %v, want the conflict still held", err)
+	}
+	if got := remoteFile(t, remote, "a/file"); got != "peer a" {
+		t.Fatalf("remote a/file = %q after second sync; the held edit leaked", got)
+	}
+}
+
+func TestHandleSync_OverwriteLocalTrashesEditsTakesRemoteAndClearsHeld(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a"})
+	pushPeerEdit(t, scratchRoot, remote, "a/file", "peer a")
+	writeTestFile(t, filepath.Join(repoDir, "a", "file"), "local a")
+	captureStdoutStderr(t, func() { _ = HandleSync(nil, shared.Flags{}) })
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync([]string{"a"}, shared.Flags{SyncMode: "overwrite-local"}) })
 	if err != nil {
-		t.Fatalf("HandleSync --local: %v", err)
+		t.Fatalf("HandleSync: %v", err)
 	}
-	if !strings.Contains(stdout, "kept local: ns/file") {
-		t.Fatalf("expected the summary to report kept local: ns/file, got:\n%s", stdout)
-	}
-	if got := strings.TrimSpace(syncGitRun(t, remote, "show", "main:ns/file")); got != "from local" {
-		t.Fatalf("remote ns/file = %q, want the local content pushed", got)
+	if got := readFile(t, filepath.Join(repoDir, "a", "file")); got != "peer a" {
+		t.Fatalf("a/file = %q, want the remote's", got)
 	}
 	if status := strings.TrimSpace(syncGitRun(t, repoDir, "status", "--porcelain")); status != "" {
 		t.Fatalf("expected a clean tree, got:\n%s", status)
+	}
+	s, _ := state.Read()
+	if s.Entries[state.Key{Repo: "repo", Namespace: "a"}].HeldBase != "" {
+		t.Fatal("held base not cleared")
+	}
+}
+
+func TestHandleSync_OverwriteRemotePushesLocalVersion(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a"})
+	pushPeerEdit(t, scratchRoot, remote, "a/file", "peer a")
+	writeTestFile(t, filepath.Join(repoDir, "a", "file"), "local a")
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync([]string{"repo/a"}, shared.Flags{SyncMode: "overwrite-remote"}) })
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if got := remoteFile(t, remote, "a/file"); got != "local a" {
+		t.Fatalf("remote a/file = %q, want local", got)
+	}
+}
+
+func TestHandleSync_OverlayKeepsEditsAndUntrackedFilesUnpushed(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a", "b"})
+	saveSyncMode(t, "repo", "a", "overlay")
+	pushPeerEdit(t, scratchRoot, remote, "a/other", "peer other")
+	writeTestFile(t, filepath.Join(repoDir, "a", "file"), "local a")
+	writeTestFile(t, filepath.Join(repoDir, "a", ".uuid"), "junk")
+	writeTestFile(t, filepath.Join(repoDir, "b", "file"), "local b")
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync(nil, shared.Flags{}) })
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if got := remoteFile(t, remote, "a/file"); got != "a" {
+		t.Fatalf("remote a/file = %q, overlay must not push", got)
+	}
+	if strings.Contains(syncGitRun(t, remote, "ls-tree", "-r", "--name-only", "main"), "a/.uuid") {
+		t.Fatal("overlay pushed an untracked file")
+	}
+	if got := remoteFile(t, remote, "b/file"); got != "local b" {
+		t.Fatalf("remote b/file = %q, want b merged and pushed", got)
+	}
+	if readFile(t, filepath.Join(repoDir, "a", "file")) != "local a" || readFile(t, filepath.Join(repoDir, "a", "other")) != "peer other" {
+		t.Fatal("overlay namespace must hold local edits on top of the remote")
+	}
+}
+
+func TestHandleSync_ScopedRunHoldsUnnamedEditsAndUpdatesUnnamedClean(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a", "b", "c"})
+	pushPeerEdit(t, scratchRoot, remote, "c/file", "peer c")
+	writeTestFile(t, filepath.Join(repoDir, "a", "file"), "local a")
+	writeTestFile(t, filepath.Join(repoDir, "b", "file"), "local b")
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync([]string{"a"}, shared.Flags{}) })
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if got := remoteFile(t, remote, "a/file"); got != "local a" {
+		t.Fatalf("named a not pushed: %q", got)
+	}
+	if got := remoteFile(t, remote, "b/file"); got != "b" {
+		t.Fatalf("unnamed b pushed: %q", got)
+	}
+	if got := readFile(t, filepath.Join(repoDir, "b", "file")); got != "local b" {
+		t.Fatalf("unnamed b touched: %q", got)
+	}
+	if got := readFile(t, filepath.Join(repoDir, "c", "file")); got != "peer c" {
+		t.Fatalf("unnamed clean c not updated: %q", got)
+	}
+}
+
+func TestHandleSync_ReadOnlyWithUnpushedCommitsOverlaysOntoRemote(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a", "b"})
+	markReadOnly(t, "repo")
+	pushPeerEdit(t, scratchRoot, remote, "b/file", "peer b")
+	writeTestFile(t, filepath.Join(repoDir, "a", "file"), "local a")
+	syncGitRun(t, repoDir, "add", "-A")
+	syncGitRun(t, repoDir, "commit", "-m", "earlier local commit")
+	remoteHeadBefore := strings.TrimSpace(syncGitRun(t, remote, "rev-parse", "main"))
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync(nil, shared.Flags{}) })
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if head := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD")); head != remoteHeadBefore {
+		t.Fatalf("HEAD = %s, want the remote %s", head, remoteHeadBefore)
+	}
+	if strings.TrimSpace(syncGitRun(t, remote, "rev-parse", "main")) != remoteHeadBefore {
+		t.Fatal("read-only repository pushed")
+	}
+	if readFile(t, filepath.Join(repoDir, "a", "file")) != "local a" || readFile(t, filepath.Join(repoDir, "b", "file")) != "peer b" {
+		t.Fatal("expected local edits on top of the remote")
+	}
+}
+
+func TestHandleSync_ReadOnlyOverwriteRemoteErrorsBeforeTouchingAnything(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a"})
+	markReadOnly(t, "repo")
+	err := HandleSync([]string{"a"}, shared.Flags{SyncMode: "overwrite-remote"})
+	if err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("err = %v, want a read-only refusal", err)
+	}
+}
+
+func TestHandleSync_ModeFlagWithoutTargetErrors(t *testing.T) {
+	setupSyncEnv(t)
+	if err := HandleSync(nil, shared.Flags{SyncMode: "overwrite-local"}); err == nil {
+		t.Fatal("expected a bare mode flag to be refused")
+	}
+}
+
+func TestHandleSync_RepoNameAsArgumentPointsAtRepoFlag(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a"})
+	err := HandleSync([]string{"repo"}, shared.Flags{})
+	if err == nil || !strings.Contains(err.Error(), "--repo") {
+		t.Fatalf("err = %v, want a hint naming --repo", err)
+	}
+}
+
+func TestHandleSync_RootFileConflictFailsRepoAndTouchesNothing(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a"})
+	pushPeerEdit(t, scratchRoot, remote, "README", "peer")
+	syncGitRun(t, repoDir, "fetch", "origin")
+	syncGitRun(t, repoDir, "merge", "--ff-only", "origin/main")
+	pushPeerEdit(t, scratchRoot, remote, "README", "peer again")
+	writeTestFile(t, filepath.Join(repoDir, "README"), "local")
+	headBefore := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
+
+	var err error
+	stdout, _ := captureStdoutStderr(t, func() { err = HandleSync(nil, shared.Flags{}) })
+	if !errors.Is(err, ErrSomeSkipped) || !strings.Contains(stdout, "README") {
+		t.Fatalf("err = %v, stdout:\n%s\nwant a failed repo naming README", err, stdout)
+	}
+	if strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD")) != headBefore || readFile(t, filepath.Join(repoDir, "README")) != "local" {
+		t.Fatal("repository was touched")
 	}
 }
