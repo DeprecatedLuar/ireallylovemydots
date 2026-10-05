@@ -70,9 +70,10 @@ func isTreeLine(line string) bool {
 	return len(fields) >= 2 && fields[1] == "tree"
 }
 
-// mkTree writes a tree holding exactly lines, each an ls-tree line.
+// mkTree writes a tree holding exactly lines, each an ls-tree line. Their
+// objects need not be local: a blobless clone lacks unfetched blobs.
 func mkTree(dir string, lines []string) (string, error) {
-	cmd := exec.Command("git", "mktree", "-z")
+	cmd := exec.Command("git", "mktree", "-z", "--missing")
 	cmd.Dir = dir
 	input := ""
 	if len(lines) > 0 {

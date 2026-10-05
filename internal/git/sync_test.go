@@ -137,6 +137,29 @@ func TestPrepareFinish_MergeBothSidesAndPushable(t *testing.T) {
 	assertSettledCleanly(t, second)
 }
 
+// A blobless clone fetches a changed root file's tree entry but not its
+// blob; sync must still build trees from it.
+func TestPrepareFinish_BloblessCloneRemoteRootFileChange(t *testing.T) {
+	remote, first, _ := newReconcileClones(t)
+	gitRun(t, remote, "config", "uploadpack.allowFilter", "true")
+	blobless := filepath.Join(t.TempDir(), "blobless")
+	gitRun(t, "", "clone", "--filter=blob:none", "file://"+remote, blobless)
+	configureReconcileRepo(t, blobless)
+	pushEdit(t, first, "seed", "remote")
+
+	p, err := Prepare(blobless, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Finish(blobless, p, placeAll(p, merged), true); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFileString(t, blobless, "seed"); got != "remote" {
+		t.Fatalf("seed = %q, want remote", got)
+	}
+	assertSettledCleanly(t, blobless)
+}
+
 func TestPrepareFinish_OverlayKeepsEditsOnTopUncommitted(t *testing.T) {
 	_, first, second := newReconcileClones(t)
 	writeReconcileFile(t, first, "ns/settings", "l1\nl2\nl3\nl4\nl5\n")
