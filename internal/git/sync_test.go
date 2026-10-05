@@ -203,6 +203,39 @@ func TestPrepareFinish_OverlayKeepsEditsOnTopUncommitted(t *testing.T) {
 	}
 }
 
+// A read-only clone with no git identity must still sync: the commits
+// Prepare merges between never reach a branch.
+func TestPrepareFinish_ReadOnlyOverlayWithoutIdentity(t *testing.T) {
+	_, first, second := newReconcileClones(t)
+	pushEdit(t, first, "ns/file", "remote")
+	writeReconcileFile(t, second, "other/file", "local")
+
+	gitRun(t, second, "config", "--unset", "user.name")
+	gitRun(t, second, "config", "--unset", "user.email")
+	gitRun(t, second, "config", "user.useConfigOnly", "true")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for _, v := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"} {
+		t.Setenv(v, "")
+		os.Unsetenv(v)
+	}
+
+	p, err := Prepare(second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay := Placement{Commit: SourceRemote, Worktree: SourceMerged}
+	if _, err := Finish(second, p, placeAll(p, overlay), false); err != nil {
+		t.Fatal(err)
+	}
+	if readFileString(t, second, "ns/file") != "remote" || readFileString(t, second, "other/file") != "local" {
+		t.Fatal("expected the remote change and the local edit on disk")
+	}
+	if head := strings.TrimSpace(gitRun(t, second, "rev-parse", "HEAD")); head != p.Remote {
+		t.Fatalf("HEAD = %s, want remote %s", head, p.Remote)
+	}
+}
+
 func TestPrepare_ConflictReportedPerUnitAndHeldBaseKeepsItDetected(t *testing.T) {
 	_, first, second := newReconcileClones(t)
 	pushEdit(t, first, "ns/file", "base")

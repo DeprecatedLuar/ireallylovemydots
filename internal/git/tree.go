@@ -89,11 +89,16 @@ func mkTree(dir string, lines []string) (string, error) {
 
 // commitTree writes a commit of tree with parents and returns its id.
 func commitTree(dir, tree, msg string, parents ...string) (string, error) {
+	return commitTreeEnv(dir, nil, tree, msg, parents...)
+}
+
+// commitTreeEnv is commitTree with extra environment entries.
+func commitTreeEnv(dir string, env []string, tree, msg string, parents ...string) (string, error) {
 	args := []string{"commit-tree", tree, "-m", msg}
 	for _, p := range parents {
 		args = append(args, "-p", p)
 	}
-	out, err := gitCmd(dir, args...)
+	out, err := gitCmdEnv(dir, env, args...)
 	if err != nil {
 		return "", fmt.Errorf("commit tree in %s: %s", dir, strings.TrimSpace(out))
 	}

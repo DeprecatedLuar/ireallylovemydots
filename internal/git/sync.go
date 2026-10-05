@@ -13,6 +13,13 @@ const (
 	snapshotCommitMsg = "sync snapshot"
 )
 
+// scratchIdentity authors those throwaway commits, so syncing never needs
+// the user's git identity unless it commits for real.
+var scratchIdentity = []string{
+	"GIT_AUTHOR_NAME=dots", "GIT_AUTHOR_EMAIL=dots@localhost",
+	"GIT_COMMITTER_NAME=dots", "GIT_COMMITTER_EMAIL=dots@localhost",
+}
+
 // Unit is one top-level entry of a repository as Prepare found it.
 type Unit struct {
 	Name          string
@@ -170,11 +177,11 @@ func mergeAgainst(dir string, baseEntries map[string]string, onto, localTree str
 	if err != nil {
 		return "", nil, err
 	}
-	baseCommit, err := commitTree(dir, baseTree, baseCommitMsg)
+	baseCommit, err := commitTreeEnv(dir, scratchIdentity, baseTree, baseCommitMsg)
 	if err != nil {
 		return "", nil, err
 	}
-	localCommit, err := commitTree(dir, localTree, snapshotCommitMsg)
+	localCommit, err := commitTreeEnv(dir, scratchIdentity, localTree, snapshotCommitMsg)
 	if err != nil {
 		return "", nil, err
 	}
