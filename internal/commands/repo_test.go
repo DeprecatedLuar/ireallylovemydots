@@ -1148,3 +1148,51 @@ func TestAddRepo_RejectsDuplicateDerivedName_NonInteractive(t *testing.T) {
 		t.Fatalf("registry should be untouched, got %+v", reg.Repos)
 	}
 }
+
+func TestAdoptRepo_PromotesLocalEntryWithRemote(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	strayClone(t, "priv", true)
+	if err := manifest.WriteRegistry(manifest.Registry{Repos: []manifest.Repo{{Name: "priv", Origin: manifest.OriginLocal}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := adoptRepo("priv"); err != nil {
+		t.Fatalf("adoptRepo: %v", err)
+	}
+
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.Repos) != 1 {
+		t.Fatalf("expected one entry, got %+v", reg.Repos)
+	}
+	r := reg.Repos[0]
+	if r.Origin != manifest.OriginConfig || r.URL != "https://example.com/someone/priv.git" || r.Owner != "someone" {
+		t.Fatalf("expected a shared entry with URL and owner, got %+v", r)
+	}
+}
+
+func TestAdoptRepo_LocalEntryWithoutRemoteErrorsUnchanged(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	strayClone(t, "priv", false)
+	if err := manifest.WriteRegistry(manifest.Registry{Repos: []manifest.Repo{{Name: "priv", Origin: manifest.OriginLocal}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := adoptRepo("priv")
+	if err == nil || !strings.Contains(err.Error(), "git remote add origin") {
+		t.Fatalf("expected an error naming git remote add, got %v", err)
+	}
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.Repos) != 1 || reg.Repos[0].Origin != manifest.OriginLocal {
+		t.Fatalf("expected the entry left local, got %+v", reg.Repos)
+	}
+}

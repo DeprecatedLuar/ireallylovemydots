@@ -99,6 +99,42 @@ func handleRepoNounVerb(verb string, args []string, flags shared.Flags) error {
 	}
 }
 
+// promoteLocalRepo moves an already-registered local entry whose clone has
+// gained a remote into the shared repository manifest, per concept.md "The
+// data directory can drift from the registry too". The clone is not
+// touched. An entry already shared, or a clone with no remote, is refused.
+func promoteLocalRepo(reg manifest.Registry, name string) error {
+	for i, r := range reg.Repos {
+		if !strings.EqualFold(r.Name, name) {
+			continue
+		}
+		if r.Origin != manifest.OriginLocal {
+			return fmt.Errorf("%q is already registered", r.Name)
+		}
+		dataDir, err := paths.Data()
+		if err != nil {
+			return err
+		}
+		url, err := git.RemoteURL(filepath.Join(dataDir, r.Name))
+		if err != nil {
+			return err
+		}
+		if url == "" {
+			return fmt.Errorf("%q is registered locally and its clone has no remote; run `git remote add origin <url>` in it first", r.Name)
+		}
+		_, owner := repo.DeriveNameOwner(url)
+		reg.Repos[i].URL = url
+		reg.Repos[i].Owner = owner
+		reg.Repos[i].Origin = manifest.OriginConfig
+		if err := manifest.WriteRegistry(reg); err != nil {
+			return err
+		}
+		fmt.Print(ui.Render([]ui.Entry{{Marker: ui.MarkerMaterialized, Name: r.Name}}))
+		return nil
+	}
+	return fmt.Errorf("%q is not registered", name)
+}
+
 // editRegistry implements `repo edit`: the shared repository manifest in
 // $EDITOR, through the same edit-buffer contract as namespace edit. Local
 // entries are machine state and are not offered for editing.
@@ -196,14 +232,15 @@ func addRepo(url string, flags shared.Flags) error {
 // the registry too" — a directory already sitting in the data directory,
 // left behind by a registry that lost its entry, gets registered without
 // being touched on disk. Unlike addRepo, nothing is cloned and nothing is
-// removed on failure; adopt only ever reads what is already there.
+// removed on failure; adopt only ever reads what is already there. An
+// already-registered local entry is promoted instead — see promoteLocalRepo.
 func adoptRepo(name string) error {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
 		return err
 	}
 	if repoNameTaken(reg, name) {
-		return fmt.Errorf("%q is already registered", name)
+		return promoteLocalRepo(reg, name)
 	}
 
 	dataDir, err := paths.Data()
