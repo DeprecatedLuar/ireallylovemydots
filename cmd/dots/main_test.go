@@ -233,3 +233,13 @@ func TestResolveRoute_TopLevel(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveRoute_SpecTokenRoutesToNamespace(t *testing.T) {
+	r, err := resolveRoute([]string{"dotfiles/nvim"}, nil, nil, noAmbiguity)
+	if err != nil {
+		t.Fatalf("resolveRoute: %v", err)
+	}
+	if r.target != targetNamespace || r.args[0] != "dotfiles/nvim" {
+		t.Fatalf("route = %+v, want namespace target with the spec as first arg", r)
+	}
+}

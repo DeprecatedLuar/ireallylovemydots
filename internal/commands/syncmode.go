@@ -22,6 +22,7 @@ func handleSyncMode(name string, args []string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	name = loc.Name
 	if !loc.Installed {
 		return errNotInstalled(name)
 	}

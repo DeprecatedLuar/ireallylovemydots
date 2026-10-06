@@ -46,6 +46,7 @@ func rmEntry(name string, names []string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	name = loc.Name
 
 	m, err := manifest.Read(loc.Dir)
 	if err != nil {
@@ -137,6 +138,7 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 		if err != nil {
 			return err
 		}
+		name = loc.Name
 		m, err := manifest.Read(loc.Dir)
 		if err != nil {
 			return err

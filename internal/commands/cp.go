@@ -5,13 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/fscopy"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/git"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/grammar"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/namespace"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/repo"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
@@ -102,22 +102,14 @@ func HandleCp(args []string, flags shared.Flags) error {
 }
 
 // parseNamespaceSpec splits "repo/ns" or "owner/repo/ns" into a resolved
-// repository and a namespace name: everything before the last "/" is the
-// repository spec, resolved through repo.Resolve (which accepts both a bare
-// local name and owner/name), and everything after is the namespace name. A
-// single-segment spec, with no "/" at all, is an error naming the required
-// form. Shared with dots mv (implementation-plan.md Phase 17).
+// repository and a namespace name: the repository spec goes through
+// repo.Resolve, which accepts both a bare local name and owner/name. A bare
+// name is an error naming the required form. Shared with dots mv.
 func parseNamespaceSpec(repos []manifest.Repo, spec string) (manifest.Repo, string, error) {
-	idx := strings.LastIndex(spec, "/")
-	if idx < 0 {
-		return manifest.Repo{}, "", fmt.Errorf("%q must be given as repo/namespace or owner/repo/namespace", spec)
-	}
-
-	repoSpec, nsName := spec[:idx], spec[idx+1:]
+	repoSpec, nsName := namespace.SplitSpec(spec)
 	if repoSpec == "" || nsName == "" {
 		return manifest.Repo{}, "", fmt.Errorf("%q must be given as repo/namespace or owner/repo/namespace", spec)
 	}
-
 	r, err := repo.Resolve(repos, repoSpec)
 	if err != nil {
 		return manifest.Repo{}, "", err

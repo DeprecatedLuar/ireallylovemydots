@@ -23,6 +23,7 @@ func disableNamespace(name string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	name = loc.Name
 	s, err := state.Read()
 	if err != nil {
 		return err

@@ -300,6 +300,7 @@ func trackPaths(name string, args []string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	name = loc.Name
 	if !loc.Installed {
 		if err := engine.Materialize(filepath.Dir(loc.Dir), loc.Dir, filepath.Base(loc.Dir)); err != nil {
 			return err
@@ -322,7 +323,7 @@ func trackPaths(name string, args []string, flags shared.Flags) error {
 		fmt.Fprintln(os.Stderr, ui.Tip(fmt.Sprintf("%s is disabled: tracked, not linked. Run `dots %s enable`.", name, name)))
 		return nil
 	}
-	return runEnableBatch([]string{name}, false, false, flags)
+	return runEnableBatch([]string{loc.Repo.Name + "/" + name}, false, false, flags)
 }
 
 // renameNamespace implements `rn`, reached from either spelling.
@@ -337,6 +338,7 @@ func renameNamespace(oldName, newName string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	oldName = loc.Name
 	repoDir := filepath.Dir(loc.Dir)
 	if err := namespace.Rename(repoDir, loc.Repo.Name, oldName, newName); err != nil {
 		return err
@@ -471,6 +473,7 @@ func ignoreNamespace(name string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	name = loc.Name
 	s, err := state.Read()
 	if err != nil {
 		return err
@@ -496,6 +499,7 @@ func unignoreNamespace(name string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	name = loc.Name
 	m, err := manifest.Read(loc.Dir)
 	if err != nil {
 		return err
@@ -599,6 +603,7 @@ func renderNamespaceEntries(name string, flags shared.Flags, findings selfheal.F
 	if err != nil {
 		return err
 	}
+	name = loc.Name
 	if !loc.Installed {
 		return errNotInstalled(name)
 	}

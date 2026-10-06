@@ -277,6 +277,11 @@ func resolveRoute(args []string, namespaces, repos []string, ambiguous func(name
 		return route{target: targetNamespace, args: append([]string{canon}, args[1:]...)}, nil
 	}
 
+	// A namespace spec (repo/ns, owner/repo/ns) can only name a namespace.
+	if strings.Contains(tok0, "/") {
+		return route{target: targetNamespace, args: args}, nil
+	}
+
 	// Bare name: namespace-first alias, or the equivalent repo shortcut.
 	inNS := contains(namespaces, tok0)
 	inRepo := contains(repos, tok0)
@@ -344,7 +349,11 @@ func ambiguityChooser(name string) (string, error) {
 		return "", err
 	}
 	if len(nsRepos) > 1 {
-		return "", fmt.Errorf("namespace %q exists in multiple repositories (%s); disambiguate with --repo", name, strings.Join(nsRepos, ", "))
+		specs := make([]string, len(nsRepos))
+		for i, r := range nsRepos {
+			specs[i] = r + "/" + name
+		}
+		return "", fmt.Errorf("%q names a namespace in %d repositories (%s); name one, e.g. `%s`", name, len(nsRepos), strings.Join(specs, ", "), specs[0])
 	}
 	if !ui.Interactive() {
 		return "", fmt.Errorf("%q matches both a namespace and a repository; use --repo to disambiguate or rename one", name)

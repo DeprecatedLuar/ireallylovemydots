@@ -153,12 +153,9 @@ func syncScopes(dataDir string, repos []manifest.Repo, args []string, repoSpec s
 // resolveSyncArg resolves one sync argument to its repository and
 // namespace. A bare repository name is refused, pointing at --repo.
 func resolveSyncArg(dataDir string, repos []manifest.Repo, arg, repoSpec string) (manifest.Repo, string, error) {
-	if strings.Contains(arg, "/") {
-		return parseNamespaceSpec(repos, arg)
-	}
 	loc, err := namespace.Resolve(dataDir, repos, arg, repoSpec)
 	if err == nil {
-		return loc.Repo, arg, nil
+		return loc.Repo, loc.Name, nil
 	}
 	if r, repoErr := repo.Resolve(repos, arg); repoErr == nil {
 		return manifest.Repo{}, "", fmt.Errorf(repoArgHint, arg, r.Name)
