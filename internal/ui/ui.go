@@ -165,19 +165,21 @@ func Render(entries []Entry) string {
 // destination the block will actually be written to, since colour and
 // NO_COLOR are decided per-destination, not always stdout.
 //
-// A colliding row carries its Repo as a "repo/" prefix ahead of the name —
-// concept.md "Listing output": a name carried by two repositories in the
-// rendered set prints as the namespace spec that selects it. When any entry
-// carries a Count, every such entry's line gets an aligned trailing
-// parenthesis column in the dim tone, padded to the widest
-// marker-plus-name-plus-profile among counted entries; an entry without one
-// prints without a column. This is CountedItems' alignment rule, folded
-// into the one renderer so a block can carry markers, repo-qualified names,
-// and counts together.
+// When any entry carries a Count or a Repo, every such entry's line gets an
+// aligned trailing-parenthesis column in the dim tone, padded to the widest
+// marker-plus-name-plus-profile among decorated entries; an entry with
+// neither prints without one. Repo, when present, is rendered as its own
+// "(repo)" parenthesis ahead of the count's "(n items)" — concept.md
+// "Listing output": a name carried by two repositories in the rendered set
+// is qualified with its repository, in the same trailing-parenthesis shape
+// the count column already uses, ordered before the count when both are
+// present on a row. This is CountedItems' alignment rule, folded into the
+// one renderer so a block can carry markers, repo qualifiers, and counts
+// together.
 func RenderLines(entries []Entry, f *os.File) []string {
 	width := 0
 	for _, e := range entries {
-		if e.Count > 0 {
+		if e.Count > 0 || e.Repo != "" {
 			if l := len(plainPrefix(e)); l > width {
 				width = l
 			}
@@ -188,8 +190,15 @@ func RenderLines(entries []Entry, f *os.File) []string {
 	for i, e := range entries {
 		plain := plainPrefix(e)
 		line := coloredPrefix(e, f)
+		var parens []string
+		if e.Repo != "" {
+			parens = append(parens, fmt.Sprintf("(%s)", e.Repo))
+		}
 		if e.Count > 0 {
-			paren := dimTone(fmt.Sprintf("(%s)", Plural(e.Count, "item")), f)
+			parens = append(parens, fmt.Sprintf("(%s)", Plural(e.Count, "item")))
+		}
+		if len(parens) > 0 {
+			paren := dimTone(strings.Join(parens, " "), f)
 			pad := width - len(plain)
 			if pad < 0 {
 				pad = 0
@@ -206,9 +215,6 @@ func RenderLines(entries []Entry, f *os.File) []string {
 // escape sequence would otherwise count toward the padding.
 func plainPrefix(e Entry) string {
 	name := e.Name
-	if e.Repo != "" {
-		name = e.Repo + "/" + name
-	}
 	if e.Starred {
 		name += starredSuffix
 	}
@@ -219,16 +225,13 @@ func plainPrefix(e Entry) string {
 	return p
 }
 
-// coloredPrefix is plainPrefix with the repo prefix dim and the profile
-// bracket in blue, per concept.md "Listing output": "the bracket is blue...
-// making it match the row's marker would tie a piece of state to a colour
-// that already means something else." The marker and name still pick up the
-// row's marker tone afterward, from colorLine wrapping the whole line.
+// coloredPrefix is plainPrefix with the profile bracket in blue, per
+// concept.md "Listing output": "the bracket is blue... making it match the
+// row's marker would tie a piece of state to a colour that already means
+// something else." The marker and name still pick up the row's marker tone
+// afterward, from colorLine wrapping the whole line.
 func coloredPrefix(e Entry, f *os.File) string {
 	name := e.Name
-	if e.Repo != "" {
-		name = dimTone(e.Repo+"/", f) + name
-	}
 	if e.Starred {
 		name += starredSuffix
 	}
