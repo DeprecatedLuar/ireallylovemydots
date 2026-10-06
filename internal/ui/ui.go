@@ -291,7 +291,11 @@ type Blocked struct {
 // is not a general synonym for "could not be linked".
 func BlockedSummary(blocked []Blocked, state string) string {
 	if len(blocked) == 1 {
-		return manifest.ContractHome(blocked[0].Dest) + DetailSep + blocked[0].Detail
+		line := manifest.DisplayPath(blocked[0].Dest)
+		if blocked[0].Detail != "" {
+			line += DetailSep + blocked[0].Detail
+		}
+		return line
 	}
 	return fmt.Sprintf("%s %s", Plural(len(blocked), "destination"), state)
 }
@@ -323,17 +327,10 @@ func BlockedTip(names []string, base string) string {
 const subIndent = "  "
 
 // Sub formats an indented sub-line under an Operation line, reporting what
-// happened to a path underneath it — a trashed occupant, most commonly.
-// detail may be empty. path is always a destination, so this is where every
-// Sub caller's destination gets ~-contracted for display, per concept.md
-// "What enable reports": "Destinations print ~-contracted, everywhere dots
-// prints one."
-func Sub(marker, path, detail string) string {
-	line := subIndent + fmt.Sprintf("%s %s", marker, manifest.ContractHome(path))
-	if detail != "" {
-		line += DetailSep + detail
-	}
-	return colorLine(marker, line, os.Stdout) + "\n"
+// happened to a path underneath it. display is the path as printed
+// (manifest.DisplayPath), computed by the caller while the path still exists.
+func Sub(marker, display string) string {
+	return colorLine(marker, subIndent+marker+" "+display, os.Stdout) + "\n"
 }
 
 // Report joins already-formatted Operation/Sub lines (each carrying its own

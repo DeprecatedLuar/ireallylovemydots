@@ -65,13 +65,13 @@ func Validate(m Manifest) []Problem {
 				)
 			case paths.Contains(a.Dest, b.Dest):
 				problems = append(problems,
-					Problem{Entry: a.Name, Other: b.Name, Detail: fmt.Sprintf("contains %q's destination %s", b.Name, ContractHome(b.Dest))},
-					Problem{Entry: b.Name, Other: a.Name, Detail: fmt.Sprintf("destination falls inside %q's destination %s", a.Name, ContractHome(a.Dest))},
+					Problem{Entry: a.Name, Other: b.Name, Detail: fmt.Sprintf("contains %q's destination %s", b.Name, DisplayPath(b.Dest))},
+					Problem{Entry: b.Name, Other: a.Name, Detail: fmt.Sprintf("destination falls inside %q's destination %s", a.Name, DisplayPath(a.Dest))},
 				)
 			case paths.Contains(b.Dest, a.Dest):
 				problems = append(problems,
-					Problem{Entry: b.Name, Other: a.Name, Detail: fmt.Sprintf("contains %q's destination %s", a.Name, ContractHome(a.Dest))},
-					Problem{Entry: a.Name, Other: b.Name, Detail: fmt.Sprintf("destination falls inside %q's destination %s", b.Name, ContractHome(b.Dest))},
+					Problem{Entry: b.Name, Other: a.Name, Detail: fmt.Sprintf("contains %q's destination %s", a.Name, DisplayPath(a.Dest))},
+					Problem{Entry: a.Name, Other: b.Name, Detail: fmt.Sprintf("destination falls inside %q's destination %s", b.Name, DisplayPath(b.Dest))},
 				)
 			}
 		}

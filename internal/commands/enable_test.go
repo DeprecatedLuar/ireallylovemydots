@@ -122,11 +122,14 @@ func TestEnableNamespace_OccupiedReportNamesDestinationAndOccupant(t *testing.T)
 	if !errors.Is(err, ErrSomeSkipped) {
 		t.Fatalf("expected an occupied destination to be skipped, got %v", err)
 	}
-	if !strings.Contains(stdout, dest) {
+	if !strings.Contains(stdout, manifest.ContractHome(dest)) {
 		t.Fatalf("expected the report to name the occupied destination, got: %s", stdout)
 	}
-	if !strings.Contains(stdout, "real directory") {
-		t.Fatalf("expected the report to name what occupies the destination, got: %s", stdout)
+	if !strings.Contains(stdout, manifest.ContractHome(dest)+"/") {
+		t.Fatalf("expected the occupied directory printed with a trailing slash, got: %s", stdout)
+	}
+	if strings.Contains(stdout, "real directory") {
+		t.Fatalf("expected no occupant label, got: %s", stdout)
 	}
 	if !strings.Contains(stderr, "--force") {
 		t.Fatalf("expected the count line to name --force, got: %s", stderr)

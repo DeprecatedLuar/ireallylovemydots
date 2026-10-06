@@ -34,16 +34,15 @@ func RestorePreflight(namespaceDir, namespaceName string, entries []manifest.Ent
 			return nil, err
 		}
 		if occupied {
+			what := manifest.DisplayPath(e.Dest)
+			if detail != "" {
+				what += " (" + detail + ")"
+			}
 			problems = append(problems, RestoreProblem{
 				Entry: e,
-				// e.Dest is contracted for display here — concept.md "What
-				// enable reports": "Destinations print ~-contracted,
-				// everywhere dots prints one" — while Restore itself keys
-				// off Entry.Dest, the absolute form, so this never touches
-				// anything but the printed message.
 				Message: fmt.Sprintf(
-					"%s already exists (%s)\n  [t] trash it and restore %s's copy\n  [s] skip this entry, leave the occupant alone\n  [c] cancel",
-					manifest.ContractHome(e.Dest), detail, namespaceName),
+					"%s already exists\n  [t] trash it and restore %s's copy\n  [s] skip this entry, leave the occupant alone\n  [c] cancel",
+					what, namespaceName),
 			})
 		}
 	}
@@ -77,9 +76,9 @@ func restoreOccupancy(dest, payload string) (occupied bool, detail string, err e
 		if len(dirEntries) == 0 {
 			return false, "", nil
 		}
-		return true, fmt.Sprintf("real directory, %d entries", len(dirEntries)), nil
+		return true, "", nil
 	default: // link.RealFile
-		return true, "real file", nil
+		return true, "", nil
 	}
 }
 

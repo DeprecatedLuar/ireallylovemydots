@@ -49,6 +49,9 @@ func TestEnable_OccupiedDestinationTrashedThenLinked(t *testing.T) {
 	if len(res.Replaced) != 1 || res.Replaced[0].Dest != dest {
 		t.Fatalf("expected Enable to report the trashed destination %s, got %+v", dest, res.Replaced)
 	}
+	if res.Replaced[0].Display != manifest.ContractHome(dest) {
+		t.Fatalf("expected a file occupant displayed without a slash, got %q", res.Replaced[0].Display)
+	}
 
 	info, err := os.Lstat(dest)
 	if err != nil || info.Mode()&os.ModeSymlink == 0 {
@@ -139,5 +142,38 @@ func TestEnable_AbsorbsDanglingSymlinkEmptyDirAndLiveSymlink(t *testing.T) {
 	data, err := os.ReadFile(liveTarget)
 	if err != nil || string(data) != "z" {
 		t.Fatalf("expected the live symlink's original target left alone, got data=%q err=%v", data, err)
+	}
+}
+
+func TestEnable_TrashedDirectoryDisplaysTrailingSlash(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	home := t.TempDir()
+	nsDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(nsDir, "config"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(home, ".config", "existing")
+	if err := os.MkdirAll(dest, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "keep"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	entries := []manifest.Entry{{Name: "config", Dest: dest}}
+	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
+	s := state.State{Entries: map[state.Key]state.Entry{}}
+	problems, err := Preflight(key, nsDir, entries, s)
+	if err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+
+	res, err := Enable(key, nsDir, nsDir, "editors", entries, s, problems)
+	if err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if len(res.Replaced) != 1 || res.Replaced[0].Display != manifest.ContractHome(dest)+"/" {
+		t.Fatalf("expected the trashed directory displayed with a trailing slash, got %+v", res.Replaced)
 	}
 }

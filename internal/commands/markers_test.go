@@ -202,7 +202,7 @@ func TestEnable_Force_PrintsTrashedDestinationAsSubLine(t *testing.T) {
 	if strings.TrimSpace(lines[0]) != "+ occA" {
 		t.Fatalf("expected the operation line \"+ occA\", got %q", lines[0])
 	}
-	if !strings.HasPrefix(lines[1], "  x ") || !strings.Contains(lines[1], dest) || !strings.Contains(lines[1], "trash") {
+	if !strings.HasPrefix(lines[1], "  x ") || !strings.Contains(lines[1], dest) || strings.Contains(lines[1], "trash") {
 		t.Fatalf("expected an indented \"x\" sub-line naming the trashed destination, got %q", lines[1])
 	}
 }

@@ -19,11 +19,10 @@ import (
 type LinkFailure struct {
 	Entry manifest.Entry
 	Dest  string
-	// Occupied is true only when Detail describes a real file or non-empty
-	// directory occupying Dest (occupancyDetailText's wording) — every other
-	// failure kind is a "blocked" in concept.md "What enable reports"'s
-	// sense, not an occupied destination, per "The collapsed count names
-	// what actually blocked it".
+	// Occupied is true only when a real file or non-empty directory occupies
+	// Dest; Detail is then empty. Every other failure kind is a "blocked" in
+	// concept.md "What enable reports"'s sense, not an occupied destination,
+	// per "The collapsed count names what actually blocked it".
 	Occupied bool
 	Detail   string
 }
@@ -146,22 +145,10 @@ func converge(namespaceDir string, entries []manifest.Entry, activeProfile strin
 			linked = append(linked, e.Dest)
 			continue
 		case link.RealFile, link.RealDir:
-			// Detail matches pre-flight's own wording for the same
-			// occupied destination (occupancyDetailText via
-			// occupancyDetail), per concept.md "Self-healing": enable's
-			// report and self-heal's report must describe the same
-			// occupancy identically.
-			detail, detailErr := occupancyDetail(e.Dest, st)
-			if detailErr != nil {
-				if transactional {
-					rollback()
-				}
-				return nil, nil, nil, detailErr
-			}
-			failures = append(failures, LinkFailure{Entry: e, Dest: e.Dest, Occupied: true, Detail: detail})
+			failures = append(failures, LinkFailure{Entry: e, Dest: e.Dest, Occupied: true})
 			if transactional {
 				rollback()
-				return nil, nil, nil, fmt.Errorf("%s: %s occupies the destination", e.Dest, detail)
+				return nil, nil, nil, fmt.Errorf("%s is occupied", manifest.DisplayPath(e.Dest))
 			}
 			continue
 		}

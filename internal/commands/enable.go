@@ -148,7 +148,7 @@ func runEnableBatch(names []string, all bool, flags shared.Flags) error {
 			lines = append(lines, ui.Operation(ui.MarkerMaterialized, k.Namespace, ""))
 		}
 		for _, rd := range result.Replaced {
-			lines = append(lines, ui.Sub(ui.MarkerRemoved, rd.Dest, rd.Detail))
+			lines = append(lines, ui.Sub(ui.MarkerRemoved, rd.Display))
 		}
 	}
 
@@ -334,15 +334,13 @@ func problemSummary(problems []engine.Problem) string {
 // destination stripped back off — pre-flight's messages all lead with it
 // ("<dest>: ...", "<dest> already exists (...)", "<dest> is already claimed
 // ...") — since ui.BlockedSummary supplies the destination itself, already
-// ~-contracted. Occupied uses OccupancyDetail's clean parenthesised text
-// rather than the raw sentence, which also carries a remedy paragraph meant
-// for pre-flight's own context, not a report line.
+// ~-contracted. RealFileCollision carries its own Detail.
 func problemDetail(p engine.Problem) string {
 	if p.Kind == engine.NamespaceCollision {
 		return "blocked by " + p.Conflicting.Namespace
 	}
 	if p.Kind == engine.RealFileCollision {
-		return engine.OccupancyDetail(p.Message)
+		return p.Detail
 	}
 	reason := strings.SplitN(p.Message, "\n", 2)[0]
 	reason = strings.TrimPrefix(reason, p.Entry.Dest)
