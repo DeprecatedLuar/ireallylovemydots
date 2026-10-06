@@ -27,6 +27,7 @@ func HandleDoctor(args []string, findings selfheal.Findings) error {
 		return fmt.Errorf("usage: doctor")
 	}
 	renderFindings(findings.All())
+	renderLocalWithRemoteFindings(findings.LocalWithRemote)
 	if err := renderReadOnlyFindings(); err != nil {
 		return err
 	}
@@ -34,6 +35,19 @@ func HandleDoctor(args []string, findings selfheal.Findings) error {
 		return err
 	}
 	return nil
+}
+
+// renderLocalWithRemoteFindings reports every local repository whose clone
+// has gained a remote, naming repo adopt as the fix.
+func renderLocalWithRemoteFindings(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	entries := make([]ui.Entry, len(names))
+	for i, name := range names {
+		entries[i] = ui.Entry{Marker: ui.MarkerProblem, Name: name + ui.DetailSep + "local repository has a remote, run: dots repo adopt " + name}
+	}
+	renderListing(entries)
 }
 
 // renderReadOnlyFindings reports every repository this machine has recorded

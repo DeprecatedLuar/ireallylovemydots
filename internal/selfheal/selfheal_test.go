@@ -1182,3 +1182,64 @@ func TestRun_ConeRepaired_DropsHandRemovedNamespace(t *testing.T) {
 		t.Fatalf("expected cfg-ns to remain in HEAD, ls-tree = %q, err = %v", out, err)
 	}
 }
+
+// localRepoClone registers name as a local-origin repository and builds its
+// clone in the data directory, optionally with an origin remote.
+func localRepoClone(t *testing.T, name string, withRemote bool) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	dir := filepath.Join(dataHome, "ireallylovemydots", name)
+	if err := os.MkdirAll(filepath.Join(dir, "editors"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "editors", ".dots"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, dir)
+	if withRemote {
+		cmd := exec.Command("git", "remote", "add", "origin", "git@github.com:someone/"+name+".git")
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git remote add: %v\n%s", err, out)
+		}
+	}
+	reg := manifest.Registry{Repos: []manifest.Repo{{Name: name, Origin: manifest.OriginLocal}}}
+	if err := manifest.WriteRegistry(reg); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRun_LocalRepoWithRemote_ReportedNeverMoved(t *testing.T) {
+	localRepoClone(t, "priv", true)
+
+	findings, err := Run()
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings.LocalWithRemote) != 1 || findings.LocalWithRemote[0] != "priv" {
+		t.Fatalf("expected [priv], got %v", findings.LocalWithRemote)
+	}
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.Repos) != 1 || reg.Repos[0].Origin != manifest.OriginLocal {
+		t.Fatalf("expected the entry left local, got %+v", reg.Repos)
+	}
+}
+
+func TestRun_LocalRepoWithoutRemote_NotReported(t *testing.T) {
+	localRepoClone(t, "priv", false)
+
+	findings, err := Run()
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(findings.LocalWithRemote) != 0 {
+		t.Fatalf("expected nothing reported, got %v", findings.LocalWithRemote)
+	}
+}
