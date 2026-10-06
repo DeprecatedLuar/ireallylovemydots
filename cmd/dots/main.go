@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"slices"
 	"strings"
 
@@ -19,20 +20,27 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
-// version is stamped at build time via -ldflags "-X main.version=...", per
-// build.sh, using `git describe --always --dirty`. Left at its default when
-// built any other way (`go build ./...`, `go run`), so an unstamped binary
-// still identifies itself as such rather than lying about its provenance.
-var version = "dev"
+// version is stamped by the release workflow via -ldflags "-X
+// main.version=<tag>". Left at devVersion otherwise, in which case
+// printVersion falls back to the VCS stamp `go build` embeds.
+var version = devVersion
+
+// devVersion marks a binary built without a release stamp.
+const devVersion = "dev"
+
+// Build settings `go build` embeds from the git checkout it ran in.
+const (
+	vcsRevisionKey = "vcs.revision"
+	vcsModifiedKey = "vcs.modified"
+)
+
+// shortRevisionLen matches git's default abbreviated commit length.
+const shortRevisionLen = 7
 
 // syncModeFlags are the long flags that pick a sync mode for one run.
 var syncModeFlags = map[string]bool{
 	"--merge": true, "--overlay": true, "--overwrite-local": true, "--overwrite-remote": true,
 }
-
-// versionDirtySuffix is git describe --dirty's own marker; checking for it
-// avoids needing a second ldflags variable to carry a dirty bit.
-const versionDirtySuffix = "-dirty"
 
 // target names which command subtree a resolved route dispatches into.
 type target int
@@ -395,18 +403,41 @@ func hasVersionFlag(args []string) bool {
 	return false
 }
 
-// printVersion reports the commit dots was built from and whether the tree
-// was dirty at build time, per concept.md "Flags" and "Top level". Both come
-// from a single string stamped by build.sh via -ldflags -X main.version=...
-// (git describe --always --dirty), so the dirty state is read back off its
-// "-dirty" suffix rather than carried as a second variable.
+// printVersion reports what dots was built from and whether the tree was
+// dirty at build time, per concept.md "Flags" and "Top level".
 func printVersion() {
-	commit := strings.TrimSuffix(version, versionDirtySuffix)
-	if commit != version {
-		fmt.Printf("dots %s (dirty)\n", commit)
+	stamp, dirty := buildStamp()
+	if dirty {
+		fmt.Printf("dots %s (dirty)\n", stamp)
 		return
 	}
-	fmt.Printf("dots %s\n", commit)
+	fmt.Printf("dots %s\n", stamp)
+}
+
+// buildStamp returns the release tag when one was stamped, otherwise the
+// commit and dirty state recorded by `go build`. A binary built without
+// VCS info (`go run`, outside a checkout) reports devVersion.
+func buildStamp() (stamp string, dirty bool) {
+	if version != devVersion {
+		return version, false
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version, false
+	}
+	stamp = version
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case vcsRevisionKey:
+			stamp = setting.Value
+			if len(stamp) > shortRevisionLen {
+				stamp = stamp[:shortRevisionLen]
+			}
+		case vcsModifiedKey:
+			dirty = setting.Value == "true"
+		}
+	}
+	return stamp, dirty
 }
 
 // die prints err set off by a leading blank line, so it reads as its own
