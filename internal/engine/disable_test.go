@@ -129,3 +129,34 @@ func TestEnable_CollisionDisablesWholeConflictingNamespace(t *testing.T) {
 		t.Fatalf("expected the destination to now point at the new namespace's payload, got %s", target)
 	}
 }
+
+func TestEnableDisable_KeepSyncModeAndHeldBase(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	home := t.TempDir()
+	nsDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(nsDir, "nvim"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	entries := []manifest.Entry{{Name: "nvim", Dest: filepath.Join(home, "nvim")}}
+	key := state.Key{Repo: "dotfiles", Namespace: "editors"}
+	s := state.State{Entries: map[state.Key]state.Entry{
+		key: {SyncMode: "overlay", HeldBase: "abc123"},
+	}}
+
+	if _, err := Enable(key, nsDir, nsDir, "editors", entries, s, nil); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if e := s.Entries[key]; e.SyncMode != "overlay" || e.HeldBase != "abc123" {
+		t.Fatalf("after Enable entry = %+v, want sync mode and held base kept", e)
+	}
+	if err := Disable(key, s); err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
+	e := s.Entries[key]
+	if e.SyncMode != "overlay" || e.HeldBase != "abc123" {
+		t.Fatalf("after Disable entry = %+v, want sync mode and held base kept", e)
+	}
+	if e.Enabled || len(e.LinkedDests) != 0 {
+		t.Fatalf("after Disable entry = %+v, want disabled with no linked dests", e)
+	}
+}

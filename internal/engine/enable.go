@@ -289,7 +289,10 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 	// The active profile survives enable and disable alike: it says which
 	// version of an entry belongs at a destination, not whether anything is
 	// linked, so re-enabling a namespace must put back what was there before.
-	s.Entries[key] = state.Entry{Enabled: true, ActiveProfile: s.Entries[key].ActiveProfile, LinkedDests: dests}
+	entry := s.Entries[key]
+	entry.Enabled = true
+	entry.LinkedDests = dests
+	s.Entries[key] = entry
 	if err := state.Write(s); err != nil {
 		rollback()
 		return result, err
