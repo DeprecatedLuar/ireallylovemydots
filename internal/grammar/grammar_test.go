@@ -154,3 +154,11 @@ func TestIsReservedProfile_MainOnlyAtTheProfileLevel(t *testing.T) {
 		t.Fatal("ordinary reserved words stay reserved at the profile level")
 	}
 }
+
+func TestConfigShortcutsAreReserved(t *testing.T) {
+	for _, w := range []string{"config", "conf"} {
+		if !IsReserved(w) {
+			t.Errorf("IsReserved(%q) = false, want true", w)
+		}
+	}
+}

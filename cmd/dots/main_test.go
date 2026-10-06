@@ -20,6 +20,16 @@ func TestResolveRoute_Aliases(t *testing.T) {
 		want route
 	}{
 		{
+			name: "config shortcut",
+			args: []string{"config"},
+			want: route{target: targetRepo, args: []string{"edit"}},
+		},
+		{
+			name: "conf shortcut",
+			args: []string{"conf"},
+			want: route{target: targetRepo, args: []string{"edit"}},
+		},
+		{
 			name: "canonical",
 			args: []string{"namespace", "neovim", "enable"},
 			want: route{target: targetNamespace, args: []string{"neovim", "enable"}},

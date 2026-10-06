@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/DeprecatedLuar/ireallylovemydots/internal/grammar"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
 )
@@ -60,9 +59,6 @@ func Add(namespaceDir, path string) error {
 	}
 
 	name := filepath.Base(dest)
-	if grammar.IsReserved(name) {
-		return fmt.Errorf("refusing to track %s: %q is a reserved word and cannot be an entry name", dest, name)
-	}
 	m, err := manifest.Read(namespaceDir)
 	if err != nil {
 		return err

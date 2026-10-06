@@ -244,6 +244,8 @@ func resolveRoute(args []string, namespaces, repos []string, ambiguous func(name
 		// top-level alias because "init" is reserved (grammar.RepoOnlyVerbs),
 		// so no namespace or repository can ever be named "init".
 		return route{target: targetRepo, args: append([]string{"init"}, args[1:]...)}, nil
+	case "config", "conf":
+		return route{target: targetRepo, args: append([]string{"edit"}, args[1:]...)}, nil
 	case "sync":
 		return route{target: targetSync, args: args[1:]}, nil
 	case "cp", "copy":

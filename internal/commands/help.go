@@ -16,6 +16,7 @@ func HandleHelp(args []string) error {
 			gohelp.Item("repo add <url>", "Register a repository"),
 			gohelp.Item("repo init [path], init [path]", "Register a local folder, no remote"),
 			gohelp.Item("repo adopt <name>", "Register a clone already in the data directory"),
+			gohelp.Item("repo edit, config, conf", "Open the shared repository manifest in $EDITOR"),
 			gohelp.Item("repo rm <repo>", "Deregister a repository"),
 			gohelp.Item("repo list", "List registered repositories"),
 			gohelp.Item("repo <repo> list", "List that repository's namespaces"),

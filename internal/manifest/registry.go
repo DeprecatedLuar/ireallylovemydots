@@ -158,9 +158,18 @@ func readRegistryFile(path string) ([]Repo, error) {
 		return nil, fmt.Errorf("read registry %s: %w", path, err)
 	}
 
+	repos, err := DecodeRegistry(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse registry %s: %w", path, err)
+	}
+	return repos, nil
+}
+
+// DecodeRegistry parses the contents of one repository manifest file.
+func DecodeRegistry(data []byte) ([]Repo, error) {
 	var r Registry
 	if err := toml.Unmarshal(data, &r); err != nil {
-		return nil, fmt.Errorf("parse registry %s: %w", path, err)
+		return nil, err
 	}
 	return r.Repos, nil
 }

@@ -18,6 +18,8 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
+const registryFilePerm = 0644
+
 // HandleRepo implements the repo subtree: bare listing, the noun-level
 // verbs that operate on a repository by name in an argument (add, rm), and
 // the per-repository verb reached by naming the repository first (list).
@@ -85,11 +87,42 @@ func handleRepoNounVerb(verb string, args []string, flags shared.Flags) error {
 			return fmt.Errorf("usage: repo adopt <name>")
 		}
 		return adoptRepo(args[0])
+	case "edit":
+		if len(args) != 0 {
+			return fmt.Errorf("usage: repo edit")
+		}
+		return editRegistry()
 	case "list":
 		return renderRepoList()
 	default:
 		return fmt.Errorf("repo %s: not valid without a repository name", verb)
 	}
+}
+
+// editRegistry implements `repo edit`: the shared repository manifest in
+// $EDITOR, through the same edit-buffer contract as namespace edit. Local
+// entries are machine state and are not offered for editing.
+func editRegistry() error {
+	path, err := manifest.RegistryPath()
+	if err != nil {
+		return err
+	}
+	seed, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	return editBuffer(seed, path,
+		func(edited []byte) error {
+			_, err := manifest.DecodeRegistry(edited)
+			return err
+		},
+		func(_, edited []byte) error {
+			if err := os.WriteFile(path, edited, registryFilePerm); err != nil {
+				return fmt.Errorf("write %s: %w", path, err)
+			}
+			return nil
+		},
+	)
 }
 
 // addRepo implements `repo add <url>`: derive the local name and owner from
