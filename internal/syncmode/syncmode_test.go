@@ -81,3 +81,27 @@ func TestDecide_RootFileConflictErrors(t *testing.T) {
 		t.Fatalf("err = %v, want ErrRootConflict", err)
 	}
 }
+
+func TestDecide_RemovedRemote(t *testing.T) {
+	takeRemote := git.Placement{Commit: git.SourceRemote, Worktree: git.SourceRemote}
+	cases := []struct {
+		name string
+		u    Unit
+		want Outcome
+	}{
+		{"unchanged takes remote", Unit{Dir: true, InScope: true, RemovedRemote: true}, Outcome{Placement: takeRemote}},
+		{"edited is trashed, not held", Unit{Dir: true, InScope: true, ChangedLocal: true, RemovedRemote: true, Conflicted: true, Mode: Merge}, Outcome{Placement: takeRemote, Trash: true}},
+		{"overlay edits are trashed too", Unit{Dir: true, InScope: true, ChangedLocal: true, RemovedRemote: true, Mode: Overlay}, Outcome{Placement: takeRemote, Trash: true}},
+		{"out of scope edited stays held", Unit{Dir: true, ChangedLocal: true, RemovedRemote: true, Conflicted: true, Mode: Merge}, Outcome{Placement: git.Placement{Commit: git.SourceRemote, Worktree: git.SourceUntouched}, Held: true}},
+		{"overwrite-remote commits it back", Unit{Dir: true, InScope: true, ChangedLocal: true, RemovedRemote: true, Mode: OverwriteRemote}, Outcome{Placement: git.Placement{Commit: git.SourceLocal, Worktree: git.SourceUntouched}}},
+	}
+	for _, c := range cases {
+		got, err := Decide(c.u)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got != c.want {
+			t.Fatalf("%s: Decide = %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}

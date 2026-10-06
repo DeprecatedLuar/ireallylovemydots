@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/engine"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/git"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/namespace"
@@ -28,9 +29,17 @@ const (
 	heldPlaceholder    = "<namespace>"
 	heldPathIndent     = "    "
 	leftAsIsLabel      = "left as-is: "
+	removedLabel       = "removed upstream: "
+	removalNeedsYesMsg = "would remove %d namespaces deleted upstream (%s); rerun with -y to confirm"
+	removalPromptMsg   = "%q: %d namespaces were deleted upstream and will be removed here (unlinked, folders trashed):"
+	removalDeclinedMsg = "removal declined; nothing applied"
 	modeFlagNeedsScope = "a sync mode flag needs namespaces or --repo: dots sync <namespace> --%s"
 	repoArgHint        = "%q is a repository; sync takes namespaces, so use: dots sync --repo %s"
 )
+
+// removalLimit is how many upstream-deleted namespaces one sync removes
+// without confirmation.
+const removalLimit = 3
 
 // syncScope is one repository a run syncs, and which of its namespaces.
 type syncScope struct {
@@ -55,6 +64,7 @@ type syncResult struct {
 	err      error
 	held     []heldUnit
 	leftAsIs []string
+	removed  []string
 }
 
 // HandleSync implements `dots sync [<ns>...] [--repo <repo>] [--<mode>]`:
@@ -199,6 +209,12 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 			return res
 		}
 		placements[u.Name] = out.Placement
+		if u.Dir && u.RemovedRemote && out.Placement.Worktree == git.SourceRemote {
+			if installedHere(s, repoDir, name, u.Name) {
+				res.removed = append(res.removed, u.Name)
+			}
+			continue
+		}
 		switch {
 		case out.Trash:
 			trashed = append(trashed, u.Name)
@@ -211,7 +227,17 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 		}
 	}
 
+	if err := confirmUpstreamRemoval(name, res.removed, flags); err != nil {
+		res.err = err
+		res.removed = nil
+		return res
+	}
+
 	if err := trashNamespaces(repoDir, trashed); err != nil {
+		res.err = err
+		return res
+	}
+	if err := dropRemovedNamespaces(repoDir, name, res.removed); err != nil {
 		res.err = err
 		return res
 	}
@@ -247,10 +273,11 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 // read-only repository refuses errors only when it would act.
 func decideUnit(s state.State, repoName string, sc syncScope, u git.Unit, flagMode syncmode.Mode, readOnly bool) (syncmode.Outcome, error) {
 	unit := syncmode.Unit{
-		Dir:          u.Dir,
-		InScope:      sc.inScope(u),
-		ChangedLocal: u.ChangedLocal,
-		Conflicted:   len(u.Conflicts) > 0,
+		Dir:           u.Dir,
+		InScope:       sc.inScope(u),
+		ChangedLocal:  u.ChangedLocal,
+		Conflicted:    len(u.Conflicts) > 0,
+		RemovedRemote: u.RemovedRemote,
 	}
 	if unit.ChangedLocal && unit.InScope {
 		var flag, saved syncmode.Mode
@@ -269,6 +296,62 @@ func decideUnit(s state.State, repoName string, sc syncScope, u git.Unit, flagMo
 		return out, fmt.Errorf("%s %w; resolve it by hand in the clone", strings.Join(u.Conflicts, ", "), err)
 	}
 	return out, err
+}
+
+// confirmUpstreamRemoval asks before one sync removes more than removalLimit
+// namespaces another machine deleted; -y skips the prompt.
+func confirmUpstreamRemoval(repoName string, removed []string, flags shared.Flags) error {
+	if len(removed) <= removalLimit || flags.Yes {
+		return nil
+	}
+	if !ui.Interactive() {
+		return fmt.Errorf(removalNeedsYesMsg, len(removed), strings.Join(removed, ", "))
+	}
+	block := ui.List(ui.WarningTone(fmt.Sprintf(removalPromptMsg, repoName, len(removed))), removed, "")
+	choice, err := ui.Prompt(block, "Do you want to proceed?", []string{"y", "N"})
+	if err != nil {
+		return err
+	}
+	if !ui.IsYes(choice) {
+		return errors.New(removalDeclinedMsg)
+	}
+	return nil
+}
+
+// installedHere reports whether a namespace has a state entry or a folder
+// on this machine.
+func installedHere(s state.State, repoDir, repoName, ns string) bool {
+	if _, ok := s.Entries[state.Key{Repo: repoName, Namespace: ns}]; ok {
+		return true
+	}
+	_, err := os.Lstat(filepath.Join(repoDir, ns))
+	return err == nil
+}
+
+// dropRemovedNamespaces does on this machine what namespace rm did on the
+// one that deleted each namespace: unlink it, forget it, trash its folder.
+func dropRemovedNamespaces(repoDir, repoName string, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	s, err := state.Read()
+	if err != nil {
+		return err
+	}
+	for _, n := range names {
+		key := state.Key{Repo: repoName, Namespace: n}
+		if err := engine.Disable(key, s); err != nil {
+			return err
+		}
+		delete(s.Entries, key)
+		dir := filepath.Join(repoDir, n)
+		if _, err := os.Lstat(dir); err == nil {
+			if _, err := trash.Move(dir); err != nil {
+				return fmt.Errorf("trash %s: %w", dir, err)
+			}
+		}
+	}
+	return state.Write(s)
 }
 
 // heldBases returns the saved held base of every namespace of repoName.
@@ -340,20 +423,31 @@ func trashNamespaces(repoDir string, names []string) error {
 }
 
 // printSyncSummary renders one line per repository: "!" for a failure or
-// a conflict-held namespace, "+" otherwise, noting namespaces left as-is.
+// a conflict-held namespace, "+" otherwise, noting namespaces removed
+// upstream and left as-is.
 func printSyncSummary(results []syncResult) {
 	lines := make([]string, 0, len(results))
 	for _, res := range results {
-		switch {
-		case res.err != nil:
+		if res.err != nil {
 			lines = append(lines, ui.Operation(ui.MarkerProblem, res.name, res.err.Error()))
-		case len(res.held) > 0:
-			lines = append(lines, ui.Operation(ui.MarkerProblem, res.name, heldDetail(res.held)))
-		case len(res.leftAsIs) > 0:
-			lines = append(lines, ui.Operation(ui.MarkerEnabled, res.name, leftAsIsLabel+strings.Join(res.leftAsIs, ", ")))
-		default:
-			lines = append(lines, ui.Operation(ui.MarkerEnabled, res.name, ""))
+			continue
 		}
+		var parts []string
+		if len(res.removed) > 0 {
+			parts = append(parts, removedLabel+strings.Join(res.removed, ", "))
+		}
+		if len(res.leftAsIs) > 0 {
+			parts = append(parts, leftAsIsLabel+strings.Join(res.leftAsIs, ", "))
+		}
+		detail := strings.Join(parts, "; ")
+		if len(res.held) > 0 {
+			if detail != "" {
+				detail += "; "
+			}
+			lines = append(lines, ui.Operation(ui.MarkerProblem, res.name, detail+heldDetail(res.held)))
+			continue
+		}
+		lines = append(lines, ui.Operation(ui.MarkerEnabled, res.name, detail))
 	}
 	fmt.Print(ui.Report(lines, ""))
 }

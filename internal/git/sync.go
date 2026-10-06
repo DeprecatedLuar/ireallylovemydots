@@ -27,6 +27,8 @@ type Unit struct {
 	Base          string
 	ChangedLocal  bool
 	ChangedRemote bool
+	// RemovedRemote is an entry the base has and the remote deleted.
+	RemovedRemote bool
 	Conflicts     []string
 }
 
@@ -116,6 +118,7 @@ func Prepare(dir string, heldBases map[string]string) (Prepared, error) {
 			Base:          unitBase(name),
 			ChangedLocal:  localEntries[name] != baseEntries[name],
 			ChangedRemote: ontoEntries[name] != baseEntries[name],
+			RemovedRemote: baseEntries[name] != "" && ontoEntries[name] == "",
 			Conflicts:     conflicts[name],
 		})
 	}

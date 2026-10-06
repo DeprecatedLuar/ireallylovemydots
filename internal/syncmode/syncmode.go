@@ -82,8 +82,10 @@ type Unit struct {
 	// InScope is false for a namespace this run was not asked to sync.
 	InScope      bool
 	ChangedLocal bool
-	Conflicted   bool
-	Mode         Mode
+	// RemovedRemote is an entry another machine deleted.
+	RemovedRemote bool
+	Conflicted    bool
+	Mode          Mode
 }
 
 // Outcome is Decide's answer for one entry.
@@ -102,7 +104,9 @@ var (
 
 // Decide places one entry. An entry with no local changes always takes the
 // remote; one with local changes follows its mode, and is held when it is
-// out of scope or conflicts in merge or overlay.
+// out of scope or conflicts in merge or overlay. An entry another machine
+// deleted takes the remote and has its local edits trashed, unless the mode
+// is overwrite-remote or the entry is out of scope.
 func Decide(u Unit) (Outcome, error) {
 	if !u.ChangedLocal {
 		return Outcome{Placement: takeRemote}, nil
@@ -114,6 +118,9 @@ func Decide(u Unit) (Outcome, error) {
 	case OverwriteRemote:
 		return Outcome{Placement: git.Placement{Commit: git.SourceLocal, Worktree: git.SourceUntouched}}, nil
 	case OverwriteLocal:
+		return Outcome{Placement: takeRemote, Trash: true}, nil
+	}
+	if u.RemovedRemote {
 		return Outcome{Placement: takeRemote, Trash: true}, nil
 	}
 	if u.Conflicted {
