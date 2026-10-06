@@ -322,7 +322,7 @@ func trackPaths(name string, args []string, flags shared.Flags) error {
 		fmt.Fprintln(os.Stderr, ui.Tip(fmt.Sprintf("%s is disabled: tracked, not linked. Run `dots %s enable`.", name, name)))
 		return nil
 	}
-	return enableNamespace(name, flags)
+	return runEnableBatch([]string{name}, false, false, flags)
 }
 
 // renameNamespace implements `rn`, reached from either spelling.
