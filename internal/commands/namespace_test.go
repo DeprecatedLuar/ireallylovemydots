@@ -324,3 +324,16 @@ func TestEditNamespace_ValidateRejectsDuplicateDestination(t *testing.T) {
 		t.Fatalf("expected both entry names in the error, got %q", err)
 	}
 }
+
+func TestResolveTargetRepo_SeveralReposErrorsNamingThemAndRepoFlag(t *testing.T) {
+	reg := manifest.Registry{Repos: []manifest.Repo{{Name: "krita-config"}, {Name: "dots"}}}
+
+	_, err := resolveTargetRepo(reg, shared.Flags{})
+	if err == nil {
+		t.Fatal("expected an error with several repositories and no --repo")
+	}
+	want := "multiple repositories registered (dots, krita-config); rerun with --repo <name>"
+	if err.Error() != want {
+		t.Fatalf("got %q, want %q", err.Error(), want)
+	}
+}

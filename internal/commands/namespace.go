@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
@@ -253,8 +254,8 @@ func createNamespace(name string, flags shared.Flags) error {
 }
 
 // resolveTargetRepo picks the repository a new namespace belongs to, per
-// concept.md "Namespace level": the sole registered repository, --repo when
-// given, or a prompt (hard error non-interactively) when several exist.
+// concept.md "Name resolution": --repo when given, the sole registered
+// repository, or an error naming every repository.
 func resolveTargetRepo(reg manifest.Registry, flags shared.Flags) (manifest.Repo, error) {
 	if flags.Repo != "" {
 		return repo.Resolve(reg.Repos, flags.Repo)
@@ -266,18 +267,12 @@ func resolveTargetRepo(reg manifest.Registry, flags shared.Flags) (manifest.Repo
 		return reg.Repos[0], nil
 	}
 
-	if !ui.Interactive() {
-		return manifest.Repo{}, fmt.Errorf("multiple repositories registered; specify --repo")
-	}
 	names := make([]string, 0, len(reg.Repos))
 	for _, r := range reg.Repos {
 		names = append(names, r.Name)
 	}
-	choice, err := ui.Prompt("", "Multiple repositories registered. Choose one to hold the new namespace:", names)
-	if err != nil {
-		return manifest.Repo{}, err
-	}
-	return repo.Resolve(reg.Repos, choice)
+	sort.Strings(names)
+	return manifest.Repo{}, fmt.Errorf("multiple repositories registered (%s); rerun with --repo <name>", strings.Join(names, ", "))
 }
 
 // trackPaths implements `namespace <ns> add <path>...`: namespace.Add moves
