@@ -154,3 +154,17 @@ func TestRender_StarredNameGetsAsterisk(t *testing.T) {
 		t.Fatalf("Render = %q, want %q", got, "+ noctalia*\n")
 	}
 }
+
+func TestRenderLines_CollidingRowPrintsSpec(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	lines := RenderLines([]Entry{
+		{Marker: "=", Name: "krita", Repo: "neodots", Profile: "dark"},
+		{Marker: "=", Name: "tmux"},
+	}, os.Stdout)
+	if lines[0] != "= neodots/krita [dark]" {
+		t.Fatalf("line = %q, want %q", lines[0], "= neodots/krita [dark]")
+	}
+	if lines[1] != "= tmux" {
+		t.Fatalf("line = %q, want %q", lines[1], "= tmux")
+	}
+}
