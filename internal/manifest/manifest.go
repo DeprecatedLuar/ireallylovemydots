@@ -142,6 +142,15 @@ func expandHome(dest string) string {
 	return dest
 }
 
+// DisplayPath is the form every printed path takes: ~-contracted, with a
+// trailing slash when it is a directory on disk.
+func DisplayPath(p string) string {
+	if info, err := os.Stat(p); err == nil && info.IsDir() {
+		return ContractHome(p) + "/"
+	}
+	return ContractHome(p)
+}
+
 // ContractHome rewrites an absolute destination under the user's home
 // directory to its ~-relative form — the portable form manifests are always
 // written in (see Encode), and, more generally, the form dots must print

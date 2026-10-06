@@ -105,6 +105,11 @@ type Findings struct {
 	// "Self-healing": reported on every invocation, never auto-registered.
 	// The fix is `repo adopt <name>`.
 	Unregistered []string
+
+	// LocalWithRemote names every local-registry repository whose clone
+	// has an origin remote. Reported, never moved: the shared repository
+	// manifest is written only by `repo adopt <name>`.
+	LocalWithRemote []string
 	// Dropped lists every state entry removed this pass because its
 	// repository's directory no longer exists in the data directory.
 	Dropped []state.Key
@@ -397,9 +402,12 @@ func Run() (Findings, error) {
 	// either — it reads manifests and state through plain file ops, never
 	// through git.
 	var coneRepairs []ConeRepaired
+	var localWithRemote []string
+	origins := make(map[string]manifest.Origin, len(reg.Repos))
 	repoNames := make([]string, 0, len(reg.Repos))
 	for _, r := range reg.Repos {
 		repoNames = append(repoNames, r.Name)
+		origins[r.Name] = r.Origin
 	}
 	sort.Strings(repoNames)
 	for _, name := range repoNames {
@@ -417,6 +425,15 @@ func Run() (Findings, error) {
 		}
 		if len(added) > 0 || len(removed) > 0 {
 			coneRepairs = append(coneRepairs, ConeRepaired{Repo: name, Added: added, Removed: removed})
+		}
+		if origins[name] == manifest.OriginLocal {
+			url, err := git.RemoteURL(registered[name])
+			if err != nil {
+				return Findings{}, err
+			}
+			if url != "" {
+				localWithRemote = append(localWithRemote, name)
+			}
 		}
 	}
 
@@ -620,6 +637,7 @@ func Run() (Findings, error) {
 	return Findings{
 		Problems:         problems,
 		Unregistered:     unregistered,
+		LocalWithRemote:  localWithRemote,
 		Dropped:          dropped,
 		Recovered:        recovered,
 		NeedsRepair:      repairs,

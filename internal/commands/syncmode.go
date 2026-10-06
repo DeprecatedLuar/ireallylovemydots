@@ -22,8 +22,9 @@ func handleSyncMode(name string, args []string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	name = loc.Name
 	if !loc.Installed {
-		return fmt.Errorf("namespace %q is not installed on this machine", name)
+		return errNotInstalled(name)
 	}
 	access, err := state.ReadAccess()
 	if err != nil {

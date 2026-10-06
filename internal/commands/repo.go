@@ -18,6 +18,8 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
+const registryFilePerm = 0644
+
 // HandleRepo implements the repo subtree: bare listing, the noun-level
 // verbs that operate on a repository by name in an argument (add, rm), and
 // the per-repository verb reached by naming the repository first (list).
@@ -85,11 +87,78 @@ func handleRepoNounVerb(verb string, args []string, flags shared.Flags) error {
 			return fmt.Errorf("usage: repo adopt <name>")
 		}
 		return adoptRepo(args[0])
+	case "edit":
+		if len(args) != 0 {
+			return fmt.Errorf("usage: repo edit")
+		}
+		return editRegistry()
 	case "list":
 		return renderRepoList()
 	default:
 		return fmt.Errorf("repo %s: not valid without a repository name", verb)
 	}
+}
+
+// promoteLocalRepo moves an already-registered local entry whose clone has
+// gained a remote into the shared repository manifest, per concept.md "The
+// data directory can drift from the registry too". The clone is not
+// touched. An entry already shared, or a clone with no remote, is refused.
+func promoteLocalRepo(reg manifest.Registry, name string) error {
+	for i, r := range reg.Repos {
+		if !strings.EqualFold(r.Name, name) {
+			continue
+		}
+		if r.Origin != manifest.OriginLocal {
+			return fmt.Errorf("%q is already registered", r.Name)
+		}
+		dataDir, err := paths.Data()
+		if err != nil {
+			return err
+		}
+		url, err := git.RemoteURL(filepath.Join(dataDir, r.Name))
+		if err != nil {
+			return err
+		}
+		if url == "" {
+			return fmt.Errorf("%q is registered locally and its clone has no remote; run `git remote add origin <url>` in it first", r.Name)
+		}
+		_, owner := repo.DeriveNameOwner(url)
+		reg.Repos[i].URL = url
+		reg.Repos[i].Owner = owner
+		reg.Repos[i].Origin = manifest.OriginConfig
+		if err := manifest.WriteRegistry(reg); err != nil {
+			return err
+		}
+		fmt.Print(ui.Render([]ui.Entry{{Marker: ui.MarkerMaterialized, Name: r.Name}}))
+		return nil
+	}
+	return fmt.Errorf("%q is not registered", name)
+}
+
+// editRegistry implements `repo edit`: the shared repository manifest in
+// $EDITOR, through the same edit-buffer contract as namespace edit. Local
+// entries are machine state and are not offered for editing.
+func editRegistry() error {
+	path, err := manifest.RegistryPath()
+	if err != nil {
+		return err
+	}
+	seed, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	return editBuffer(seed, path,
+		func(edited []byte) error {
+			_, err := manifest.DecodeRegistry(edited)
+			return err
+		},
+		func(_, edited []byte) error {
+			if err := os.WriteFile(path, edited, registryFilePerm); err != nil {
+				return fmt.Errorf("write %s: %w", path, err)
+			}
+			return nil
+		},
+	)
 }
 
 // addRepo implements `repo add <url>`: derive the local name and owner from
@@ -163,14 +232,15 @@ func addRepo(url string, flags shared.Flags) error {
 // the registry too" — a directory already sitting in the data directory,
 // left behind by a registry that lost its entry, gets registered without
 // being touched on disk. Unlike addRepo, nothing is cloned and nothing is
-// removed on failure; adopt only ever reads what is already there.
+// removed on failure; adopt only ever reads what is already there. An
+// already-registered local entry is promoted instead — see promoteLocalRepo.
 func adoptRepo(name string) error {
 	reg, err := manifest.ReadRegistry()
 	if err != nil {
 		return err
 	}
 	if repoNameTaken(reg, name) {
-		return fmt.Errorf("%q is already registered", name)
+		return promoteLocalRepo(reg, name)
 	}
 
 	dataDir, err := paths.Data()
@@ -342,7 +412,7 @@ func renderGitignorePreview(changes []repo.GitignoreChange) string {
 func bootstrapPreviewEntries(plan []repo.PlannedNamespace) []ui.Pair {
 	pairs := make([]ui.Pair, 0, len(plan))
 	for _, p := range plan {
-		pairs = append(pairs, ui.Pair{Name: p.Namespace, Value: manifest.ContractHome(p.Dest)})
+		pairs = append(pairs, ui.Pair{Name: p.Namespace, Value: manifest.DisplayPath(p.Dest)})
 	}
 	return pairs
 }
@@ -684,7 +754,7 @@ func reportRelinkFailures(failures []engine.LinkFailure) {
 		return
 	}
 	for _, f := range failures {
-		fmt.Fprintln(os.Stderr, ui.WarningTone(fmt.Sprintf("! %s%s%s", manifest.ContractHome(f.Dest), ui.DetailSep, f.Detail)))
+		fmt.Fprintln(os.Stderr, ui.WarningTone("! "+ui.BlockedSummary([]ui.Blocked{{Dest: f.Dest, Detail: f.Detail}}, "")))
 	}
 	fmt.Fprintln(os.Stderr, ui.Tip("run `dots enable <namespace>` to retry, add --force to trash the occupant"))
 }

@@ -41,6 +41,7 @@ func installNamespaces(names []string, flags shared.Flags) error {
 		if err != nil {
 			return err
 		}
+		name = loc.Name
 		repoDir := filepath.Dir(loc.Dir)
 		if err := engine.Materialize(repoDir, loc.Dir, name); err != nil {
 			return err
@@ -72,6 +73,7 @@ func uninstallNamespaces(names []string, flags shared.Flags) error {
 		if err != nil {
 			return err
 		}
+		name = loc.Name
 		targets = append(targets, resolved{name: name, loc: loc})
 		repoNamespaces[loc.Repo.Name] = append(repoNamespaces[loc.Repo.Name], name)
 	}

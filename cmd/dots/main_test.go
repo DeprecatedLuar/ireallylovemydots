@@ -20,6 +20,16 @@ func TestResolveRoute_Aliases(t *testing.T) {
 		want route
 	}{
 		{
+			name: "config shortcut",
+			args: []string{"config"},
+			want: route{target: targetRepo, args: []string{"edit"}},
+		},
+		{
+			name: "conf shortcut",
+			args: []string{"conf"},
+			want: route{target: targetRepo, args: []string{"edit"}},
+		},
+		{
 			name: "canonical",
 			args: []string{"namespace", "neovim", "enable"},
 			want: route{target: targetNamespace, args: []string{"neovim", "enable"}},
@@ -221,5 +231,15 @@ func TestResolveRoute_TopLevel(t *testing.T) {
 		if got.target != c.want {
 			t.Fatalf("resolveRoute(%v) target = %v, want %v", c.args, got.target, c.want)
 		}
+	}
+}
+
+func TestResolveRoute_SpecTokenRoutesToNamespace(t *testing.T) {
+	r, err := resolveRoute([]string{"dotfiles/nvim"}, nil, nil, noAmbiguity)
+	if err != nil {
+		t.Fatalf("resolveRoute: %v", err)
+	}
+	if r.target != targetNamespace || r.args[0] != "dotfiles/nvim" {
+		t.Fatalf("route = %+v, want namespace target with the spec as first arg", r)
 	}
 }

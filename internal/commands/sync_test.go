@@ -816,3 +816,136 @@ func TestHandleSync_RootFileConflictFailsRepoAndTouchesNothing(t *testing.T) {
 		t.Fatal("repository was touched")
 	}
 }
+
+// pushPeerRemoval removes the named namespaces in a fresh peer clone and
+// pushes, as namespace rm plus sync would on another machine.
+func pushPeerRemoval(t *testing.T, scratchRoot, remote string, namespaces ...string) {
+	t.Helper()
+	peer := filepath.Join(t.TempDir(), "peer")
+	syncGitRun(t, scratchRoot, "clone", remote, peer)
+	syncGitRun(t, peer, "config", "user.name", "peer")
+	syncGitRun(t, peer, "config", "user.email", "peer@example.invalid")
+	syncGitRun(t, peer, append([]string{"rm", "-r", "-q"}, namespaces...)...)
+	syncGitRun(t, peer, "commit", "-m", "peer removal")
+	syncGitRun(t, peer, "push", "origin", "main")
+}
+
+// linkNamespace records ns as enabled with one live symlink at dest pointing
+// into its folder, the state enable leaves behind.
+func linkNamespace(t *testing.T, repoDir, repoName, ns string) (dest string) {
+	t.Helper()
+	dest = filepath.Join(t.TempDir(), ns)
+	if err := os.Symlink(filepath.Join(repoDir, ns, "file"), dest); err != nil {
+		t.Fatal(err)
+	}
+	s, err := state.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Entries[state.Key{Repo: repoName, Namespace: ns}] = state.Entry{Enabled: true, LinkedDests: []string{dest}}
+	if err := state.Write(s); err != nil {
+		t.Fatal(err)
+	}
+	return dest
+}
+
+func assertRemovedHere(t *testing.T, repoDir, repoName, ns, dest string) {
+	t.Helper()
+	if _, err := os.Lstat(dest); !os.IsNotExist(err) {
+		t.Fatalf("link %s still present (err=%v)", dest, err)
+	}
+	if _, err := os.Lstat(filepath.Join(repoDir, ns)); !os.IsNotExist(err) {
+		t.Fatalf("folder %s still present (err=%v); a leftover reads as an installed namespace", ns, err)
+	}
+	s, _ := state.Read()
+	if _, ok := s.Entries[state.Key{Repo: repoName, Namespace: ns}]; ok {
+		t.Fatalf("state entry for %s still present", ns)
+	}
+}
+
+func TestHandleSync_UnchangedNamespaceDeletedUpstreamIsRemovedHere(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a", "b"})
+	dest := linkNamespace(t, repoDir, "repo", "a")
+	pushPeerRemoval(t, scratchRoot, remote, "a")
+
+	var err error
+	stdout, _ := captureStdoutStderr(t, func() { err = HandleSync(nil, shared.Flags{}) })
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if !strings.Contains(stdout, "removed upstream: a") {
+		t.Fatalf("summary missing removal:\n%s", stdout)
+	}
+	assertRemovedHere(t, repoDir, "repo", "a", dest)
+}
+
+func TestHandleSync_EditedNamespaceDeletedUpstreamIsTrashedNotResurrected(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a", "b"})
+	dest := linkNamespace(t, repoDir, "repo", "a")
+	writeTestFile(t, filepath.Join(repoDir, "a", "file"), "local edit")
+	pushPeerRemoval(t, scratchRoot, remote, "a")
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync(nil, shared.Flags{}) })
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	assertRemovedHere(t, repoDir, "repo", "a", dest)
+
+	trashed, _ := filepath.Glob(filepath.Join(os.Getenv("XDG_DATA_HOME"), "Trash", "files", "a*", "file"))
+	if len(trashed) != 1 || readFile(t, trashed[0]) != "local edit" {
+		t.Fatalf("trashed = %v, want the local edit recoverable from the trash", trashed)
+	}
+
+	captureStdoutStderr(t, func() { err = HandleSync(nil, shared.Flags{}) })
+	if err != nil {
+		t.Fatalf("second HandleSync: %v", err)
+	}
+	if out := syncGitRun(t, remote, "ls-tree", "--name-only", "main"); strings.Contains(out, "a\n") {
+		t.Fatalf("remote tree regained a:\n%s", out)
+	}
+}
+
+func TestHandleSync_OutOfScopeEditedRemovalStaysHeld(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a", "b"})
+	linkNamespace(t, repoDir, "repo", "a")
+	writeTestFile(t, filepath.Join(repoDir, "a", "file"), "local edit")
+	pushPeerRemoval(t, scratchRoot, remote, "a")
+
+	captureStdoutStderr(t, func() { _ = HandleSync([]string{"b"}, shared.Flags{}) })
+	if got := readFile(t, filepath.Join(repoDir, "a", "file")); got != "local edit" {
+		t.Fatalf("a/file = %q, want the edit untouched by a sync scoped to b", got)
+	}
+}
+
+func TestHandleSync_ManyUpstreamRemovalsNeedConfirmation(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	names := []string{"a", "b", "c", "d", "keep"}
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", names)
+	for _, n := range names {
+		linkNamespace(t, repoDir, "repo", n)
+	}
+	pushPeerRemoval(t, scratchRoot, remote, "a", "b", "c", "d")
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync(nil, shared.Flags{}) })
+	if err == nil {
+		t.Fatal("expected a refusal: 4 removals, no terminal, no -y")
+	}
+	if _, statErr := os.Stat(filepath.Join(repoDir, "a")); statErr != nil {
+		t.Fatalf("a was touched despite the refusal: %v", statErr)
+	}
+
+	captureStdoutStderr(t, func() { err = HandleSync(nil, shared.Flags{Yes: true}) })
+	if err != nil {
+		t.Fatalf("HandleSync -y: %v", err)
+	}
+	for _, n := range []string{"a", "b", "c", "d"} {
+		if _, statErr := os.Lstat(filepath.Join(repoDir, n)); !os.IsNotExist(statErr) {
+			t.Fatalf("%s still present after -y", n)
+		}
+	}
+}

@@ -412,7 +412,7 @@ func wrongLinkDetail(dest string, st link.State) string {
 	if err != nil {
 		return "linked elsewhere"
 	}
-	return "linked to " + manifest.ContractHome(target)
+	return "linked to " + manifest.DisplayPath(target)
 }
 
 // blockedEntry reports the "!" row an occupied destination gets — a real
@@ -422,11 +422,11 @@ func wrongLinkDetail(dest string, st link.State) string {
 // matches what a listing shows too. ok is false when dest is not occupied,
 // so the caller falls through to its ordinary marker.
 func blockedEntry(dest, payload string) (ui.Entry, bool) {
-	occupied, detail, err := engine.Occupancy(dest, payload)
+	occupied, err := engine.Occupancy(dest, payload)
 	if err != nil || !occupied {
 		return ui.Entry{}, false
 	}
-	return ui.Entry{Marker: ui.MarkerProblem, Name: ui.BlockedSummary([]ui.Blocked{{Dest: dest, Detail: detail}}, "occupied")}, true
+	return ui.Entry{Marker: ui.MarkerProblem, Name: ui.BlockedSummary([]ui.Blocked{{Dest: dest}}, "occupied")}, true
 }
 
 // toSet turns a name slice into a membership set, for classifyEntry's O(1)

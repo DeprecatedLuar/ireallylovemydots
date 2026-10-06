@@ -43,7 +43,8 @@ var NounAliases = map[string]string{
 // (aliased move) is cp's counterpart: it moves a namespace between
 // repositories, also as two fully-qualified specs, rather than renaming a
 // single namespace by name in argument position (that's rn, a shared Verb).
-var TopOnly = []string{"status", "sync", "doctor", "cp", "copy", "mv", "move"}
+// config and conf route to repo edit.
+var TopOnly = []string{"status", "sync", "doctor", "cp", "copy", "mv", "move", "config", "conf"}
 
 // RepoOnlyVerbs are verbs valid only at the repository level: init takes a
 // local folder rather than a name, and has no meaning for a namespace or

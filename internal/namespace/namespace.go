@@ -62,25 +62,56 @@ func LocalNames(repoDir string) ([]string, error) {
 
 // Located is one repository holding a namespace by a given name — either
 // materialized on disk (Installed) or known only through the repository's
-// git catalogue, per concept.md "Install and uninstall"'s `=` state.
+// git catalogue, per concept.md "Install and uninstall"'s `=` state. Name
+// is the bare namespace name, whatever spec the user typed.
 type Located struct {
 	Repo      manifest.Repo
+	Name      string
 	Dir       string
 	Installed bool
 }
 
-// Resolve finds the namespace called name among repos, rooted under
-// dataDir: a locally materialized folder first, falling back to a
-// repository's git catalogue for a namespace that has never been checked
-// out on this machine — the `=` state install/enable -i exist to fetch.
-// repoSpec, when non-empty, disambiguates directly by repository spec
-// instead of searching, checking that repository's catalogue the same way
-// rather than deciding existence with a bare stat. Ambiguity across
-// repositories is a name the user typed matching more than one existing
-// thing, per concept.md "Name resolution": it errors, naming every
-// candidate and the repository it comes from, and never prompts, even
+// SplitSpec splits a namespace spec at its last "/": the repository spec
+// before it, the namespace name after. A bare name has no repository spec.
+func SplitSpec(spec string) (repoSpec, name string) {
+	i := strings.LastIndex(spec, "/")
+	if i < 0 {
+		return "", spec
+	}
+	return spec[:i], spec[i+1:]
+}
+
+// Resolve finds the namespace named by spec among repos, rooted under
+// dataDir. spec is a bare name, repo/name, or owner/repo/name; a repository
+// spec pins the search to that repository, as does repoFlag, and the two
+// must agree. A namespace is a locally materialized folder or an entry in
+// the repository's git catalogue — the `=` state install/enable -i exist to
+// fetch. A bare name matching a namespace in more than one repository,
+// installed or not, is ambiguous per concept.md "Name resolution": it
+// errors, naming every candidate as a spec, and never prompts, even
 // interactively.
-func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Located, error) {
+func Resolve(dataDir string, repos []manifest.Repo, spec, repoFlag string) (Located, error) {
+	repoSpec, name := SplitSpec(spec)
+	if name == "" || (repoSpec == "" && strings.Contains(spec, "/")) {
+		return Located{}, fmt.Errorf("%q is not a namespace: use name, repo/name, or owner/repo/name", spec)
+	}
+	if repoSpec != "" && repoFlag != "" {
+		a, err := repo.Resolve(repos, repoSpec)
+		if err != nil {
+			return Located{}, err
+		}
+		b, err := repo.Resolve(repos, repoFlag)
+		if err != nil {
+			return Located{}, err
+		}
+		if a.Name != b.Name {
+			return Located{}, fmt.Errorf("%q names repository %q but --repo names %q", spec, a.Name, b.Name)
+		}
+	}
+	if repoSpec == "" {
+		repoSpec = repoFlag
+	}
+
 	if repoSpec != "" {
 		r, err := repo.Resolve(repos, repoSpec)
 		if err != nil {
@@ -90,7 +121,7 @@ func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Loca
 		if _, err := os.Stat(dir); err == nil {
 			// Installed namespaces are always exposed, whatever the
 			// whitelist says.
-			return Located{Repo: r, Dir: dir, Installed: true}, nil
+			return Located{Repo: r, Name: name, Dir: dir, Installed: true}, nil
 		}
 		catalogue, err := repo.Namespaces(filepath.Join(dataDir, r.Name))
 		if err != nil {
@@ -100,7 +131,7 @@ func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Loca
 			if !r.Allows(name, false) {
 				return Located{}, whitelistError(name, r)
 			}
-			return Located{Repo: r, Dir: dir}, nil
+			return Located{Repo: r, Name: name, Dir: dir}, nil
 		}
 		return Located{}, fmt.Errorf("namespace %q not found in repository %q", name, r.Name)
 	}
@@ -121,38 +152,30 @@ func Resolve(dataDir string, repos []manifest.Repo, name, repoSpec string) (Loca
 }
 
 // findCandidates locates every repository that holds a namespace called
-// name, rooted under dataDir: locally materialized folders first, falling
-// back to every repository's git catalogue only when nothing is
-// materialized anywhere — the same two-pass search Resolve uses when no
-// repoSpec pins the search to one repository.
+// name, rooted under dataDir: one candidate per repository, installed when
+// its folder is materialized and catalogue-only when git lists it but it has
+// never been checked out here.
 func findCandidates(dataDir string, repos []manifest.Repo, name string) ([]Located, error) {
 	var candidates []Located
 	for _, r := range repos {
-		names, err := LocalNames(filepath.Join(dataDir, r.Name))
+		repoDir := filepath.Join(dataDir, r.Name)
+		local, err := LocalNames(repoDir)
 		if err != nil {
 			return nil, err
 		}
-		for _, n := range names {
-			if n == name && r.Allows(name, true) {
-				candidates = append(candidates, Located{Repo: r, Dir: filepath.Join(dataDir, r.Name, name), Installed: true})
+		dir := filepath.Join(repoDir, name)
+		if slices.Contains(local, name) {
+			if r.Allows(name, true) {
+				candidates = append(candidates, Located{Repo: r, Name: name, Dir: dir, Installed: true})
 			}
+			continue
 		}
-	}
-
-	if len(candidates) == 0 {
-		// No locally materialized folder anywhere: fall back to every
-		// repository's git catalogue for a namespace that has never been
-		// checked out on this machine.
-		for _, r := range repos {
-			names, err := repo.Namespaces(filepath.Join(dataDir, r.Name))
-			if err != nil {
-				return nil, err
-			}
-			for _, n := range names {
-				if n == name && r.Allows(name, false) {
-					candidates = append(candidates, Located{Repo: r, Dir: filepath.Join(dataDir, r.Name, name)})
-				}
-			}
+		catalogue, err := repo.Namespaces(repoDir)
+		if err != nil {
+			return nil, err
+		}
+		if slices.Contains(catalogue, name) && r.Allows(name, false) {
+			candidates = append(candidates, Located{Repo: r, Name: name, Dir: dir})
 		}
 	}
 	return candidates, nil
@@ -187,14 +210,15 @@ func whitelistError(name string, r manifest.Repo) error {
 	return fmt.Errorf("%s; edit the whitelist in %s", msg, path)
 }
 
-// ambiguityError names every candidate repository and the --repo flag to
-// disambiguate, per concept.md "Name resolution".
+// ambiguityError names every candidate as a namespace spec, per concept.md
+// "Name resolution".
 func ambiguityError(name string, candidates []Located) error {
-	repoNames := make([]string, 0, len(candidates))
+	specs := make([]string, 0, len(candidates))
 	for _, c := range candidates {
-		repoNames = append(repoNames, c.Repo.Name)
+		specs = append(specs, c.Repo.Name+"/"+name)
 	}
-	return fmt.Errorf("namespace %q exists in multiple repositories (%s); disambiguate with --repo", name, strings.Join(repoNames, ", "))
+	return fmt.Errorf("%q names a namespace in %d repositories (%s); name one, e.g. `%s`",
+		name, len(candidates), strings.Join(specs, ", "), specs[0])
 }
 
 // Delete trashes a namespace's folder, unconditionally. Callers are

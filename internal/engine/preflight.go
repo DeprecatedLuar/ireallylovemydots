@@ -45,7 +45,10 @@ type Problem struct {
 	Conflicting *state.Key
 	// Path is the path actually in the way: Entry.Dest for every problem
 	// except a parent-link RealFileCollision, where it is the link.
-	Path    string
+	Path string
+	// Detail names what is in the way beyond its path; empty for a real
+	// file or directory, whose path alone says what it is.
+	Detail  string
 	Message string
 }
 
@@ -114,13 +117,13 @@ func Preflight(key state.Key, namespaceDir string, entries []manifest.Entry, s s
 		}
 
 		payload := filepath.Join(namespaceDir, e.Name)
-		occupied, detail, err := occupancy(e.Dest, payload)
+		occupied, err := occupancy(e.Dest, payload)
 		if err != nil {
 			return nil, err
 		}
 		if occupied {
 			problems = append(problems, Problem{Kind: RealFileCollision, Entry: e, Path: e.Dest,
-				Message: fmt.Sprintf("%s already exists (%s)\n  --force        trash it and link the whole directory\n  or track the paths inside it instead of the parent", e.Dest, detail)})
+				Message: fmt.Sprintf("%s already exists\n  --force        trash it and link the whole directory\n  or track the paths inside it instead of the parent", manifest.DisplayPath(e.Dest))})
 		}
 
 		writable, err := ancestorWritable(e.Dest)
@@ -167,8 +170,9 @@ func parentLinkProblems(e manifest.Entry, key state.Key, s state.State) ([]Probl
 		if readErr != nil {
 			return nil, readErr
 		}
-		problems = append(problems, Problem{Kind: RealFileCollision, Entry: e, Path: l.Path,
-			Message: fmt.Sprintf("%s already exists (link to %s)", l.Path, manifest.ContractHome(target))})
+		detail := "link to " + manifest.DisplayPath(target)
+		problems = append(problems, Problem{Kind: RealFileCollision, Entry: e, Path: l.Path, Detail: detail,
+			Message: fmt.Sprintf("%s already exists (%s)", l.Path, detail)})
 	}
 	return problems, nil
 }
@@ -195,66 +199,33 @@ func manifestGuardProblems(entries []manifest.Entry) map[string]string {
 // pointing somewhere live — are absorbed silently and are not occupied; a
 // symlink holds no data of its own, so replacing one loses nothing. Anything
 // else is.
-func occupancy(dest, wantTarget string) (occupied bool, detail string, err error) {
+func occupancy(dest, wantTarget string) (bool, error) {
 	st, err := link.Classify(dest, wantTarget)
 	if err != nil {
-		return false, "", err
+		return false, err
 	}
 	switch st {
 	case link.Missing, link.CorrectSymlink, link.WrongSymlink:
-		return false, "", nil
+		return false, nil
 	case link.RealDir:
 		dirEntries, readErr := os.ReadDir(dest)
 		if readErr != nil {
-			return false, "", fmt.Errorf("read directory %s: %w", dest, readErr)
+			return false, fmt.Errorf("read directory %s: %w", dest, readErr)
 		}
-		if len(dirEntries) == 0 {
-			return false, "", nil
-		}
-		return true, occupancyDetailText(link.RealDir, len(dirEntries)), nil
+		return len(dirEntries) > 0, nil
 	default: // link.RealFile
-		return true, occupancyDetailText(link.RealFile, 0), nil
+		return true, nil
 	}
-}
-
-// occupancyDetailText renders the exact wording an occupied destination gets
-// everywhere dots reports one — pre-flight's Occupied problem, Enable's
-// force-trashed sub-line, and converge's LinkFailure (self-heal's report) —
-// so the two reports concept.md "Self-healing" requires to agree ("Self-heal
-// has more reason to obey the cap than enable does, not less") describe the
-// same occupied destination identically rather than in independently
-// maintained phrasing. count is ignored for link.RealFile.
-func occupancyDetailText(st link.State, count int) string {
-	if st == link.RealDir {
-		return fmt.Sprintf("real directory, %d entries", count)
-	}
-	return "real file"
-}
-
-// occupancyDetail describes what currently occupies dest, in the same
-// wording occupancyDetailText produces from pre-flight's own classification
-// — used by callers (converge) that already know dest is a real file or
-// non-empty directory from their own link.Classify result and only need the
-// human-readable detail, not the occupied/absorbable decision itself.
-func occupancyDetail(dest string, st link.State) (string, error) {
-	if st == link.RealDir {
-		dirEntries, err := os.ReadDir(dest)
-		if err != nil {
-			return "", fmt.Errorf("read directory %s: %w", dest, err)
-		}
-		return occupancyDetailText(link.RealDir, len(dirEntries)), nil
-	}
-	return occupancyDetailText(link.RealFile, 0), nil
 }
 
 // Occupancy is occupancy's exported form, for a caller outside pre-flight
 // that needs the same occupied/absorbable test against an arbitrary
 // destination — namely classifyEntry (internal/commands/listing.go), so a
 // disabled namespace's "!" row in `dots <ns>` can name the same destination
-// and detail pre-flight would report if the namespace were re-enabled, per
+// pre-flight would report if the namespace were re-enabled, per
 // concept.md "What enable reports": "a `!` entry there carries the
-// destination and what occupies it."
-func Occupancy(dest, wantTarget string) (occupied bool, detail string, err error) {
+// destination."
+func Occupancy(dest, wantTarget string) (bool, error) {
 	return occupancy(dest, wantTarget)
 }
 

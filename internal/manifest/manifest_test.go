@@ -162,3 +162,27 @@ func TestRead_ExpandsHome(t *testing.T) {
 		t.Fatalf("got dest %q, want %q", got.Entries[0].Dest, want)
 	}
 }
+
+func TestDisplayPath_SlashOnlyForDirectories(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, "conf.d")
+	file := filepath.Join(home, "settings.json")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := map[string]string{
+		dir:                            "~/conf.d/",
+		file:                           "~/settings.json",
+		filepath.Join(home, "missing"): "~/missing",
+	}
+	for in, want := range cases {
+		if got := DisplayPath(in); got != want {
+			t.Errorf("DisplayPath(%s) = %q, want %q", in, got, want)
+		}
+	}
+}

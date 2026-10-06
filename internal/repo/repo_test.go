@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
@@ -65,8 +66,11 @@ func TestLooksLikeNotFound(t *testing.T) {
 	if !looksLikeNotFound("remote: The project you were looking for could not be found") {
 		t.Error("expected GitLab-style 'could not be found' to match")
 	}
-	if looksLikeNotFound("fatal: could not read Username for 'https://github.com': terminal prompts disabled") {
-		t.Error("auth failure should not be treated as not-found")
+	if !looksLikeNotFound("fatal: could not read Username for 'https://github.com': terminal prompts disabled") {
+		t.Error("expected the authentication challenge a host gives a missing repository to match")
+	}
+	if looksLikeNotFound("fatal: unable to access 'https://github.com/x/y': Could not resolve host") {
+		t.Error("network failure should not be treated as not-found")
 	}
 }
 
@@ -203,5 +207,12 @@ func TestRename_SourceNotFound(t *testing.T) {
 
 	if err := Rename(dataDir, "missing", "new"); err == nil {
 		t.Fatal("expected error renaming a nonexistent directory")
+	}
+}
+
+func TestCloneCommand_DisablesTerminalPrompt(t *testing.T) {
+	cmd := cloneCommand("https://example.com/o/r", "/tmp/dest")
+	if !slices.Contains(cmd.Env, "GIT_TERMINAL_PROMPT=0") {
+		t.Fatalf("expected GIT_TERMINAL_PROMPT=0 in clone env, got %v", cmd.Env)
 	}
 }

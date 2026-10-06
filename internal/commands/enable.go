@@ -18,6 +18,9 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
+// alreadyEnabledDetail marks a named namespace that was enabled before the run.
+const alreadyEnabledDetail = "already enabled"
+
 // ErrSomeSkipped is returned by enable when it linked at least one namespace
 // but skipped at least one other, per concept.md "What enable reports":
 // "Skipping is a failure of the request... the exit status is non-zero."
@@ -61,12 +64,12 @@ func enableNamespaces(names []string, flags shared.Flags) error {
 		if len(names) > 0 {
 			return fmt.Errorf("usage: enable --all")
 		}
-		return runEnableBatch(nil, true, flags)
+		return runEnableBatch(nil, true, true, flags)
 	}
 	if len(names) == 0 {
 		return fmt.Errorf("usage: enable <namespace>...")
 	}
-	return runEnableBatch(names, false, flags)
+	return runEnableBatch(names, false, true, flags)
 }
 
 // runEnableBatch resolves every target namespace, runs pre-flight for the
@@ -78,8 +81,11 @@ func enableNamespaces(names []string, flags shared.Flags) error {
 // concept.md "What enable reports", it prints one report line per target in
 // the listing alphabet, an indented sub-line under it for every destination
 // --force trashed, and — only when something was skipped — a count line to
-// stderr and a non-zero exit via ErrSomeSkipped.
-func runEnableBatch(names []string, all bool, flags shared.Flags) error {
+// stderr and a non-zero exit via ErrSomeSkipped. reportAlready makes a
+// target that is already enabled print an "already enabled" line and change
+// nothing; without it the target is linked again, which is how add brings
+// new entries into an enabled namespace.
+func runEnableBatch(names []string, all, reportAlready bool, flags shared.Flags) error {
 	dataDir, err := paths.Data()
 	if err != nil {
 		return err
@@ -126,6 +132,10 @@ func runEnableBatch(names []string, all bool, flags shared.Flags) error {
 	// that failed while enabling under --force has already used it: nil.
 	var skippedProblems [][]engine.Problem
 	for _, t := range targets {
+		if reportAlready && s.Entries[t.key].Enabled {
+			lines = append(lines, ui.Operation(ui.MarkerEnabled, t.display, alreadyEnabledDetail))
+			continue
+		}
 		if hardBlocked(t.problems) || (len(t.problems) > 0 && !flags.Force) {
 			skipped++
 			skippedProblems = append(skippedProblems, t.problems)
@@ -148,7 +158,7 @@ func runEnableBatch(names []string, all bool, flags shared.Flags) error {
 			lines = append(lines, ui.Operation(ui.MarkerMaterialized, k.Namespace, ""))
 		}
 		for _, rd := range result.Replaced {
-			lines = append(lines, ui.Sub(ui.MarkerRemoved, rd.Dest, rd.Detail))
+			lines = append(lines, ui.Sub(ui.MarkerRemoved, rd.Display))
 		}
 	}
 
@@ -285,7 +295,8 @@ func resolveExplicitTargets(dataDir string, reg manifest.Registry, names []strin
 		if err != nil {
 			return nil, err
 		}
-		if !namespaceInstalled(loc) && !flags.Install {
+		name = loc.Name
+		if !loc.Installed && !flags.Install {
 			return nil, fmt.Errorf("namespace %q is not installed; rerun with -i to install and enable it", name)
 		}
 		repoDir := filepath.Dir(loc.Dir)
@@ -334,15 +345,13 @@ func problemSummary(problems []engine.Problem) string {
 // destination stripped back off — pre-flight's messages all lead with it
 // ("<dest>: ...", "<dest> already exists (...)", "<dest> is already claimed
 // ...") — since ui.BlockedSummary supplies the destination itself, already
-// ~-contracted. Occupied uses OccupancyDetail's clean parenthesised text
-// rather than the raw sentence, which also carries a remedy paragraph meant
-// for pre-flight's own context, not a report line.
+// ~-contracted. RealFileCollision carries its own Detail.
 func problemDetail(p engine.Problem) string {
 	if p.Kind == engine.NamespaceCollision {
 		return "blocked by " + p.Conflicting.Namespace
 	}
 	if p.Kind == engine.RealFileCollision {
-		return engine.OccupancyDetail(p.Message)
+		return p.Detail
 	}
 	reason := strings.SplitN(p.Message, "\n", 2)[0]
 	reason = strings.TrimPrefix(reason, p.Entry.Dest)
@@ -396,15 +405,6 @@ func dedupeByPath(problems []engine.Problem) []engine.Problem {
 // and not the all-namespace-collision form, which names its blockers.
 func collapsesToCount(problems []engine.Problem) bool {
 	return !allNamespaceCollisions(problems) && len(dedupeByPath(problems)) > 1
-}
-
-// namespaceInstalled reports whether a namespace is materialized on disk —
-// concept.md "Install and uninstall"'s middle state — reading it off the
-// already-resolved Located rather than re-stat'ing the filesystem, without
-// consulting machine state, which records enabled/disabled but not
-// installed/not-installed.
-func namespaceInstalled(loc namespace.Located) bool {
-	return loc.Installed
 }
 
 func allNamespaceNames(repoDir string) ([]string, error) {

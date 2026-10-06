@@ -18,6 +18,10 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
 )
 
+// gitNoPrompt makes git fail instead of asking for a username when a host
+// answers a missing repository with an authentication challenge.
+const gitNoPrompt = "GIT_TERMINAL_PROMPT=0"
+
 // DeriveNameOwner parses a repository URL into a default local name (the
 // URL's basename, with any ".git" suffix stripped) and its owner (the
 // parent path segment), per concept.md "Name resolution". It handles both
@@ -59,7 +63,7 @@ func Clone(dataDir, spec, localName string) (dest, resolvedURL string, err error
 	candidates := candidateURLs(spec)
 	var lastErr error
 	for i, url := range candidates {
-		cmd := exec.Command("git", "clone", "--filter=blob:none", "--sparse", url, dest)
+		cmd := cloneCommand(url, dest)
 		var tail gitutil.CappedWriter
 		cmd.Stderr = io.MultiWriter(os.Stderr, &tail)
 		cloneErr := cmd.Run()
@@ -74,9 +78,18 @@ func Clone(dataDir, spec, localName string) (dest, resolvedURL string, err error
 		if !isLastCandidate && looksLikeNotFound(out) {
 			continue
 		}
+		if i > 0 {
+			return "", "", fmt.Errorf("%s not found or not accessible, tried %s", spec, strings.Join(candidates, ", "))
+		}
 		return "", "", lastErr
 	}
 	return "", "", lastErr
+}
+
+func cloneCommand(url, dest string) *exec.Cmd {
+	cmd := exec.Command("git", "clone", "--filter=blob:none", "--sparse", url, dest)
+	cmd.Env = append(os.Environ(), gitNoPrompt)
+	return cmd
 }
 
 // candidateURLs returns the ordered list of full URLs to attempt for a
@@ -113,13 +126,18 @@ func isSCPLike(spec string) bool {
 	return slash == -1 || colon < slash
 }
 
+// notFoundPhrases are fragments of git's clone output meaning the repository
+// is absent at that host. Hosts answer a missing repository with an
+// authentication challenge, which with prompting disabled reads as below.
+var notFoundPhrases = []string{"not found", "does not exist", "could not be found", "terminal prompts disabled"}
+
 // looksLikeNotFound reports whether git's clone output indicates the
-// repository does not exist at that host, as opposed to a network or
-// authentication failure — the only case worth trying the next candidate
-// for instead of surfacing the error as-is.
+// repository does not exist at that host, as opposed to a network
+// failure — the only case worth trying the next candidate for instead of
+// surfacing the error as-is.
 func looksLikeNotFound(gitOutput string) bool {
 	lower := strings.ToLower(gitOutput)
-	for _, phrase := range []string{"not found", "does not exist", "could not be found"} {
+	for _, phrase := range notFoundPhrases {
 		if strings.Contains(lower, phrase) {
 			return true
 		}

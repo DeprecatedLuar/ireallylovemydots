@@ -16,6 +16,83 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 )
 
+// fakeEditor writes an executable that overwrites the file it is given with
+// body, standing in for $EDITOR.
+func fakeEditor(t *testing.T, body string) string {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "editor")
+	content := "#!/bin/sh\ncat > \"$1\" <<'EOF'\n" + body + "EOF\n"
+	if err := os.WriteFile(script, []byte(content), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+func TestEditRegistry_WritesThroughSymlinkedManifest(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	path, err := manifest.RegistryPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(t.TempDir(), "real-repositories.toml")
+	if err := os.WriteFile(real, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, path); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDITOR", fakeEditor(t, "[[repos]]\n  name = \"dots\"\n  url = \"https://example.com/o/dots\"\n"))
+
+	if err := editRegistry(); err != nil {
+		t.Fatalf("editRegistry: %v", err)
+	}
+
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected %s to stay a symlink, err=%v", path, err)
+	}
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.Repos) != 1 || reg.Repos[0].Name != "dots" {
+		t.Fatalf("expected the edit written, got %+v", reg.Repos)
+	}
+}
+
+func TestEditRegistry_InvalidEditDiscardedNonInteractively(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	path, err := manifest.RegistryPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte("[[repos]]\n  name = \"dots\"\n")
+	if err := os.WriteFile(path, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDITOR", fakeEditor(t, "[[[ not toml\n"))
+
+	if err := editRegistry(); err == nil {
+		t.Fatal("expected an invalid edit to error")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("expected the file untouched, got %q", got)
+	}
+}
+
 // newSourceRepo builds a git repository at a fresh temp dir, running each
 // git subcommand given in commands (e.g. []string{"init", "-b", "main"}).
 func newSourceRepo(t *testing.T, commands ...[]string) string {
@@ -1069,5 +1146,53 @@ func TestAddRepo_RejectsDuplicateDerivedName_NonInteractive(t *testing.T) {
 	}
 	if len(reg.Repos) != 1 {
 		t.Fatalf("registry should be untouched, got %+v", reg.Repos)
+	}
+}
+
+func TestAdoptRepo_PromotesLocalEntryWithRemote(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	strayClone(t, "priv", true)
+	if err := manifest.WriteRegistry(manifest.Registry{Repos: []manifest.Repo{{Name: "priv", Origin: manifest.OriginLocal}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := adoptRepo("priv"); err != nil {
+		t.Fatalf("adoptRepo: %v", err)
+	}
+
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.Repos) != 1 {
+		t.Fatalf("expected one entry, got %+v", reg.Repos)
+	}
+	r := reg.Repos[0]
+	if r.Origin != manifest.OriginConfig || r.URL != "https://example.com/someone/priv.git" || r.Owner != "someone" {
+		t.Fatalf("expected a shared entry with URL and owner, got %+v", r)
+	}
+}
+
+func TestAdoptRepo_LocalEntryWithoutRemoteErrorsUnchanged(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	strayClone(t, "priv", false)
+	if err := manifest.WriteRegistry(manifest.Registry{Repos: []manifest.Repo{{Name: "priv", Origin: manifest.OriginLocal}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := adoptRepo("priv")
+	if err == nil || !strings.Contains(err.Error(), "git remote add origin") {
+		t.Fatalf("expected an error naming git remote add, got %v", err)
+	}
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.Repos) != 1 || reg.Repos[0].Origin != manifest.OriginLocal {
+		t.Fatalf("expected the entry left local, got %+v", reg.Repos)
 	}
 }

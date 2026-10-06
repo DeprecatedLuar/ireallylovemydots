@@ -79,9 +79,8 @@ func Materialize(repoDir, namespaceDir, name string) error {
 }
 
 type trashedEntry struct {
-	dest   string
-	name   string
-	detail string
+	dest string
+	name string
 }
 
 // absorbedEntry records one destination Enable cleared without trashing —
@@ -139,8 +138,9 @@ func clearAbsorbable(dest string) (*absorbedEntry, error) {
 // absorbed symlink "is still reported as a sub-line under the entry it
 // replaced."
 type ReplacedDestination struct {
-	Dest   string
-	Detail string
+	Dest string
+	// Display is Dest's printed form, captured before it was removed.
+	Display string
 }
 
 // EnableResult is what Enable did beyond linking, for the caller to report:
@@ -187,14 +187,14 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 	for _, e := range entries {
 		entryDests[e.Dest] = true
 	}
-	occupiedDetail := map[string]string{}
+	occupied := map[string]bool{}
 	var parentLinks []Problem
 	linkSeen := map[string]bool{}
 	for _, p := range problems {
 		if p.Kind != RealFileCollision {
 			continue
 		}
-		occupiedDetail[p.Path] = OccupancyDetail(p.Message)
+		occupied[p.Path] = true
 		if !entryDests[p.Path] && !linkSeen[p.Path] {
 			linkSeen[p.Path] = true
 			parentLinks = append(parentLinks, p)
@@ -227,6 +227,7 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 	// A parent link into the data directory is removed as the link it is,
 	// never followed: what it points at stays untouched.
 	for _, p := range parentLinks {
+		display := manifest.DisplayPath(p.Path)
 		cleared, err := clearAbsorbable(p.Path)
 		if err != nil {
 			rollback()
@@ -235,7 +236,7 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 		if cleared != nil {
 			absorbed = append(absorbed, *cleared)
 		}
-		replaced = append(replaced, ReplacedDestination{Dest: p.Path, Detail: occupiedDetail[p.Path]})
+		replaced = append(replaced, ReplacedDestination{Dest: p.Path, Display: display})
 	}
 
 	for _, e := range sorted {
@@ -244,14 +245,15 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 			// link — there is no symlink to create for it.
 			continue
 		}
-		if detail, ok := occupiedDetail[e.Dest]; ok {
+		if occupied[e.Dest] {
+			display := manifest.DisplayPath(e.Dest)
 			trashedName, err := trash.Move(e.Dest)
 			if err != nil {
 				rollback()
 				return result, fmt.Errorf("trash occupied destination %s: %w", e.Dest, err)
 			}
-			trashed = append(trashed, trashedEntry{dest: e.Dest, name: trashedName, detail: detail})
-			replaced = append(replaced, ReplacedDestination{Dest: e.Dest, Detail: detail + " -> trash"})
+			trashed = append(trashed, trashedEntry{dest: e.Dest, name: trashedName})
+			replaced = append(replaced, ReplacedDestination{Dest: e.Dest, Display: display})
 		} else if cleared, err := clearAbsorbable(e.Dest); err != nil {
 			rollback()
 			return result, fmt.Errorf("clear %s: %w", e.Dest, err)
@@ -287,7 +289,10 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 	// The active profile survives enable and disable alike: it says which
 	// version of an entry belongs at a destination, not whether anything is
 	// linked, so re-enabling a namespace must put back what was there before.
-	s.Entries[key] = state.Entry{Enabled: true, ActiveProfile: s.Entries[key].ActiveProfile, LinkedDests: dests}
+	entry := s.Entries[key]
+	entry.Enabled = true
+	entry.LinkedDests = dests
+	s.Entries[key] = entry
 	if err := state.Write(s); err != nil {
 		rollback()
 		return result, err
@@ -295,20 +300,6 @@ func Enable(key state.Key, repoDir, namespaceDir, name string, entries []manifes
 
 	result.Replaced = replaced
 	return result, nil
-}
-
-// OccupancyDetail pulls the parenthesised detail (e.g. "real directory, 340
-// files") out of a RealFileCollision problem's message, so Enable's trash report —
-// and any command's skip-report line, e.g. problemSummary in
-// internal/commands/enable.go — can reuse the same wording pre-flight
-// already computed rather than re-deriving it.
-func OccupancyDetail(msg string) string {
-	open := strings.IndexByte(msg, '(')
-	close := strings.IndexByte(msg, ')')
-	if open == -1 || close == -1 || close < open {
-		return ""
-	}
-	return msg[open+1 : close]
 }
 
 // disableConflicting disables an entire namespace found to conflict during

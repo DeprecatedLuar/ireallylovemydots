@@ -36,8 +36,9 @@ func HandleRestore(names []string, flags shared.Flags) error {
 		if err != nil {
 			return err
 		}
+		name = loc.Name
 		if !loc.Installed {
-			return fmt.Errorf("namespace %q is not installed; run `dots install %s` first", name, name)
+			return errNotInstalled(name)
 		}
 		m, err := manifest.Read(loc.Dir)
 		if err != nil {
@@ -78,7 +79,7 @@ func HandleRestore(names []string, flags shared.Flags) error {
 		lines = append(lines, ui.Operation(ui.MarkerMaterialized, t.name, ""))
 		for _, e := range t.entries {
 			if e.HasDestination() {
-				lines = append(lines, ui.Sub(ui.MarkerMaterialized, e.Dest, ""))
+				lines = append(lines, ui.Sub(ui.MarkerMaterialized, manifest.DisplayPath(e.Dest)))
 			}
 		}
 	}

@@ -265,3 +265,80 @@ func TestRename_CarriesSyncModeAndHeldBase(t *testing.T) {
 		t.Fatalf("renamed entry = %+v, want sync mode and held base carried", e)
 	}
 }
+
+func TestSplitSpec(t *testing.T) {
+	cases := []struct{ in, repo, name string }{
+		{"nvim", "", "nvim"},
+		{"dotfiles/nvim", "dotfiles", "nvim"},
+		{"someone/dotfiles/nvim", "someone/dotfiles", "nvim"},
+	}
+	for _, c := range cases {
+		r, n := SplitSpec(c.in)
+		if r != c.repo || n != c.name {
+			t.Fatalf("SplitSpec(%q) = %q, %q; want %q, %q", c.in, r, n, c.repo, c.name)
+		}
+	}
+}
+
+func TestResolve_SpecPicksRepository(t *testing.T) {
+	dataDir := t.TempDir()
+	repos := []manifest.Repo{{Name: "one"}, {Name: "two"}}
+	for _, r := range []string{"one", "two"} {
+		if _, err := Create(filepath.Join(dataDir, r), "editors"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loc, err := Resolve(dataDir, repos, "two/editors", "")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if loc.Repo.Name != "two" || loc.Name != "editors" {
+		t.Fatalf("Resolve = %+v, want repo two, name editors", loc)
+	}
+}
+
+func TestResolve_SpecAndConflictingRepoFlagErrors(t *testing.T) {
+	dataDir := t.TempDir()
+	repos := []manifest.Repo{{Name: "one"}, {Name: "two"}}
+	for _, r := range []string{"one", "two"} {
+		if _, err := Create(filepath.Join(dataDir, r), "editors"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Resolve(dataDir, repos, "two/editors", "one"); err == nil {
+		t.Fatal("expected an error when the spec and --repo name different repositories")
+	}
+	if _, err := Resolve(dataDir, repos, "two/editors", "two"); err != nil {
+		t.Fatalf("spec and matching --repo: %v", err)
+	}
+}
+
+func TestResolve_InstalledAndCatalogueOnlyIsAmbiguous(t *testing.T) {
+	dataDir := t.TempDir()
+	repos := []manifest.Repo{{Name: "one"}, {Name: "two"}}
+	one := filepath.Join(dataDir, "one")
+	if err := os.MkdirAll(one, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", one, "init", "-b", "main").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	if _, err := Create(one, "editors"); err != nil {
+		t.Fatal(err)
+	}
+	two := filepath.Join(dataDir, "two")
+	if err := os.MkdirAll(two, 0755); err != nil {
+		t.Fatal(err)
+	}
+	initCatalogueOnlyNamespace(t, two, "editors")
+
+	_, err := Resolve(dataDir, repos, "editors", "")
+	if err == nil {
+		t.Fatal("expected ambiguity: editors is installed in one and catalogue-only in two")
+	}
+	for _, want := range []string{"one/editors", "two/editors"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not name %q", err, want)
+		}
+	}
+}

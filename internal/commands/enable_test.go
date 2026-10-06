@@ -122,11 +122,14 @@ func TestEnableNamespace_OccupiedReportNamesDestinationAndOccupant(t *testing.T)
 	if !errors.Is(err, ErrSomeSkipped) {
 		t.Fatalf("expected an occupied destination to be skipped, got %v", err)
 	}
-	if !strings.Contains(stdout, dest) {
+	if !strings.Contains(stdout, manifest.ContractHome(dest)) {
 		t.Fatalf("expected the report to name the occupied destination, got: %s", stdout)
 	}
-	if !strings.Contains(stdout, "real directory") {
-		t.Fatalf("expected the report to name what occupies the destination, got: %s", stdout)
+	if !strings.Contains(stdout, manifest.ContractHome(dest)+"/") {
+		t.Fatalf("expected the occupied directory printed with a trailing slash, got: %s", stdout)
+	}
+	if strings.Contains(stdout, "real directory") {
+		t.Fatalf("expected no occupant label, got: %s", stdout)
 	}
 	if !strings.Contains(stderr, "--force") {
 		t.Fatalf("expected the count line to name --force, got: %s", stderr)
@@ -327,5 +330,35 @@ func TestEnableNamespace_LinkGuard_CreatesNothingInDataDirectory(t *testing.T) {
 
 	if _, statErr := os.Stat(nsDir); !os.IsNotExist(statErr) {
 		t.Fatalf("expected the guard failure to leave the namespace unmaterialized, got err=%v", statErr)
+	}
+}
+
+func TestEnableNamespace_AlreadyEnabledReportsAndChangesNothing(t *testing.T) {
+	home := t.TempDir()
+	registerRepoWithNamespace(t, "editors", []manifest.Entry{{Name: "nvim", Dest: filepath.Join(home, "nvim")}})
+	captureStdoutStderr(t, func() { _ = enableNamespace("editors", shared.Flags{}) })
+
+	var err error
+	stdout, _ := captureStdoutStderr(t, func() { err = enableNamespace("editors", shared.Flags{}) })
+	if err != nil {
+		t.Fatalf("second enable: %v", err)
+	}
+	if !strings.Contains(stdout, "editors") || !strings.Contains(stdout, "already enabled") {
+		t.Fatalf("report = %q, want an already-enabled line", stdout)
+	}
+}
+
+func TestDisableNamespace_AlreadyDisabledReports(t *testing.T) {
+	home := t.TempDir()
+	registerRepoWithNamespace(t, "editors", []manifest.Entry{{Name: "nvim", Dest: filepath.Join(home, "nvim")}})
+	captureStdoutStderr(t, func() { _ = disableNamespace("editors", shared.Flags{}) })
+
+	var err error
+	stdout, _ := captureStdoutStderr(t, func() { err = disableNamespace("editors", shared.Flags{}) })
+	if err != nil {
+		t.Fatalf("second disable: %v", err)
+	}
+	if !strings.Contains(stdout, "already disabled") {
+		t.Fatalf("report = %q, want an already-disabled line", stdout)
 	}
 }

@@ -146,6 +146,7 @@ func scopeFor(namespaceName string, flags shared.Flags) (profileScope, error) {
 	if err != nil {
 		return profileScope{}, err
 	}
+	namespaceName = loc.Name
 	exists, err := profile.Exists(loc.Dir)
 	if err != nil {
 		return profileScope{}, err
@@ -223,6 +224,7 @@ func editProfiles(namespaceName string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	namespaceName = loc.Name
 	m, err := manifest.Read(loc.Dir)
 	if err != nil {
 		return err

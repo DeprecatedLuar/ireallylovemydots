@@ -55,8 +55,8 @@ func TestProblemSummary_AllNamespaceCollisions(t *testing.T) {
 func TestProblemSummary_DedupesByPath(t *testing.T) {
 	link := "/home/u/.config/x"
 	problems := []engine.Problem{
-		{Kind: engine.RealFileCollision, Entry: manifest.Entry{Name: "f1"}, Path: link, Message: link + " already exists (link to ~/somewhere)"},
-		{Kind: engine.RealFileCollision, Entry: manifest.Entry{Name: "f2"}, Path: link, Message: link + " already exists (link to ~/somewhere)"},
+		{Kind: engine.RealFileCollision, Entry: manifest.Entry{Name: "f1"}, Path: link, Detail: "link to ~/somewhere", Message: link + " already exists (link to ~/somewhere)"},
+		{Kind: engine.RealFileCollision, Entry: manifest.Entry{Name: "f2"}, Path: link, Detail: "link to ~/somewhere", Message: link + " already exists (link to ~/somewhere)"},
 	}
 	if collapsesToCount(problems) {
 		t.Fatal("two entries behind one link must not collapse to a count")

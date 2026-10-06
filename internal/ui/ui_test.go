@@ -61,9 +61,9 @@ func TestOperation_WithAndWithoutDetail(t *testing.T) {
 
 func TestSub_IsIndentedUnderItsOperationLine(t *testing.T) {
 	op := Operation(MarkerEnabled, "nvim", "")
-	sub := Sub(MarkerRemoved, "~/.config/nvim", "real directory, 340 files -> trash")
+	sub := Sub(MarkerRemoved, "~/.config/nvim/")
 	got := op + sub
-	want := "+ nvim\n  x ~/.config/nvim    real directory, 340 files -> trash\n"
+	want := "+ nvim\n  x ~/.config/nvim/\n"
 	if got != want {
 		t.Fatalf("Operation+Sub = %q, want %q", got, want)
 	}
