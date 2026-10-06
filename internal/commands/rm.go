@@ -123,6 +123,7 @@ func clearProfileMembership(namespaceDir, namespaceName, entryName string, flags
 // listing every namespace with its entry count.
 func rmNamespaces(names []string, flags shared.Flags) error {
 	type resolved struct {
+		name    string
 		loc     namespace.Located
 		entries []manifest.Entry
 	}
@@ -143,7 +144,7 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 		if err != nil {
 			return err
 		}
-		targets = append(targets, resolved{loc: loc, entries: m.Entries})
+		targets = append(targets, resolved{name: name, loc: loc, entries: m.Entries})
 		row, err := namespaceRow(s, loc.Repo.Name, name, loc.Dir, m.Entries, selfheal.Findings{})
 		if err != nil {
 			return err
@@ -185,11 +186,11 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 	// dropping that partial progress on an early return.
 	var lines []string
 	defer func() { fmt.Print(ui.Report(lines, "")) }()
-	for i, t := range targets {
-		if err := rmNamespaceAt(t.loc, names[i], flags); err != nil {
+	for _, t := range targets {
+		if err := rmNamespaceAt(t.loc, t.name, flags); err != nil {
 			return err
 		}
-		lines = append(lines, ui.Operation(ui.MarkerRemoved, names[i], ""))
+		lines = append(lines, ui.Operation(ui.MarkerRemoved, t.name, ""))
 	}
 	return nil
 }

@@ -530,3 +530,52 @@ func TestRmNamespace_StagesRemovalImmediately(t *testing.T) {
 		t.Fatalf("expected other's payload untouched: %v", err)
 	}
 }
+
+// A repo/ns spec must reach every step of the removal as the bare namespace
+// name: the state key it clears and the path it stages are both keyed by it.
+func TestRmNamespace_RepoSpec_ClearsStateAndStagesRemoval(t *testing.T) {
+	home := t.TempDir()
+	dest := filepath.Join(home, ".config", "aaa")
+	entries := []manifest.Entry{{Name: "aaa", Dest: dest}}
+	_, repoDir, nsDir := registerRepoWithNamespace(t, "editors", entries)
+	if err := os.WriteFile(filepath.Join(nsDir, "aaa", "seed"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoDir, "init", "-q", ".")
+	runGit(t, repoDir, "add", "-A")
+	runGit(t, repoDir, "commit", "-q", "-m", "init")
+	runGit(t, repoDir, "remote", "add", "origin", "https://example.com/someone/dotfiles")
+
+	if err := enableNamespace("editors", shared.Flags{}); err != nil {
+		t.Fatalf("enableNamespace: %v", err)
+	}
+
+	if err := HandleNamespace([]string{"rm", "dotfiles/editors"}, shared.Flags{Yes: true}, selfheal.Findings{}); err != nil {
+		t.Fatalf("namespace rm dotfiles/editors: %v", err)
+	}
+
+	if _, err := os.Lstat(dest); !os.IsNotExist(err) {
+		t.Fatalf("expected the symlink at %s removed, got err=%v", dest, err)
+	}
+	if _, err := os.Stat(nsDir); !os.IsNotExist(err) {
+		t.Fatalf("expected the namespace folder removed, got err=%v", err)
+	}
+
+	s, err := state.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key := range s.Entries {
+		if key.Repo == "dotfiles" && (key.Namespace == "editors" || key.Namespace == "dotfiles/editors") {
+			t.Fatalf("expected no state entry left for the removed namespace, found %+v", key)
+		}
+	}
+
+	staged, err := exec.Command("git", "-C", repoDir, "diff", "--cached", "--name-status").CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(staged), "editors/") {
+		t.Fatalf("staged = %q, want editors' removal staged", staged)
+	}
+}
