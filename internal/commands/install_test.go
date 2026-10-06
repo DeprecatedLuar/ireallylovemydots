@@ -11,6 +11,7 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/repo"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/selfheal"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 )
 
@@ -328,5 +329,23 @@ func TestRmRepo_NoRemote_RefusesNamingRemoteAdd(t *testing.T) {
 	}
 	if _, statErr := os.Stat(repoDir); !os.IsNotExist(statErr) {
 		t.Fatalf("expected --force to proceed with the removal, got err=%v", statErr)
+	}
+}
+
+func TestRenderNamespaceEntries_NotInstalled_ErrorsAndInstallsNothing(t *testing.T) {
+	home := t.TempDir()
+	source := newCatalogueSourceRepo(t, home)
+	registerClonedCatalogue(t, source)
+
+	err := renderNamespaceEntries("editors", shared.Flags{}, selfheal.Findings{})
+	if err == nil || !strings.Contains(err.Error(), "dots install editors") {
+		t.Fatalf("expected the not-installed error naming `dots install editors`, got %v", err)
+	}
+	dataDir, err := paths.Data()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dataDir, "dotfiles", "editors")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected editors left uninstalled, stat err=%v", statErr)
 	}
 }

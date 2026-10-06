@@ -37,7 +37,7 @@ func HandleRestore(names []string, flags shared.Flags) error {
 			return err
 		}
 		if !loc.Installed {
-			return fmt.Errorf("namespace %q is not installed; run `dots install %s` first", name, name)
+			return errNotInstalled(name)
 		}
 		m, err := manifest.Read(loc.Dir)
 		if err != nil {

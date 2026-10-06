@@ -300,9 +300,11 @@ func trackPaths(name string, args []string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
-	loc, err = ensureInstalled(loc)
-	if err != nil {
-		return err
+	if !loc.Installed {
+		if err := engine.Materialize(filepath.Dir(loc.Dir), loc.Dir, filepath.Base(loc.Dir)); err != nil {
+			return err
+		}
+		loc.Installed = true
 	}
 	s, err := state.Read()
 	if err != nil {
@@ -458,26 +460,6 @@ func resolveNamespace(name string, flags shared.Flags) (namespace.Located, error
 	return namespace.Resolve(dataDir, reg.Repos, name, flags.Repo)
 }
 
-// ensureInstalled materializes loc's namespace via sparse checkout when it
-// is catalogue-only, so a member-level verb that needs real files on disk —
-// add, list — can act on a `=` namespace exactly as if `install` had been
-// run first, per concept.md "Install and uninstall". `enable` and `disable`
-// deliberately do not go through this: concept.md requires enabling an
-// uninstalled namespace to be a hard error answered only by explicit `-i`,
-// so they resolve and check Located.Installed themselves instead.
-func ensureInstalled(loc namespace.Located) (namespace.Located, error) {
-	if loc.Installed {
-		return loc, nil
-	}
-	repoDir := filepath.Dir(loc.Dir)
-	name := filepath.Base(loc.Dir)
-	if err := engine.Materialize(repoDir, loc.Dir, name); err != nil {
-		return namespace.Located{}, err
-	}
-	loc.Installed = true
-	return loc, nil
-}
-
 // ignoreNamespace implements `namespace ignore <name>`: writes
 // `ignore = true` to the namespace's manifest, per concept.md "Namespace".
 // Refused while the namespace is enabled — disabling first means self-heal
@@ -601,6 +583,12 @@ func hasProblem(rows []ui.Entry) bool {
 	return false
 }
 
+// errNotInstalled is the error every verb that needs a namespace's files on
+// disk gives for one that is not installed.
+func errNotInstalled(name string) error {
+	return fmt.Errorf("namespace %q is not installed; run `dots install %s` first", name, name)
+}
+
 // renderNamespaceEntries implements `dots <ns>`: the namespace's entry
 // listing, then the same namespace's findings (concept.md "Doctor": "`dots
 // <ns>` is a listing of that namespace's entries followed by `doctor`
@@ -611,9 +599,8 @@ func renderNamespaceEntries(name string, flags shared.Flags, findings selfheal.F
 	if err != nil {
 		return err
 	}
-	loc, err = ensureInstalled(loc)
-	if err != nil {
-		return err
+	if !loc.Installed {
+		return errNotInstalled(name)
 	}
 	m, err := manifest.Read(loc.Dir)
 	if err != nil {

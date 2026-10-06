@@ -285,7 +285,7 @@ func resolveExplicitTargets(dataDir string, reg manifest.Registry, names []strin
 		if err != nil {
 			return nil, err
 		}
-		if !namespaceInstalled(loc) && !flags.Install {
+		if !loc.Installed && !flags.Install {
 			return nil, fmt.Errorf("namespace %q is not installed; rerun with -i to install and enable it", name)
 		}
 		repoDir := filepath.Dir(loc.Dir)
@@ -396,15 +396,6 @@ func dedupeByPath(problems []engine.Problem) []engine.Problem {
 // and not the all-namespace-collision form, which names its blockers.
 func collapsesToCount(problems []engine.Problem) bool {
 	return !allNamespaceCollisions(problems) && len(dedupeByPath(problems)) > 1
-}
-
-// namespaceInstalled reports whether a namespace is materialized on disk —
-// concept.md "Install and uninstall"'s middle state — reading it off the
-// already-resolved Located rather than re-stat'ing the filesystem, without
-// consulting machine state, which records enabled/disabled but not
-// installed/not-installed.
-func namespaceInstalled(loc namespace.Located) bool {
-	return loc.Installed
 }
 
 func allNamespaceNames(repoDir string) ([]string, error) {

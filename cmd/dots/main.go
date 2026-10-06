@@ -298,7 +298,7 @@ func resolveRoute(args []string, namespaces, repos []string, ambiguous func(name
 		return route{target: targetRepo, args: args}, nil
 	default:
 		return route{}, &tipError{
-			err: fmt.Errorf("Thats not a real command: %s", tok0),
+			err: fmt.Errorf("That's not a real command: %s", tok0),
 			tip: "Try 'dots help' for usage",
 		}
 	}
