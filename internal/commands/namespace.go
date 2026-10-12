@@ -429,7 +429,8 @@ func prepareEditBuffer(namespaceDir string) ([]byte, error) {
 		augmented = append(augmented, manifest.Entry{Name: n, Dest: ""})
 	}
 
-	return manifest.Encode(manifest.Manifest{Ignore: m.Ignore, Entries: augmented})
+	m.Entries = augmented
+	return manifest.Encode(m)
 }
 
 // applyEditedBuffer persists the edited buffer as the namespace's manifest,

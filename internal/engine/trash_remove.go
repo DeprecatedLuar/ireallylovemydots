@@ -98,7 +98,8 @@ func TrashEntries(key state.Key, namespaceDir string, targets []manifest.Entry, 
 			remaining = append(remaining, e)
 		}
 	}
-	if err := manifest.Write(namespaceDir, manifest.Manifest{Entries: remaining}); err != nil {
+	m.Entries = remaining
+	if err := manifest.Write(namespaceDir, m); err != nil {
 		rollback()
 		return nil, err
 	}
