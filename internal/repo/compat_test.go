@@ -27,3 +27,10 @@ func TestInspect_Incompatible(t *testing.T) {
 		t.Fatalf("Inspect(%+v) = %v, want StateIncompatible", entries, got)
 	}
 }
+
+func TestInspect_RootDotsAloneIsADotsRepository(t *testing.T) {
+	entries := []RootEntry{{Name: ".dots"}, {Name: "init.lua"}, {Name: "lua", IsDir: true}}
+	if got := Inspect(entries); got != StateNamespaces {
+		t.Fatalf("Inspect = %v, want StateNamespaces", got)
+	}
+}
