@@ -1200,3 +1200,128 @@ func TestAdoptRepo_LocalEntryWithoutRemoteErrorsUnchanged(t *testing.T) {
 		t.Fatalf("expected the entry left local, got %+v", reg.Repos)
 	}
 }
+
+// A default plan given a dest writes a root namespace that enables through
+// the real enable path, linking every root item into dest.
+func TestBootstrap_RootPlanEnablesThroughRealPath(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	repoDir := filepath.Join(dataHome, "ireallylovemydots", "nvim")
+	if err := os.MkdirAll(filepath.Join(repoDir, "lua"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"init.lua", "README.md", "lua/plugins.lua"} {
+		if err := os.WriteFile(filepath.Join(repoDir, f), []byte(f), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	entries, err := repo.DiskEntries(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := repo.DefaultBootstrapPlan("nvim", entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Dest = "~/.config/nvim"
+	for name, dest := range plan.Root {
+		if dest != manifest.DestNone {
+			delete(plan.Root, name)
+		}
+	}
+	if err := repo.ApplyBootstrap(repoDir, plan, entries); err != nil {
+		t.Fatal(err)
+	}
+	if err := manifest.WriteRegistry(manifest.Registry{Repos: []manifest.Repo{{Name: "nvim"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	captureStdoutStderr(t, func() {
+		if err := enableNamespace("nvim", shared.Flags{}); err != nil {
+			t.Fatalf("enableNamespace: %v", err)
+		}
+	})
+	for _, item := range []string{"init.lua", "lua"} {
+		got, err := os.Readlink(filepath.Join(home, ".config", "nvim", item))
+		if err != nil || got != filepath.Join(repoDir, item) {
+			t.Fatalf("%s -> %q (%v), want %s", item, got, err, filepath.Join(repoDir, item))
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".config", "nvim", "README.md")); !os.IsNotExist(err) {
+		t.Fatal("README.md is furniture (none) and must not be linked")
+	}
+}
+
+// bootstrapFixture returns the root entries of a flat folder holding nvim/
+// and README.md, with HOME pointed at a fresh directory.
+func bootstrapFixture(t *testing.T) []repo.RootEntry {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "nvim"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("readme"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := repo.DiskEntries(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries
+}
+
+func TestEditBootstrapPlan_UnchangedBufferAcceptsDefault(t *testing.T) {
+	entries := bootstrapFixture(t)
+	scriptedEditor(t, "exit 0")
+
+	plan, proceed, err := editBootstrapPlan("/src/dotfiles", "dotfiles", entries)
+	if err != nil || !proceed {
+		t.Fatalf("proceed = %v, err = %v; an unchanged buffer accepts the plan", proceed, err)
+	}
+	want, err := repo.DefaultBootstrapPlan("dotfiles", entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(repo.EncodeBootstrapPlan(plan)) != string(repo.EncodeBootstrapPlan(want)) {
+		t.Fatalf("plan = %+v, want the default %+v", plan, want)
+	}
+}
+
+func TestEditBootstrapPlan_EditedBufferIsDecoded(t *testing.T) {
+	entries := bootstrapFixture(t)
+	t.Setenv("EDITOR", fakeEditor(t, "name = \"dotfiles\"\ndest = \"\"\n[root]\n\"README.md\" = \"none\"\n[namespaces]\n\"nvim\" = \"~/.config/nvim\"\n"))
+
+	plan, proceed, err := editBootstrapPlan("/src/dotfiles", "dotfiles", entries)
+	if err != nil || !proceed {
+		t.Fatalf("proceed = %v, err = %v", proceed, err)
+	}
+	if plan.Namespaces["nvim"] != "~/.config/nvim" || len(plan.Root) != 1 || plan.Root["README.md"] != manifest.DestNone {
+		t.Fatalf("plan = %+v, want the edited buffer", plan)
+	}
+}
+
+func TestEditBootstrapPlan_InvalidEditErrorsNonInteractively(t *testing.T) {
+	entries := bootstrapFixture(t)
+	t.Setenv("EDITOR", fakeEditor(t, "name = \"dotfiles\"\n[root]\n\"nvim\" = \"~/.config/nvim\"\n[namespaces]\n\"nvim\" = \"~/.config/nvim\"\n"))
+
+	if _, proceed, err := editBootstrapPlan("/src/dotfiles", "dotfiles", entries); err == nil || proceed {
+		t.Fatalf("proceed = %v, err = %v; an invalid plan must not proceed", proceed, err)
+	}
+}
+
+func TestEditBootstrapPlan_NothingToConvertErrors(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	scriptedEditor(t, "exit 0")
+	entries := []repo.RootEntry{{Name: "nvim", IsDir: true, HasDots: true}}
+
+	if _, _, err := editBootstrapPlan("/src/dotfiles", "dotfiles", entries); err == nil {
+		t.Fatal("expected an error when no root entry is plannable")
+	}
+}

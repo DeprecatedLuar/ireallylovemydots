@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
@@ -19,7 +20,13 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
-const registryFilePerm = 0644
+const (
+	registryFilePerm = 0644
+
+	bootstrapPlanLabel     = "bootstrap plan"
+	bootstrapRootNoDest    = "entries below"
+	bootstrapPreviewIndent = "  "
+)
 
 // HandleRepo implements the repo subtree: bare listing, the noun-level
 // verbs that operate on a repository by name in an argument (add, rm), and
@@ -199,10 +206,10 @@ func addRepo(url string, flags shared.Flags) error {
 	if state == repo.StateIncompatible {
 		if !flags.Bootstrap {
 			os.RemoveAll(dest)
-			return fmt.Errorf("%s is not a dots repository: no top-level folder holds a .dots manifest; use --bootstrap to convert it", url)
+			return fmt.Errorf("%s is not a dots repository: no .dots manifest at its root or in any top-level folder; use --bootstrap to convert it", url)
 		}
 
-		converted, newState, err := bootstrapAdd(dest, url, entries)
+		converted, newState, err := bootstrapAdd(dest, url, name, entries)
 		if err != nil {
 			os.RemoveAll(dest)
 			return err
@@ -259,7 +266,7 @@ func adoptRepo(name string) error {
 		return err
 	}
 	if repo.Inspect(entries) != repo.StateNamespaces {
-		return fmt.Errorf("%s is not a dots repository: no top-level folder holds a .dots manifest", dest)
+		return fmt.Errorf("%s is not a dots repository: no .dots manifest at its root or in any top-level folder", dest)
 	}
 
 	isRepo, err := repo.IsGitRepo(dest)
@@ -289,14 +296,15 @@ func adoptRepo(name string) error {
 
 // bootstrapAdd runs `repo add --bootstrap`'s conversion at an already-cloned,
 // blobless destination: plan, preview, prompt, and only on confirmation
-// check out every blob and apply the conversion. Per concept.md "Bootstrap",
-// every step up to the prompt is name-level, so declining costs nothing
-// beyond the blobless clone repo add performs anyway. converted is false
+// apply the conversion, checking out every blob first when the plan moves
+// anything. Per concept.md "Bootstrap", every step up to the prompt is
+// name-level, so declining costs nothing beyond the blobless clone repo add
+// performs anyway. converted is false
 // only when the user declined; a plan that converts to anything other than
 // StateNamespaces is an error, since a conversion producing nothing usable
 // must never register.
-func bootstrapAdd(dest, url string, entries []repo.RootEntry) (converted bool, state repo.State, err error) {
-	plan, proceed, err := planBootstrap(dest, entries)
+func bootstrapAdd(dest, url, name string, entries []repo.RootEntry) (converted bool, state repo.State, err error) {
+	plan, proceed, err := planBootstrap(dest, name, entries)
 	if err != nil {
 		return false, repo.StateIncompatible, err
 	}
@@ -304,14 +312,16 @@ func bootstrapAdd(dest, url string, entries []repo.RootEntry) (converted bool, s
 		return false, repo.StateIncompatible, nil
 	}
 
-	if err := repo.CheckoutAll(dest); err != nil {
-		return false, repo.StateIncompatible, err
+	if len(plan.Moves(entries)) > 0 {
+		if err := repo.CheckoutAll(dest); err != nil {
+			return false, repo.StateIncompatible, err
+		}
 	}
-	if err := repo.Apply(dest, plan); err != nil {
+	if err := repo.ApplyBootstrap(dest, plan, entries); err != nil {
 		return false, repo.StateIncompatible, err
 	}
 
-	// Apply never commits, so the post-conversion state must be read
+	// ApplyBootstrap never commits, so the post-conversion state must be read
 	// straight off disk rather than via RootEntries, which reads git's HEAD
 	// tree and would still see the pre-conversion layout.
 	postEntries, err := repo.DiskEntries(dest)
@@ -323,9 +333,8 @@ func bootstrapAdd(dest, url string, entries []repo.RootEntry) (converted bool, s
 		return false, repo.StateIncompatible, fmt.Errorf("--bootstrap conversion of %s produced no usable namespaces", url)
 	}
 
-	// CheckoutAll materialized the whole tree, undoing Clone's empty sparse
-	// cone; the newly created namespace folders are exactly what belongs in
-	// the cone now that they exist, per concept.md "Sparse checkout":
+	// The cone is set from what the conversion produced: the namespace
+	// folders now present and the root namespace's directories, per concept.md "Sparse checkout":
 	// everything present is installed by definition. ReconcileCone reads
 	// the cone from disk itself rather than trusting postEntries' HasDots
 	// filter, which is what left krita-config's cone empty in the field —
@@ -337,54 +346,72 @@ func bootstrapAdd(dest, url string, entries []repo.RootEntry) (converted bool, s
 	return true, state, nil
 }
 
-// planBootstrap builds and previews a --bootstrap conversion of entries
-// (already gathered from repoPath by the caller's compatibility check — via
-// RootEntries for a git tree, DiskEntries for a plain folder not yet a
-// repository) and prompts y/N, defaulting to no. An empty plan is a hard
-// error, since --bootstrap has nothing to offer a repository with no
-// convertible top-level entries. Declining is reported through the bool
-// return, not an error. Not being able to prompt (no terminal) is itself a
-// hard error, per concept.md "Bootstrap": "Not being able to prompt is a
-// hard error, never a silent conversion."
-func planBootstrap(repoPath string, entries []repo.RootEntry) ([]repo.PlannedNamespace, bool, error) {
-	draft, err := repo.DefaultBootstrapPlan(filepath.Base(repoPath), entries)
-	if err != nil {
-		return nil, false, err
+// planBootstrap opens the editable bootstrap plan in $EDITOR, previews the
+// result, and asks y/N, defaulting to no. Closing the editor unchanged
+// accepts the plan as offered; discarding cancels. Not being able to prompt
+// is a hard error, per concept.md "Bootstrap".
+func planBootstrap(repoPath, repoName string, entries []repo.RootEntry) (repo.BootstrapPlan, bool, error) {
+	if !ui.Interactive() {
+		return repo.BootstrapPlan{}, false, fmt.Errorf("--bootstrap needs a terminal: its plan opens in $EDITOR")
 	}
-	for name, dest := range draft.Root {
-		if dest != manifest.DestNone {
-			draft.Namespaces[name] = dest
+	plan, proceed, err := editBootstrapPlan(repoPath, repoName, entries)
+	if err != nil || !proceed {
+		return repo.BootstrapPlan{}, false, err
+	}
+
+	moves := plan.Moves(entries)
+	fmt.Print(ui.RenderAligned(bootstrapPreviewEntries(plan, moves)))
+	if len(moves) > 0 {
+		gitignoreChanges, err := repo.PlanGitignore(repoPath, moves)
+		if err != nil {
+			return repo.BootstrapPlan{}, false, err
+		}
+		if preview := renderGitignorePreview(gitignoreChanges); preview != "" {
+			fmt.Print("\n" + preview)
 		}
 	}
-	draft.Root = map[string]string{}
-	validated, err := repo.DecodeBootstrapPlan(repo.EncodeBootstrapPlan(draft), entries)
-	if err != nil {
-		return nil, false, err
-	}
-	plan := validated.Moves(entries)
-	if len(plan) == 0 {
-		return nil, false, fmt.Errorf("%s has no top-level entries for --bootstrap to convert", repoPath)
-	}
 
-	fmt.Print(ui.RenderAligned(bootstrapPreviewEntries(plan)))
-
-	gitignoreChanges, err := repo.PlanGitignore(repoPath, plan)
+	choice, err := ui.Prompt("", "--bootstrap will apply the plan shown above. Proceed?", []string{"y", "N"})
 	if err != nil {
-		return nil, false, err
-	}
-	if preview := renderGitignorePreview(gitignoreChanges); preview != "" {
-		fmt.Print("\n" + preview)
-	}
-
-	choice, err := ui.Prompt(
-		"",
-		fmt.Sprintf("--bootstrap will create %d namespace(s) as shown above. Proceed?", len(plan)),
-		[]string{"y", "N"},
-	)
-	if err != nil {
-		return nil, false, err
+		return repo.BootstrapPlan{}, false, err
 	}
 	return plan, ui.IsYes(choice), nil
+}
+
+// editBootstrapPlan runs the default plan through the $EDITOR loop and
+// returns the plan the editor closed on. proceed is false only when an
+// invalid edit was discarded.
+func editBootstrapPlan(repoPath, repoName string, entries []repo.RootEntry) (plan repo.BootstrapPlan, proceed bool, err error) {
+	plan, err = repo.DefaultBootstrapPlan(repoName, entries)
+	if err != nil {
+		return repo.BootstrapPlan{}, false, err
+	}
+	if len(plan.Root) == 0 {
+		return repo.BootstrapPlan{}, false, fmt.Errorf("%s has no top-level entries for --bootstrap to convert", repoPath)
+	}
+
+	seed := repo.EncodeBootstrapPlan(plan)
+	chosen := seed
+	outcome, err := editBuffer(seed, bootstrapPlanLabel,
+		func(edited []byte) error {
+			_, err := repo.DecodeBootstrapPlan(edited, entries)
+			return err
+		},
+		func(_, edited []byte) error {
+			chosen = edited
+			return nil
+		})
+	if err != nil {
+		return repo.BootstrapPlan{}, false, err
+	}
+	if outcome == editDiscarded {
+		return repo.BootstrapPlan{}, false, nil
+	}
+	plan, err = repo.DecodeBootstrapPlan(chosen, entries)
+	if err != nil {
+		return repo.BootstrapPlan{}, false, err
+	}
+	return plan, true, nil
 }
 
 // renderGitignorePreview shows all three outcomes of the root .gitignore
@@ -419,13 +446,29 @@ func renderGitignorePreview(changes []repo.GitignoreChange) string {
 	return ".gitignore\n" + b.String()
 }
 
-// bootstrapPreviewEntries renders the proposed conversion as aligned pairs,
-// per concept.md "Bootstrap": "The preview is a proposed mapping, not a
-// state listing", so it carries no listing marker.
-func bootstrapPreviewEntries(plan []repo.PlannedNamespace) []ui.Pair {
-	pairs := make([]ui.Pair, 0, len(plan))
-	for _, p := range plan {
-		pairs = append(pairs, ui.Pair{Name: p.Namespace, Value: manifest.DisplayPath(p.Dest)})
+// bootstrapPreviewEntries renders the plan as aligned pairs: the root
+// namespace with its overrides indented beneath it, then each move. Per
+// concept.md "Bootstrap" it is a proposed mapping, so it carries no
+// listing marker.
+func bootstrapPreviewEntries(plan repo.BootstrapPlan, moves []repo.PlannedNamespace) []ui.Pair {
+	var pairs []ui.Pair
+	if plan.Dest != "" || len(plan.Root) > 0 {
+		value := plan.Dest
+		if value == "" {
+			value = bootstrapRootNoDest
+		}
+		pairs = append(pairs, ui.Pair{Name: plan.Name, Value: value})
+		names := make([]string, 0, len(plan.Root))
+		for n := range plan.Root {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			pairs = append(pairs, ui.Pair{Name: bootstrapPreviewIndent + n, Value: plan.Root[n]})
+		}
+	}
+	for _, m := range moves {
+		pairs = append(pairs, ui.Pair{Name: m.Namespace, Value: manifest.DisplayPath(m.Dest)})
 	}
 	return pairs
 }
@@ -464,13 +507,14 @@ func initRepo(pathArg string, flags shared.Flags) error {
 	}
 
 	state := repo.Inspect(entries)
-	var plan []repo.PlannedNamespace
+	var plan repo.BootstrapPlan
+	bootstrapping := false
 	if state == repo.StateIncompatible {
 		if !flags.Bootstrap {
-			return fmt.Errorf("%s is not a dots repository: no top-level folder holds a .dots manifest; use --bootstrap to convert it", srcPath)
+			return fmt.Errorf("%s is not a dots repository: no .dots manifest at its root or in any top-level folder; use --bootstrap to convert it", srcPath)
 		}
 
-		p, proceed, err := planBootstrap(srcPath, entries)
+		p, proceed, err := planBootstrap(srcPath, filepath.Base(srcPath), entries)
 		if err != nil {
 			return err
 		}
@@ -480,6 +524,7 @@ func initRepo(pathArg string, flags shared.Flags) error {
 			return nil
 		}
 		plan = p
+		bootstrapping = true
 	}
 
 	reg, err := manifest.ReadRegistry()
@@ -504,11 +549,11 @@ func initRepo(pathArg string, flags shared.Flags) error {
 		return err
 	}
 
-	if plan != nil {
-		if err := repo.Apply(dest, plan); err != nil {
+	if bootstrapping {
+		if err := repo.ApplyBootstrap(dest, plan, entries); err != nil {
 			return err
 		}
-		// Nothing Apply writes is committed, so the post-conversion state
+		// Nothing ApplyBootstrap writes is committed, so the post-conversion state
 		// must be read straight off disk rather than via RootEntries, which
 		// reads git's HEAD tree.
 		postEntries, err := repo.DiskEntries(dest)
