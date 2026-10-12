@@ -176,3 +176,15 @@ func TestAddNamespace_RefusesANameHeldByARootEntry(t *testing.T) {
 		t.Fatal("a namespace folder named like a root entry must be refused")
 	}
 }
+
+func TestIsOwnRootNamespace(t *testing.T) {
+	setupRootRepo(t, "nvim", "nvim", "", "init.lua")
+	ok, err := IsOwnRootNamespace("nvim")
+	if err != nil || !ok {
+		t.Fatalf("IsOwnRootNamespace(nvim) = %v, %v", ok, err)
+	}
+	ok, err = IsOwnRootNamespace("shell")
+	if err != nil || ok {
+		t.Fatalf("IsOwnRootNamespace(shell) = %v, %v", ok, err)
+	}
+}

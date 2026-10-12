@@ -363,6 +363,13 @@ func ambiguityChooser(name string) (string, error) {
 		}
 		return "", fmt.Errorf("%q names a namespace in %d repositories (%s); name one, e.g. `%s`", name, len(nsRepos), strings.Join(specs, ", "), specs[0])
 	}
+	own, err := commands.IsOwnRootNamespace(name)
+	if err != nil {
+		return "", err
+	}
+	if own {
+		return "namespace", nil
+	}
 	if !ui.Interactive() {
 		return "", fmt.Errorf("%q matches both a namespace and a repository; use --repo to disambiguate or rename one", name)
 	}

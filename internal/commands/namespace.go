@@ -698,3 +698,28 @@ func NamespaceRepoCandidates(name string) ([]string, error) {
 	}
 	return names, nil
 }
+
+// IsOwnRootNamespace reports whether name is both a registered repository
+// and that repository's root namespace — the one namespace/repository clash
+// that resolves to the namespace, per concept.md "Name resolution".
+func IsOwnRootNamespace(name string) (bool, error) {
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		return false, err
+	}
+	dataDir, err := paths.Data()
+	if err != nil {
+		return false, err
+	}
+	for _, r := range reg.Repos {
+		if !strings.EqualFold(r.Name, name) {
+			continue
+		}
+		root, err := repo.RootName(filepath.Join(dataDir, r.Name))
+		if err != nil {
+			return false, err
+		}
+		return strings.EqualFold(root, name), nil
+	}
+	return false, nil
+}
