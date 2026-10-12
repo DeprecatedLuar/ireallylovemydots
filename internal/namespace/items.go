@@ -32,27 +32,42 @@ func Items(nsDir string, root bool) ([]string, error) {
 	}
 	var items []string
 	for _, de := range dirEntries {
-		name := de.Name()
-		if reserved[name] {
-			continue
+		skip, err := excluded(nsDir, de.Name(), root)
+		if err != nil {
+			return nil, err
 		}
-		if root {
-			if name == gitDir {
-				continue
-			}
-			if de.IsDir() {
-				held, err := manifest.Exists(filepath.Join(nsDir, name))
-				if err != nil {
-					return nil, err
-				}
-				if held {
-					continue
-				}
-			}
+		if !skip {
+			items = append(items, de.Name())
 		}
-		items = append(items, name)
 	}
 	return items, nil
+}
+
+// excluded reports whether top-level entry name of nsDir is never payload:
+// a reserved name or, for the root namespace, .git or a folder holding its
+// own .dots.
+func excluded(nsDir, name string, root bool) (bool, error) {
+	if reserved[name] {
+		return true, nil
+	}
+	if !root {
+		return false, nil
+	}
+	if name == gitDir {
+		return true, nil
+	}
+	path := filepath.Join(nsDir, name)
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stat %s: %w", path, err)
+	}
+	if !info.IsDir() {
+		return false, nil
+	}
+	return manifest.Exists(path)
 }
 
 // TreeItems returns the payload names of folder namespace name as committed
@@ -76,12 +91,28 @@ func TreeItems(repoDir, name string) ([]string, error) {
 }
 
 // Linkable returns every entry the namespace at nsDir links: its manifest
-// entries plus, under a default destination, one per untracked item.
+// entries plus, under a default destination, one per untracked item. A root
+// namespace's entries naming an excluded entry are dropped.
 func Linkable(nsDir string, m manifest.Manifest) ([]manifest.Entry, error) {
+	root := m.Name != ""
+	if root {
+		kept := make([]manifest.Entry, 0, len(m.Entries))
+		for _, e := range m.Entries {
+			head, _, _ := strings.Cut(filepath.ToSlash(e.Name), "/")
+			skip, err := excluded(nsDir, head, root)
+			if err != nil {
+				return nil, err
+			}
+			if !skip {
+				kept = append(kept, e)
+			}
+		}
+		m.Entries = kept
+	}
 	if m.Dest == "" {
 		return m.Entries, nil
 	}
-	items, err := Items(nsDir, m.Name != "")
+	items, err := Items(nsDir, root)
 	if err != nil {
 		return nil, err
 	}

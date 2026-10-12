@@ -76,3 +76,25 @@ func TestInspect_NoUntrackedUnderDest(t *testing.T) {
 		t.Fatalf("Untracked = %v, want none under a default destination", r.Untracked)
 	}
 }
+
+func TestLinkable_RootDropsReservedExplicitEntries(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{".git/HEAD", "shell/.dots", "init.lua"} {
+		touch(t, filepath.Join(dir, n))
+	}
+	entries := []manifest.Entry{
+		{Name: ".git", Dest: "/d/.git"},
+		{Name: ".dots", Dest: "/d/.dots"},
+		{Name: "shell", Dest: "/d/shell"},
+		{Name: "init.lua", Dest: "/d/init.lua"},
+	}
+	for _, dest := range []string{"", "/d"} {
+		got, err := Linkable(dir, manifest.Manifest{Name: "nvim", Dest: dest, Entries: entries})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []manifest.Entry{{Name: "init.lua", Dest: "/d/init.lua"}}; !slices.Equal(got, want) {
+			t.Fatalf("Linkable(dest=%q) = %+v, want %+v", dest, got, want)
+		}
+	}
+}
