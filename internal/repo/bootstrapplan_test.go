@@ -92,3 +92,22 @@ func TestApplyBootstrap_WritesRootDotsWithOverridesOnly(t *testing.T) {
 		t.Fatalf("root manifest = %+v, want name, dest, and only the README override", m)
 	}
 }
+
+func TestDecodeBootstrapPlan_RefusesRootNameCollisions(t *testing.T) {
+	cases := map[string]struct{ buf, want string }{
+		"moving namespace": {
+			buf:  "name = \"nvim\"\n[root]\n\"README.md\" = \"none\"\n[namespaces]\n\"nvim\" = \"~/.config/nvim\"\n",
+			want: "collides with namespace \"nvim\"",
+		},
+		"existing folder": {
+			buf:  "name = \"shell\"\n[root]\n\"README.md\" = \"none\"\n",
+			want: "\"shell\" is already a namespace folder",
+		},
+	}
+	for label, c := range cases {
+		_, err := DecodeBootstrapPlan([]byte(c.buf), planEntries)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want it to mention %q", label, err, c.want)
+		}
+	}
+}

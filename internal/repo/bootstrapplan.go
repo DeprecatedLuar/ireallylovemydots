@@ -153,6 +153,15 @@ func (p BootstrapPlan) validate(entries []RootEntry) error {
 		}
 		source[ns] = name
 	}
+
+	if p.Dest != "" || len(p.Root) > 0 {
+		if folders[p.Name] {
+			return fmt.Errorf("root namespace name %q is already a namespace folder of this repository", p.Name)
+		}
+		if entry, dup := source[p.Name]; dup {
+			return fmt.Errorf("root namespace name %q collides with namespace %q that %q would become", p.Name, p.Name, entry)
+		}
+	}
 	return nil
 }
 
