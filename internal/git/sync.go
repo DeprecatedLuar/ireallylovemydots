@@ -95,13 +95,15 @@ func Prepare(dir string, heldBases map[string]string, owner OwnerFunc) (Prepared
 		base = strings.TrimSpace(out)
 	}
 	hasDots := map[string]bool{}
-	for _, tree := range []string{base, p.Onto, p.local} {
-		folders, err := dotsFolders(dir, tree)
-		if err != nil {
-			return Prepared{}, err
-		}
-		for name := range folders {
-			hasDots[name] = true
+	if owner != nil {
+		for _, tree := range []string{base, p.Onto, p.local} {
+			folders, err := dotsFolders(dir, tree)
+			if err != nil {
+				return Prepared{}, err
+			}
+			for name := range folders {
+				hasDots[name] = true
+			}
 		}
 	}
 	ownerOf := func(name string) string {
