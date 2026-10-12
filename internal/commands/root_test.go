@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
@@ -88,5 +89,90 @@ func TestEnable_RootNamespaceLinksItsItems(t *testing.T) {
 	assertLinked(t, filepath.Join(dest, "init.lua"), filepath.Join(repoDir, "init.lua"))
 	if _, err := os.Lstat(filepath.Join(dest, "shell")); !os.IsNotExist(err) {
 		t.Fatal("a folder namespace must never be linked as a root item")
+	}
+}
+
+func TestRootNamespace_RefusesUninstallRmAndMv(t *testing.T) {
+	setupRootRepo(t, "dotfiles", "nvim", filepath.Join(t.TempDir(), "nvim"), "init.lua")
+	const refusal = "root namespace"
+	if err := uninstallNamespaces([]string{"nvim"}, shared.Flags{Yes: true}); err == nil || !strings.Contains(err.Error(), refusal) {
+		t.Fatalf("uninstall of a root namespace must be refused, got %v", err)
+	}
+	if err := rmNamespaces([]string{"nvim"}, shared.Flags{Yes: true}); err == nil || !strings.Contains(err.Error(), refusal) {
+		t.Fatalf("namespace rm of a root namespace must be refused, got %v", err)
+	}
+	if err := HandleMv([]string{"dotfiles/nvim", "dotfiles/moved"}, shared.Flags{Yes: true}); err == nil || !strings.Contains(err.Error(), refusal) {
+		t.Fatalf("mv out of a root namespace must be refused, got %v", err)
+	}
+}
+
+func TestRepoRm_TrashesARootNamespaceRepositoryOnce(t *testing.T) {
+	repoDir := setupRootRepo(t, "dotfiles", "nvim", filepath.Join(t.TempDir(), "nvim"), "init.lua")
+	captureStdoutStderr(t, func() {
+		if err := rmRepo("dotfiles", shared.Flags{Yes: true, Force: true}); err != nil {
+			t.Fatalf("repo rm: %v", err)
+		}
+	})
+	if _, err := os.Stat(repoDir); !os.IsNotExist(err) {
+		t.Fatalf("clone still present after repo rm: %v", err)
+	}
+}
+
+func TestRn_RootNamespaceRewritesNameOnly(t *testing.T) {
+	repoDir := setupRootRepo(t, "dotfiles", "nvim", filepath.Join(t.TempDir(), "nvim"), "init.lua")
+	if err := renameNamespace("nvim", "editor", shared.Flags{}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := manifest.Read(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Name != "editor" {
+		t.Fatalf("root name = %q, want editor", m.Name)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "init.lua")); err != nil {
+		t.Fatal("rn of the root namespace must move nothing")
+	}
+}
+
+func TestAdd_RootNamespaceRefusesANamespaceFolderName(t *testing.T) {
+	repoDir := setupRootRepo(t, "dotfiles", "nvim", "", "init.lua")
+	src := filepath.Join(t.TempDir(), "shell")
+	if err := os.WriteFile(src, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := namespace.Add(repoDir, src); err == nil {
+		t.Fatal("adding an entry named like a namespace folder into the root must be refused")
+	}
+}
+
+func TestCp_FromRootNamespaceCopiesOnlyTrackedItems(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "nvim")
+	repoDir := setupRootRepo(t, "dotfiles", "nvim", dest, "init.lua")
+	if err := HandleCp([]string{"dotfiles/nvim", "dotfiles/duplicate"}, shared.Flags{}); err != nil {
+		t.Fatal(err)
+	}
+	copyDir := filepath.Join(repoDir, "duplicate")
+	if _, err := os.Stat(filepath.Join(copyDir, "init.lua")); err != nil {
+		t.Fatal("tracked item not copied")
+	}
+	for _, never := range []string{".git", "shell"} {
+		if _, err := os.Stat(filepath.Join(copyDir, never)); !os.IsNotExist(err) {
+			t.Fatalf("%s must never be copied out of a root namespace", never)
+		}
+	}
+	m, err := manifest.Read(copyDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Name != "" || m.Dest != dest {
+		t.Fatalf("copied manifest = %+v, want name dropped and dest kept", m)
+	}
+}
+
+func TestAddNamespace_RefusesANameHeldByARootEntry(t *testing.T) {
+	setupRootRepo(t, "dotfiles", "nvim", "", "init.lua")
+	if err := createNamespace("init.lua", shared.Flags{}); err == nil {
+		t.Fatal("a namespace folder named like a root entry must be refused")
 	}
 }

@@ -280,6 +280,13 @@ func Delete(dir string) error {
 // engine.Relink, so a namespace never sits with dangling links between the
 // two steps.
 func Rename(repoDir, repoName, oldName, newName string) error {
+	root, err := repo.RootName(repoDir)
+	if err != nil {
+		return err
+	}
+	if root != "" && root == oldName {
+		return renameRoot(repoDir, repoName, oldName, newName)
+	}
 	oldDir := filepath.Join(repoDir, oldName)
 	newDir := filepath.Join(repoDir, newName)
 
@@ -294,6 +301,25 @@ func Rename(repoDir, repoName, oldName, newName string) error {
 		return fmt.Errorf("rename namespace %s to %s: %w", oldDir, newDir, err)
 	}
 
+	return renameState(repoName, oldName, newName)
+}
+
+// renameRoot renames a root namespace by rewriting the name in the root
+// manifest; no payload moves.
+func renameRoot(repoDir, repoName, oldName, newName string) error {
+	if _, err := os.Lstat(filepath.Join(repoDir, newName)); err == nil {
+		return fmt.Errorf("%q is already an entry at the root of %s", newName, repoDir)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", filepath.Join(repoDir, newName), err)
+	}
+	m, err := manifest.Read(repoDir)
+	if err != nil {
+		return err
+	}
+	m.Name = newName
+	if err := manifest.Write(repoDir, m); err != nil {
+		return err
+	}
 	return renameState(repoName, oldName, newName)
 }
 

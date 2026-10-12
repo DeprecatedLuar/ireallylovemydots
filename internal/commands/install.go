@@ -72,6 +72,9 @@ func uninstallNamespaces(names []string, flags shared.Flags) error {
 		if err != nil {
 			return err
 		}
+		if loc.Root {
+			return errRootNamespace(loc)
+		}
 		name = loc.Name
 		targets = append(targets, resolved{name: name, loc: loc})
 		repoNamespaces[loc.Repo.Name] = append(repoNamespaces[loc.Repo.Name], name)

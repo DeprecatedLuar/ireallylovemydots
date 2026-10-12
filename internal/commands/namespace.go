@@ -343,6 +343,10 @@ func renameNamespace(oldName, newName string, flags shared.Flags) error {
 	if err := namespace.Rename(repoDir, loc.Repo.Name, oldName, newName); err != nil {
 		return err
 	}
+	// A root namespace's payload paths do not change with its name.
+	if loc.Root {
+		return nil
+	}
 
 	failures, err := relinkRenamedNamespaces(repoDir, loc.Repo.Name, map[string]bool{newName: true})
 	if err != nil {

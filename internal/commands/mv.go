@@ -70,6 +70,13 @@ func HandleMv(args []string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	if srcDir == srcRepoDir {
+		loc, err := namespace.Locate(srcRepo, srcRepoDir, srcName)
+		if err != nil {
+			return err
+		}
+		return errRootNamespace(loc)
+	}
 	dstDir, err := repo.NamespaceDir(dstRepoDir, dstName)
 	if err != nil {
 		return err

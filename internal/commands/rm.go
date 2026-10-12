@@ -29,6 +29,14 @@ const (
 	choiceCancel = "c"
 )
 
+// rootNamespaceRefusal explains why a root namespace cannot be removed on
+// its own: it is the repository's root folder.
+const rootNamespaceRefusal = "%q is the root namespace of repository %q and is always installed; it goes away only with `dots repo rm %s`"
+
+func errRootNamespace(loc namespace.Located) error {
+	return fmt.Errorf(rootNamespaceRefusal, loc.Name, loc.Repo.Name, loc.Repo.Name)
+}
+
 // rmEntry implements `namespace <ns> rm <name>...`, per concept.md
 // "Removal": each entry leaves the manifest and its symlink comes down. By
 // default the payload goes to the trash and nothing is written to the home
@@ -142,6 +150,9 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 		loc, err := resolveNamespace(name, flags)
 		if err != nil {
 			return err
+		}
+		if loc.Root {
+			return errRootNamespace(loc)
 		}
 		name = loc.Name
 		m, err := manifest.Read(loc.Dir)
@@ -316,6 +327,11 @@ func rmNamespaceAt(loc namespace.Located, nsName string, flags shared.Flags) err
 	}
 	if err := clearState(loc.Repo.Name, nsName); err != nil {
 		return err
+	}
+	// A root namespace's folder is the repository itself; `repo rm` trashes
+	// the clone once after every namespace is cleared.
+	if loc.Root {
+		return nil
 	}
 
 	// The namespace folder itself always goes through the trash first —

@@ -299,3 +299,45 @@ func TestPreflight_UnwritableParent_NamedAlongsideOtherProblems(t *testing.T) {
 		t.Fatalf("expected both an Unwritable and a RealFileCollision problem, got %+v", problems)
 	}
 }
+
+// A parent link to a root-namespace entry names the root namespace, not a
+// namespace called after the entry.
+func TestPreflight_ParentLinkIntoRootNamespaceEntry_NamesTheRootNamespace(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	dataDir, err := paths.Data()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoDir := filepath.Join(dataDir, "dotfiles")
+	payloadDir := filepath.Join(repoDir, "lua")
+	if err := os.MkdirAll(payloadDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := manifest.Write(repoDir, manifest.Manifest{Name: "nvim"}); err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	luaDest := filepath.Join(home, ".config", "nvim", "lua")
+	if err := os.MkdirAll(filepath.Dir(luaDest), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(payloadDir, luaDest); err != nil {
+		t.Fatal(err)
+	}
+
+	rootKey := state.Key{Repo: "dotfiles", Namespace: "nvim"}
+	s := state.State{Entries: map[state.Key]state.Entry{rootKey: {Enabled: true}}}
+	entries := []manifest.Entry{{Name: "x.lua", Dest: filepath.Join(luaDest, "x.lua")}}
+	key := state.Key{Repo: "dotfiles", Namespace: "other"}
+	problems, err := Preflight(key, filepath.Join(repoDir, "other"), entries, s)
+	if err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+	if len(problems) != 1 || problems[0].Kind != NamespaceCollision {
+		t.Fatalf("expected one NamespaceCollision, got %+v", problems)
+	}
+	if problems[0].Conflicting == nil || *problems[0].Conflicting != rootKey {
+		t.Fatalf("conflicting = %+v, want %+v", problems[0].Conflicting, rootKey)
+	}
+}
