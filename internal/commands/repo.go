@@ -704,7 +704,10 @@ func relinkRenamedNamespaces(repoDir, repoName string, names map[string]bool) ([
 			continue
 		}
 
-		namespaceDir := filepath.Join(repoDir, key.Namespace)
+		namespaceDir, dirErr := repo.NamespaceDir(repoDir, key.Namespace)
+		if dirErr != nil {
+			return nil, dirErr
+		}
 		if _, statErr := os.Stat(namespaceDir); statErr != nil {
 			// Not materialized on this machine — nothing on disk to relink.
 			continue

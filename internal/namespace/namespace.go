@@ -40,7 +40,9 @@ func Create(repoDir, name string) (string, error) {
 // LocalNames returns the namespace folders materialized on disk directly
 // inside repoDir: top-level directories other than dotfiles like ".git". A
 // namespace need not be committed to appear here — creation and tracking
-// write straight to the worktree, ahead of sync.
+// write straight to the worktree, ahead of sync. With a root namespace only
+// folders holding their own .dots are namespaces, and the root's name is
+// included.
 func LocalNames(repoDir string) ([]string, error) {
 	entries, err := os.ReadDir(repoDir)
 	if os.IsNotExist(err) {
@@ -49,13 +51,29 @@ func LocalNames(repoDir string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read repository directory %s: %w", repoDir, err)
 	}
+	root, err := repo.RootName(repoDir)
+	if err != nil {
+		return nil, err
+	}
 
 	var names []string
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
+		if root != "" {
+			held, err := manifest.Exists(filepath.Join(repoDir, e.Name()))
+			if err != nil {
+				return nil, err
+			}
+			if !held {
+				continue
+			}
+		}
 		names = append(names, e.Name())
+	}
+	if root != "" {
+		names = append(names, root)
 	}
 	return names, nil
 }
@@ -68,7 +86,19 @@ type Located struct {
 	Repo      manifest.Repo
 	Name      string
 	Dir       string
+	RepoDir   string
+	Root      bool
 	Installed bool
+}
+
+// Locate builds the Located for name in r, rooted at repoDir. Installed is
+// left for the caller to set.
+func Locate(r manifest.Repo, repoDir, name string) (Located, error) {
+	dir, err := repo.NamespaceDir(repoDir, name)
+	if err != nil {
+		return Located{}, err
+	}
+	return Located{Repo: r, Name: name, Dir: dir, RepoDir: repoDir, Root: dir == repoDir}, nil
 }
 
 // SplitSpec splits a namespace spec at its last "/": the repository spec
@@ -117,11 +147,15 @@ func Resolve(dataDir string, repos []manifest.Repo, spec, repoFlag string) (Loca
 		if err != nil {
 			return Located{}, err
 		}
-		dir := filepath.Join(dataDir, r.Name, name)
-		if _, err := os.Stat(dir); err == nil {
+		loc, err := Locate(r, filepath.Join(dataDir, r.Name), name)
+		if err != nil {
+			return Located{}, err
+		}
+		if _, err := os.Stat(loc.Dir); err == nil {
 			// Installed namespaces are always exposed, whatever the
 			// whitelist says.
-			return Located{Repo: r, Name: name, Dir: dir, Installed: true}, nil
+			loc.Installed = true
+			return loc, nil
 		}
 		catalogue, err := repo.Namespaces(filepath.Join(dataDir, r.Name))
 		if err != nil {
@@ -131,7 +165,7 @@ func Resolve(dataDir string, repos []manifest.Repo, spec, repoFlag string) (Loca
 			if !r.Allows(name, false) {
 				return Located{}, whitelistError(name, r)
 			}
-			return Located{Repo: r, Name: name, Dir: dir}, nil
+			return loc, nil
 		}
 		return Located{}, fmt.Errorf("namespace %q not found in repository %q", name, r.Name)
 	}
@@ -163,10 +197,14 @@ func findCandidates(dataDir string, repos []manifest.Repo, name string) ([]Locat
 		if err != nil {
 			return nil, err
 		}
-		dir := filepath.Join(repoDir, name)
+		loc, err := Locate(r, repoDir, name)
+		if err != nil {
+			return nil, err
+		}
 		if slices.Contains(local, name) {
 			if r.Allows(name, true) {
-				candidates = append(candidates, Located{Repo: r, Name: name, Dir: dir, Installed: true})
+				loc.Installed = true
+				candidates = append(candidates, loc)
 			}
 			continue
 		}
@@ -175,7 +213,7 @@ func findCandidates(dataDir string, repos []manifest.Repo, name string) ([]Locat
 			return nil, err
 		}
 		if slices.Contains(catalogue, name) && r.Allows(name, false) {
-			candidates = append(candidates, Located{Repo: r, Name: name, Dir: dir})
+			candidates = append(candidates, loc)
 		}
 	}
 	return candidates, nil

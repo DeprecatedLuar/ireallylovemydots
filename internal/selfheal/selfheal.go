@@ -472,7 +472,10 @@ func Run() (Findings, error) {
 			// repository the user has not confirmed.
 			continue
 		}
-		namespaceDir := filepath.Join(repoDir, key.Namespace)
+		namespaceDir, dirErr := repo.NamespaceDir(repoDir, key.Namespace)
+		if dirErr != nil {
+			return Findings{}, dirErr
+		}
 		if _, statErr := os.Stat(namespaceDir); statErr != nil {
 			// Not materialized on this machine despite state saying
 			// enabled — nothing on disk to verify a link against.

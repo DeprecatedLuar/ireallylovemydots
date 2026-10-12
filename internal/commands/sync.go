@@ -210,7 +210,12 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 		}
 		placements[u.Name] = out.Placement
 		if u.Dir && u.RemovedRemote && out.Placement.Worktree == git.SourceRemote {
-			if installedHere(s, repoDir, name, u.Name) {
+			here, err := installedHere(s, repoDir, name, u.Name)
+			if err != nil {
+				res.err = err
+				return res
+			}
+			if here {
 				res.removed = append(res.removed, u.Name)
 			}
 			continue
@@ -320,12 +325,16 @@ func confirmUpstreamRemoval(repoName string, removed []string, flags shared.Flag
 
 // installedHere reports whether a namespace has a state entry or a folder
 // on this machine.
-func installedHere(s state.State, repoDir, repoName, ns string) bool {
+func installedHere(s state.State, repoDir, repoName, ns string) (bool, error) {
 	if _, ok := s.Entries[state.Key{Repo: repoName, Namespace: ns}]; ok {
-		return true
+		return true, nil
 	}
-	_, err := os.Lstat(filepath.Join(repoDir, ns))
-	return err == nil
+	dir, err := repo.NamespaceDir(repoDir, ns)
+	if err != nil {
+		return false, err
+	}
+	_, err = os.Lstat(dir)
+	return err == nil, nil
 }
 
 // dropRemovedNamespaces does on this machine what namespace rm did on the

@@ -217,13 +217,13 @@ func refuseIfIgnored(loc namespace.Located) error {
 		ignore = m.Ignore
 	} else {
 		var err error
-		ignore, err = catalogueNamespaceIgnored(filepath.Dir(loc.Dir), filepath.Base(loc.Dir))
+		ignore, err = catalogueNamespaceIgnored(loc.RepoDir, loc.Name)
 		if err != nil {
 			return err
 		}
 	}
 	if ignore {
-		return fmt.Errorf("namespace %q is ignored (ignore = true in its .dots)", filepath.Base(loc.Dir))
+		return fmt.Errorf("namespace %q is ignored (ignore = true in its .dots)", loc.Name)
 	}
 	return nil
 }
@@ -302,7 +302,7 @@ func trackPaths(name string, args []string, flags shared.Flags) error {
 	}
 	name = loc.Name
 	if !loc.Installed {
-		if err := engine.Materialize(filepath.Dir(loc.Dir), loc.Dir, filepath.Base(loc.Dir)); err != nil {
+		if err := engine.Materialize(loc.RepoDir, loc.Dir, loc.Name); err != nil {
 			return err
 		}
 		loc.Installed = true
@@ -339,7 +339,7 @@ func renameNamespace(oldName, newName string, flags shared.Flags) error {
 		return err
 	}
 	oldName = loc.Name
-	repoDir := filepath.Dir(loc.Dir)
+	repoDir := loc.RepoDir
 	if err := namespace.Rename(repoDir, loc.Repo.Name, oldName, newName); err != nil {
 		return err
 	}
@@ -533,7 +533,11 @@ func renderIgnoredNamespaces() error {
 			return err
 		}
 		for _, n := range local {
-			m, err := manifest.Read(filepath.Join(repoDir, n))
+			nsDir, err := repo.NamespaceDir(repoDir, n)
+			if err != nil {
+				return err
+			}
+			m, err := manifest.Read(nsDir)
 			if err != nil {
 				return err
 			}

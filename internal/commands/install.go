@@ -3,7 +3,6 @@ package commands
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/engine"
@@ -42,7 +41,7 @@ func installNamespaces(names []string, flags shared.Flags) error {
 			return err
 		}
 		name = loc.Name
-		repoDir := filepath.Dir(loc.Dir)
+		repoDir := loc.RepoDir
 		if err := engine.Materialize(repoDir, loc.Dir, name); err != nil {
 			return err
 		}
@@ -85,7 +84,7 @@ func uninstallNamespaces(names []string, flags shared.Flags) error {
 	var lines []string
 	defer func() { fmt.Print(ui.Report(lines, "")) }()
 	for _, t := range targets {
-		repoDir := filepath.Dir(t.loc.Dir)
+		repoDir := t.loc.RepoDir
 
 		// Git safety is scoped to the namespace(s) being uninstalled from
 		// this repository, computed above before any change is made —

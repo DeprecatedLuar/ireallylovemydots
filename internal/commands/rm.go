@@ -177,7 +177,7 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 		if checkedRepos[t.loc.Repo.Name] {
 			continue
 		}
-		if err := checkGitSafety(t.loc.Repo.Name, filepath.Dir(t.loc.Dir), repoNamespaces[t.loc.Repo.Name], false, flags); err != nil {
+		if err := checkGitSafety(t.loc.Repo.Name, t.loc.RepoDir, repoNamespaces[t.loc.Repo.Name], false, flags); err != nil {
 			return err
 		}
 		checkedRepos[t.loc.Repo.Name] = true
@@ -257,7 +257,11 @@ func rmRepo(name string, flags shared.Flags) error {
 	defer func() { fmt.Print(ui.Report(lines, "")) }()
 
 	for _, nsName := range names {
-		loc := namespace.Located{Repo: r, Dir: filepath.Join(repoDir, nsName)}
+		loc, err := namespace.Locate(r, repoDir, nsName)
+		if err != nil {
+			return err
+		}
+		loc.Installed = true
 		if err := rmNamespaceAt(loc, nsName, flags); err != nil {
 			return err
 		}
@@ -330,7 +334,7 @@ func rmNamespaceAt(loc namespace.Located, nsName string, flags shared.Flags) err
 	// not actually a git repository has no index to stage anything into —
 	// out of scope here exactly as it is for git.Status, which treats that
 	// case as nothing to report rather than an error.
-	repoDir := filepath.Dir(loc.Dir)
+	repoDir := loc.RepoDir
 	if isRepo, err := repo.IsGitRepo(repoDir); err != nil {
 		return err
 	} else if isRepo {

@@ -78,7 +78,10 @@ func namespaceListing(repos []manifest.Repo, opts listOptions, findings selfheal
 		localSet := make(map[string]bool, len(local))
 		for _, n := range local {
 			localSet[n] = true
-			nsDir := filepath.Join(repoDir, n)
+			nsDir, err := repo.NamespaceDir(repoDir, n)
+			if err != nil {
+				return nil, err
+			}
 			m, err := manifest.Read(nsDir)
 			if err != nil {
 				return nil, err
