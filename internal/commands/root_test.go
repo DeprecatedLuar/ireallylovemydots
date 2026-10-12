@@ -225,3 +225,37 @@ func TestRepoRm_CleanRootNamespaceRepositoryNeedsNoForce(t *testing.T) {
 		t.Fatalf("clone still present after repo rm: %v", err)
 	}
 }
+
+func TestEditNamespace_RefusesAnInvalidName(t *testing.T) {
+	cases := []struct {
+		label, namespace, body, want string
+	}{
+		{"root without name", "nvim", "dest = \"~/.config/nvim\"\n", "must set name"},
+		{"root with a reserved name", "nvim", "name = \"enable\"\n", "reserved"},
+		{"folder with a name", "shell", "name = \"shell\"\n", "only allowed"},
+	}
+	for _, c := range cases {
+		t.Run(c.label, func(t *testing.T) {
+			repoDir := setupRootRepo(t, "dotfiles", "nvim", "", "init.lua")
+			dir := repoDir
+			if c.namespace != "nvim" {
+				dir = filepath.Join(repoDir, c.namespace)
+			}
+			before, err := os.ReadFile(manifest.Path(dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("EDITOR", fakeEditor(t, c.body))
+			if err := editNamespace(c.namespace, shared.Flags{}); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("an edit leaving an invalid name must be refused with %q, got %v", c.want, err)
+			}
+			after, err := os.ReadFile(manifest.Path(dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Fatalf(".dots changed on refusal: %q", after)
+			}
+		})
+	}
+}

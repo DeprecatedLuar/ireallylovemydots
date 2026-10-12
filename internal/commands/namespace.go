@@ -388,7 +388,7 @@ func editNamespace(name string, flags shared.Flags) error {
 			if problems := manifest.Validate(m); len(problems) > 0 {
 				return formatManifestProblems(problems)
 			}
-			return nil
+			return manifest.CheckName(m, loc.Root)
 		},
 		func(seed, edited []byte) error {
 			return applyEditedBuffer(loc.Dir, seed, edited)
