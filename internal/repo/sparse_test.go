@@ -4,8 +4,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
 )
 
 // runGit runs a git command in dir and returns its combined output without
@@ -491,5 +494,41 @@ func TestReconcileCone_ConvertsEmptyConeWithFullTree(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, "ns1")); err != nil {
 		t.Fatalf("expected ns1 to remain on disk after reconciling: %v", err)
+	}
+}
+
+func TestReconcileCone_RootNamespaceKeepsTreeFoldersInCone(t *testing.T) {
+	dir := initGitRepo(t)
+	for _, p := range []string{"lua/init.lua", ".config/x", "shell/.dots", "uninstalled/.dots", "uninstalled/f"} {
+		full := filepath.Join(dir, p)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := manifest.Write(dir, manifest.Manifest{Name: "nvim"}); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, dir)
+	if err := EnsureSparse(dir, []string{"shell"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := ReconcileCone(dir); err != nil {
+		t.Fatal(err)
+	}
+	cone, err := List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{".config", "lua", "shell"} {
+		if !slices.Contains(cone, want) {
+			t.Fatalf("cone = %v, missing %s", cone, want)
+		}
+	}
+	if slices.Contains(cone, "uninstalled") || slices.Contains(cone, ".git") {
+		t.Fatalf("cone = %v, must not hold an uninstalled namespace or .git", cone)
 	}
 }
