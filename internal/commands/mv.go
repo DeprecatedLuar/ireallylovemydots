@@ -10,6 +10,7 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/fscopy"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/grammar"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/namespace"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
@@ -102,7 +103,12 @@ func HandleMv(args []string, flags shared.Flags) error {
 	}
 
 	if srcEnabled {
-		if err := moveEnabledNamespace(srcKey, srcRepo, srcName, srcDir, dstRepo, dstName, dstDir, m.Entries, s); err != nil {
+		entries, err := namespace.Linkable(dstDir, m)
+		if err != nil {
+			os.RemoveAll(dstDir)
+			return err
+		}
+		if err := moveEnabledNamespace(srcKey, srcRepo, srcName, srcDir, dstRepo, dstName, dstDir, entries, s); err != nil {
 			os.RemoveAll(dstDir)
 			return err
 		}

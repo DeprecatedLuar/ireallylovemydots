@@ -10,6 +10,7 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/engine"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/grammar"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/namespace"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/profile"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
@@ -158,6 +159,10 @@ func scopeFor(namespaceName string, flags shared.Flags) (profileScope, error) {
 	if err != nil {
 		return profileScope{}, err
 	}
+	entries, err := namespace.Linkable(loc.Dir, m)
+	if err != nil {
+		return profileScope{}, err
+	}
 	pm, err := profile.Read(loc.Dir)
 	if err != nil {
 		return profileScope{}, err
@@ -171,7 +176,7 @@ func scopeFor(namespaceName string, flags shared.Flags) (profileScope, error) {
 		name:    namespaceName,
 		dir:     loc.Dir,
 		key:     key,
-		entries: m.Entries,
+		entries: entries,
 		profile: pm,
 		state:   s,
 		active:  s.Entries[key].ActiveProfile,
@@ -234,8 +239,12 @@ func editProfiles(namespaceName string, flags shared.Flags) error {
 		return err
 	}
 
-	tracked := make([]string, len(m.Entries))
-	for i, e := range m.Entries {
+	entries, err := namespace.Linkable(loc.Dir, m)
+	if err != nil {
+		return err
+	}
+	tracked := make([]string, len(entries))
+	for i, e := range entries {
 		tracked[i] = e.Name
 	}
 	seed := profile.EditBuffer(pm, tracked)

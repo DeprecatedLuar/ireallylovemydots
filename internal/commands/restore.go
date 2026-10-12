@@ -44,7 +44,11 @@ func HandleRestore(names []string, flags shared.Flags) error {
 		if err != nil {
 			return err
 		}
-		problems, err := engine.RestorePreflight(loc.Dir, name, m.Entries)
+		entries, err := namespace.Linkable(loc.Dir, m)
+		if err != nil {
+			return err
+		}
+		problems, err := engine.RestorePreflight(loc.Dir, name, entries)
 		if err != nil {
 			return err
 		}
@@ -52,7 +56,7 @@ func HandleRestore(names []string, flags shared.Flags) error {
 			name:     name,
 			loc:      loc,
 			key:      state.Key{Repo: loc.Repo.Name, Namespace: name},
-			entries:  m.Entries,
+			entries:  entries,
 			problems: problems,
 		})
 	}

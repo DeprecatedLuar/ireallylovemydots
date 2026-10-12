@@ -52,9 +52,13 @@ func rmEntry(name string, names []string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	linkable, err := namespace.Linkable(loc.Dir, m)
+	if err != nil {
+		return err
+	}
 	entries := make([]manifest.Entry, 0, len(names))
 	for _, n := range names {
-		entry, ok := entryByName(m, n)
+		entry, ok := entryByName(linkable, n)
 		if !ok {
 			return fmt.Errorf("%q is not tracked in namespace %q", n, name)
 		}
@@ -144,12 +148,16 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 		if err != nil {
 			return err
 		}
-		targets = append(targets, resolved{name: name, loc: loc, entries: m.Entries})
+		linkable, err := namespace.Linkable(loc.Dir, m)
+		if err != nil {
+			return err
+		}
+		targets = append(targets, resolved{name: name, loc: loc, entries: linkable})
 		row, err := namespaceRow(s, loc.Repo.Name, name, loc.Dir, m, selfheal.Findings{})
 		if err != nil {
 			return err
 		}
-		row.Count = len(m.Entries)
+		row.Count = len(linkable)
 		rows = append(rows, row)
 		repoNamespaces[loc.Repo.Name] = append(repoNamespaces[loc.Repo.Name], name)
 	}
@@ -293,8 +301,12 @@ func rmNamespaceAt(loc namespace.Located, nsName string, flags shared.Flags) err
 	if err != nil {
 		return err
 	}
-	if len(m.Entries) > 0 {
-		if err := removeEntries(loc, nsName, m.Entries, flags); err != nil {
+	entries, err := namespace.Linkable(loc.Dir, m)
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		if err := removeEntries(loc, nsName, entries, flags); err != nil {
 			return err
 		}
 	}
@@ -602,8 +614,8 @@ func renderRestoreProblems(problems []engine.RestoreProblem) string {
 	return strings.Join(lines, "\n")
 }
 
-func entryByName(m manifest.Manifest, name string) (manifest.Entry, bool) {
-	for _, e := range m.Entries {
+func entryByName(entries []manifest.Entry, name string) (manifest.Entry, bool) {
+	for _, e := range entries {
 		if e.Name == name {
 			return e, true
 		}

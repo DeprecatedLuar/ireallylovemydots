@@ -97,7 +97,11 @@ func namespaceListing(repos []manifest.Repo, opts listOptions, findings selfheal
 				continue
 			}
 			if opts.Counts {
-				row.Count = len(m.Entries)
+				linkable, err := namespace.Linkable(nsDir, m)
+				if err != nil {
+					return nil, err
+				}
+				row.Count = len(linkable)
 			}
 			row.Repo = r.Name
 			rows = append(rows, row)
@@ -249,7 +253,12 @@ func entryListing(key state.Key, s state.State, namespaceDir string, m manifest.
 	// overview is a complete diagnostic path.
 	var blocked map[string]engine.Problem
 	if !enabled {
-		blocked, err = preflightProblems(key, namespaceDir, m.Entries, s)
+		var linkable []manifest.Entry
+		linkable, err = namespace.Linkable(namespaceDir, m)
+		if err != nil {
+			return nil, "", err
+		}
+		blocked, err = preflightProblems(key, namespaceDir, linkable, s)
 		if err != nil {
 			return nil, "", err
 		}
@@ -297,10 +306,14 @@ func namespaceProblems(namespaceDir string, m manifest.Manifest, enabled bool, a
 
 	invalid := toSet(report.Invalid)
 	orphaned := toSet(report.Orphans)
-	guarded := manifestGuardDetails(m.Entries)
+	entries, err := namespace.Linkable(namespaceDir, m)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	guarded := manifestGuardDetails(entries)
 
-	rows = make([]ui.Entry, 0, len(m.Entries)+len(report.Untracked))
-	for _, e := range m.Entries {
+	rows = make([]ui.Entry, 0, len(entries)+len(report.Untracked))
+	for _, e := range entries {
 		rows = append(rows, classifyEntry(e, namespaceDir, enabled, activeProfile, invalid, orphaned, guarded, diagnoseOccupancy, blocked))
 	}
 	for _, name := range report.Untracked {

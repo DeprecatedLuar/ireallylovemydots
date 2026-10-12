@@ -11,6 +11,7 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/git"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/grammar"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/namespace"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/repo"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/selfheal"
@@ -727,7 +728,11 @@ func relinkRenamedNamespaces(repoDir, repoName string, names map[string]bool) ([
 			continue
 		}
 
-		linked, nsFailures, relinkErr := engine.Relink(namespaceDir, m.Entries, entry.ActiveProfile)
+		entries, linkErr := namespace.Linkable(namespaceDir, m)
+		if linkErr != nil {
+			return nil, linkErr
+		}
+		linked, nsFailures, relinkErr := engine.Relink(namespaceDir, entries, entry.ActiveProfile)
 		if relinkErr != nil {
 			return nil, relinkErr
 		}
