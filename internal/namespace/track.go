@@ -64,6 +64,8 @@ func Add(namespaceDir, path string) error {
 		return err
 	}
 
+	covered := m.Dest != "" && filepath.Join(m.Dest, name) == dest
+
 	if existing, ok := entryByName(m, name); ok {
 		if existing.Dest == dest {
 			fmt.Fprintf(os.Stderr, "%s is already tracked\n", dest)
@@ -78,6 +80,10 @@ func Add(namespaceDir, path string) error {
 		return err
 	}
 	if payloadExists {
+		if covered {
+			fmt.Fprintf(os.Stderr, "%s is already tracked\n", dest)
+			return nil
+		}
 		return adopt(namespaceDir, m, name, dest)
 	}
 
@@ -93,6 +99,10 @@ func Add(namespaceDir, path string) error {
 
 	if err := os.Rename(dest, payload); err != nil {
 		return fmt.Errorf("move %s into namespace: %w", dest, err)
+	}
+
+	if covered {
+		return nil
 	}
 
 	m.Entries = append(m.Entries, manifest.Entry{Name: name, Dest: dest})
