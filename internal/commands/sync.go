@@ -193,7 +193,7 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 		res.err = err
 		return res
 	}
-	p, err := git.Prepare(repoDir, heldBases(s, name))
+	p, err := git.Prepare(repoDir, heldBases(s, name), nil)
 	if err != nil {
 		res.err = err
 		return res
