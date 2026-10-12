@@ -379,7 +379,7 @@ func editNamespace(name string, flags shared.Flags) error {
 		return err
 	}
 
-	return editBuffer(original, manifest.Path(loc.Dir),
+	_, err = editBuffer(original, manifest.Path(loc.Dir),
 		func(edited []byte) error {
 			m, err := manifest.Decode(edited)
 			if err != nil {
@@ -394,6 +394,7 @@ func editNamespace(name string, flags shared.Flags) error {
 			return applyEditedBuffer(loc.Dir, seed, edited)
 		},
 	)
+	return err
 }
 
 // formatManifestProblems joins manifest.Validate's findings into the one

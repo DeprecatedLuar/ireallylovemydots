@@ -497,12 +497,16 @@ func TestBootstrap_ConvertedNamespaceEnablesThroughRealPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiskEntries: %v", err)
 	}
-	plan, err := repo.PlanEntries(preEntries)
+	plan, err := repo.DefaultBootstrapPlan("dotfiles", preEntries)
 	if err != nil {
-		t.Fatalf("PlanEntries: %v", err)
+		t.Fatalf("DefaultBootstrapPlan: %v", err)
 	}
-	if err := repo.Apply(repoDir, plan); err != nil {
-		t.Fatalf("Apply: %v", err)
+	for _, n := range []string{"nvim", ".bashrc"} {
+		plan.Namespaces[n] = plan.Root[n]
+		delete(plan.Root, n)
+	}
+	if err := repo.ApplyBootstrap(repoDir, plan, preEntries); err != nil {
+		t.Fatalf("ApplyBootstrap: %v", err)
 	}
 
 	postEntries, err := repo.DiskEntries(repoDir)

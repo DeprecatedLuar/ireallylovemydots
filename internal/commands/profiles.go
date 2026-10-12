@@ -249,7 +249,7 @@ func editProfiles(namespaceName string, flags shared.Flags) error {
 	}
 	seed := profile.EditBuffer(pm, tracked)
 
-	return editBuffer(seed, profile.Path(loc.Dir),
+	_, err = editBuffer(seed, profile.Path(loc.Dir),
 		func(edited []byte) error {
 			_, err := profile.Decode(edited)
 			return err
@@ -262,6 +262,7 @@ func editProfiles(namespaceName string, flags shared.Flags) error {
 			return profile.Write(loc.Dir, decoded)
 		},
 	)
+	return err
 }
 
 // addProfiles implements `profiles add <profile>...`: every name is

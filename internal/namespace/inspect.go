@@ -10,7 +10,7 @@ import (
 // dotsManifestFile and gitignoreFile name the two per-namespace files Inspect
 // never reports as untracked payload: the manifest itself, and a namespace's
 // own .gitignore, which is repo plumbing rather than tracked content (the
-// root .gitignore gets the same treatment in repo/bootstrap.go's skip set).
+// root .gitignore gets the same treatment in repo/bootstrap.go's neverPlanned set).
 // Duplicated as a literal rather than imported — manifest's own filename
 // constant is unexported, and internal/repo/catalogue.go keeps its own copy
 // of ".dots" for the same reason: not worth a cross-package export for one

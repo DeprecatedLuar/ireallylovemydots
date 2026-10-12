@@ -148,7 +148,7 @@ func editRegistry() error {
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
-	return editBuffer(seed, path,
+	_, err = editBuffer(seed, path,
 		func(edited []byte) error {
 			_, err := manifest.DecodeRegistry(edited)
 			return err
@@ -160,6 +160,7 @@ func editRegistry() error {
 			return nil
 		},
 	)
+	return err
 }
 
 // addRepo implements `repo add <url>`: derive the local name and owner from
@@ -346,10 +347,21 @@ func bootstrapAdd(dest, url string, entries []repo.RootEntry) (converted bool, s
 // hard error, per concept.md "Bootstrap": "Not being able to prompt is a
 // hard error, never a silent conversion."
 func planBootstrap(repoPath string, entries []repo.RootEntry) ([]repo.PlannedNamespace, bool, error) {
-	plan, err := repo.PlanEntries(entries)
+	draft, err := repo.DefaultBootstrapPlan(filepath.Base(repoPath), entries)
 	if err != nil {
 		return nil, false, err
 	}
+	for name, dest := range draft.Root {
+		if dest != manifest.DestNone {
+			draft.Namespaces[name] = dest
+		}
+	}
+	draft.Root = map[string]string{}
+	validated, err := repo.DecodeBootstrapPlan(repo.EncodeBootstrapPlan(draft), entries)
+	if err != nil {
+		return nil, false, err
+	}
+	plan := validated.Moves(entries)
 	if len(plan) == 0 {
 		return nil, false, fmt.Errorf("%s has no top-level entries for --bootstrap to convert", repoPath)
 	}
