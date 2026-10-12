@@ -188,3 +188,40 @@ func TestIsOwnRootNamespace(t *testing.T) {
 		t.Fatalf("IsOwnRootNamespace(shell) = %v, %v", ok, err)
 	}
 }
+
+func TestRepoRm_RefusesUncommittedEditsInARootOwnedFolder(t *testing.T) {
+	repoDir := setupRootRepo(t, "dotfiles", "nvim", filepath.Join(t.TempDir(), "nvim"), "init.lua")
+	syncGitRun(t, repoDir, "remote", "add", "origin", "https://example.com/someone/dotfiles")
+	if err := os.MkdirAll(filepath.Join(repoDir, "lua"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "lua", "x.lua"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	syncGitRun(t, repoDir, "add", "-A")
+	syncGitRun(t, repoDir, "commit", "-m", "lua")
+	if err := os.WriteFile(filepath.Join(repoDir, "lua", "x.lua"), []byte("edited"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := rmRepo("dotfiles", shared.Flags{Yes: true})
+	if err == nil || !strings.Contains(err.Error(), "uncommitted") || !strings.Contains(err.Error(), "nvim") {
+		t.Fatalf("repo rm with dirt in a root-owned folder must be refused naming nvim, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "lua", "x.lua")); err != nil {
+		t.Fatalf("clone must be untouched after the refusal: %v", err)
+	}
+}
+
+func TestRepoRm_CleanRootNamespaceRepositoryNeedsNoForce(t *testing.T) {
+	repoDir := setupRootRepo(t, "dotfiles", "nvim", filepath.Join(t.TempDir(), "nvim"), "init.lua")
+	syncGitRun(t, repoDir, "remote", "add", "origin", "https://example.com/someone/dotfiles")
+	captureStdoutStderr(t, func() {
+		if err := rmRepo("dotfiles", shared.Flags{Yes: true}); err != nil {
+			t.Fatalf("repo rm: %v", err)
+		}
+	})
+	if _, err := os.Stat(repoDir); !os.IsNotExist(err) {
+		t.Fatalf("clone still present after repo rm: %v", err)
+	}
+}

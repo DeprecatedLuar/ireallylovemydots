@@ -365,13 +365,13 @@ func rmNamespaceAt(loc namespace.Located, nsName string, flags shared.Flags) err
 	return nil
 }
 
-// dirtyNamespaces reduces a list of git-status paths (relative to a repo
-// root, so namespace/entry/...) to the sorted, deduplicated set of
-// namespaces they fall under, for checkGitSafety's error to name what's
-// dirty without dumping every path. rootFiles counts paths with no
-// namespace segment (repo-root files such as .gitignore) separately —
-// they aren't a namespace, so they're never folded into the list.
-func dirtyNamespaces(paths []string) (namespaces []string, rootFiles int) {
+// dirtyNamespaces reduces a list of git-status paths (relative to repoDir)
+// to the sorted, deduplicated set of namespaces owning them, for
+// checkGitSafety's error to name what's dirty without dumping every path.
+// Each top-level folder maps to its owner (repo.OwnerOf), so a folder of a
+// root namespace counts as that namespace. rootFiles counts paths with no
+// folder segment (repo-root files such as .gitignore) separately.
+func dirtyNamespaces(repoDir string, paths []string) (namespaces []string, rootFiles int, err error) {
 	seen := make(map[string]bool)
 	for _, p := range paths {
 		head, _, ok := strings.Cut(p, "/")
@@ -381,12 +381,20 @@ func dirtyNamespaces(paths []string) (namespaces []string, rootFiles int) {
 		}
 		seen[head] = true
 	}
-	namespaces = make([]string, 0, len(seen))
-	for ns := range seen {
+	owners := make(map[string]bool, len(seen))
+	for head := range seen {
+		owner, err := repo.OwnerOf(repoDir, head)
+		if err != nil {
+			return nil, 0, err
+		}
+		owners[owner] = true
+	}
+	namespaces = make([]string, 0, len(owners))
+	for ns := range owners {
 		namespaces = append(namespaces, ns)
 	}
 	sort.Strings(namespaces)
-	return namespaces, rootFiles
+	return namespaces, rootFiles, nil
 }
 
 // namespacesIn reduces dirty to just the entries also present in scope,
@@ -429,7 +437,10 @@ func checkGitSafety(repoName, repoDir string, namespaces []string, blockRootFile
 		return err
 	}
 	if len(st.Dirty) > 0 {
-		dirty, rootFiles := dirtyNamespaces(st.Dirty)
+		dirty, rootFiles, err := dirtyNamespaces(repoDir, st.Dirty)
+		if err != nil {
+			return err
+		}
 		scoped := namespacesIn(dirty, namespaces)
 		if !blockRootFiles {
 			rootFiles = 0
