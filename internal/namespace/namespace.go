@@ -19,8 +19,16 @@ import (
 const dirPerm = 0755
 
 // Create makes an empty namespace folder with an empty manifest inside
-// repoDir. It errors if a namespace by that name already exists on disk.
+// repoDir. It errors if a namespace by that name already exists on disk or
+// is the repository's root namespace.
 func Create(repoDir, name string) (string, error) {
+	root, err := repo.RootName(repoDir)
+	if err != nil {
+		return "", err
+	}
+	if root != "" && root == name {
+		return "", fmt.Errorf("namespace %q is the root namespace of %s", name, repoDir)
+	}
 	dir := filepath.Join(repoDir, name)
 	if _, err := os.Stat(dir); err == nil {
 		return "", fmt.Errorf("namespace %q already exists in %s", name, repoDir)
@@ -287,6 +295,9 @@ func Rename(repoDir, repoName, oldName, newName string) error {
 	if root != "" && root == oldName {
 		return renameRoot(repoDir, repoName, oldName, newName)
 	}
+	if root != "" && root == newName {
+		return fmt.Errorf("namespace %q is the root namespace of %s", newName, repoDir)
+	}
 	oldDir := filepath.Join(repoDir, oldName)
 	newDir := filepath.Join(repoDir, newName)
 
@@ -311,6 +322,13 @@ func renameRoot(repoDir, repoName, oldName, newName string) error {
 		return fmt.Errorf("%q is already an entry at the root of %s", newName, repoDir)
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat %s: %w", filepath.Join(repoDir, newName), err)
+	}
+	catalogue, err := repo.Namespaces(repoDir)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(catalogue, newName) {
+		return fmt.Errorf("namespace %q already exists in %s", newName, repoDir)
 	}
 	m, err := manifest.Read(repoDir)
 	if err != nil {
