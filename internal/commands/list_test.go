@@ -465,7 +465,7 @@ func TestEntryListing_UntrackedPayloadMarked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows, _, err := entryListing(state.Key{}, state.State{}, nsDir, nil, false, "")
+	rows, _, err := entryListing(state.Key{}, state.State{}, nsDir, manifest.Manifest{}, false, "")
 	if err != nil {
 		t.Fatalf("entryListing: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestEntryListing_OrphanAndUntrackedSuggestRename(t *testing.T) {
 	}
 	entries := []manifest.Entry{{Name: "oldname", Dest: "/tmp/oldname-dest"}}
 
-	rows, suggestion, err := entryListing(state.Key{}, state.State{}, nsDir, entries, false, "")
+	rows, suggestion, err := entryListing(state.Key{}, state.State{}, nsDir, manifest.Manifest{Entries: entries}, false, "")
 	if err != nil {
 		t.Fatalf("entryListing: %v", err)
 	}
@@ -505,7 +505,7 @@ func TestNamespaceRow_PromotesToProblemOnOrphanEntry(t *testing.T) {
 	entries := []manifest.Entry{{Name: "gone", Dest: "/tmp/gone-dest"}}
 	s := state.State{Entries: map[state.Key]state.Entry{}}
 
-	row, err := namespaceRow(s, "dotfiles", "cfg-ns", nsDir, entries, selfheal.Findings{})
+	row, err := namespaceRow(s, "dotfiles", "cfg-ns", nsDir, manifest.Manifest{Entries: entries}, selfheal.Findings{})
 	if err != nil {
 		t.Fatalf("namespaceRow: %v", err)
 	}
@@ -531,7 +531,7 @@ func TestNamespaceRow_HealthyEnabledNamespaceStaysPlus(t *testing.T) {
 		{Repo: "dotfiles", Namespace: "cfg-ns"}: {Enabled: true},
 	}}
 
-	row, err := namespaceRow(s, "dotfiles", "cfg-ns", nsDir, entries, selfheal.Findings{})
+	row, err := namespaceRow(s, "dotfiles", "cfg-ns", nsDir, manifest.Manifest{Entries: entries}, selfheal.Findings{})
 	if err != nil {
 		t.Fatalf("namespaceRow: %v", err)
 	}

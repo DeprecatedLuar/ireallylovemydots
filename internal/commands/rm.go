@@ -145,7 +145,7 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 			return err
 		}
 		targets = append(targets, resolved{name: name, loc: loc, entries: m.Entries})
-		row, err := namespaceRow(s, loc.Repo.Name, name, loc.Dir, m.Entries, selfheal.Findings{})
+		row, err := namespaceRow(s, loc.Repo.Name, name, loc.Dir, m, selfheal.Findings{})
 		if err != nil {
 			return err
 		}

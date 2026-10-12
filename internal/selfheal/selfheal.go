@@ -533,7 +533,7 @@ func Run() (Findings, error) {
 			changed = true
 		}
 
-		report, inspectErr := namespace.Inspect(namespaceDir, m.Entries)
+		report, inspectErr := namespace.Inspect(namespaceDir, m)
 		if inspectErr != nil {
 			return Findings{}, inspectErr
 		}
@@ -777,7 +777,7 @@ func recoverManifest(repoDir, namespaceDir string, key state.Key, linkedDests []
 	}
 
 	fromLinks := namespace.RebuildFromLinks(namespaceDir, linkedDests)
-	report, err := namespace.Inspect(namespaceDir, fromLinks)
+	report, err := namespace.Inspect(namespaceDir, manifest.Manifest{Entries: fromLinks})
 	if err != nil {
 		return manifest.Manifest{}, Recovery{}, err
 	}

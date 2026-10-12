@@ -419,7 +419,7 @@ func prepareEditBuffer(namespaceDir string) ([]byte, error) {
 		return nil, err
 	}
 
-	report, err := namespace.Inspect(namespaceDir, m.Entries)
+	report, err := namespace.Inspect(namespaceDir, m)
 	if err != nil {
 		return nil, err
 	}
@@ -619,7 +619,7 @@ func renderNamespaceEntries(name string, flags shared.Flags, findings selfheal.F
 	key := state.Key{Repo: loc.Repo.Name, Namespace: name}
 	stateEntry := s.Entries[key]
 
-	rows, suggestion, err := entryListing(key, s, loc.Dir, m.Entries, stateEntry.Enabled, stateEntry.ActiveProfile)
+	rows, suggestion, err := entryListing(key, s, loc.Dir, m, stateEntry.Enabled, stateEntry.ActiveProfile)
 	if err != nil {
 		return err
 	}
