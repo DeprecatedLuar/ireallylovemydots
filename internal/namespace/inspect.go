@@ -1,7 +1,6 @@
 package namespace
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -11,7 +10,7 @@ import (
 // dotsManifestFile and gitignoreFile name the two per-namespace files Inspect
 // never reports as untracked payload: the manifest itself, and a namespace's
 // own .gitignore, which is repo plumbing rather than tracked content (the
-// root .gitignore gets the same treatment in repo/bootstrap.go's skip set).
+// root .gitignore gets the same treatment in repo/bootstrap.go's neverPlanned set).
 // Duplicated as a literal rather than imported — manifest's own filename
 // constant is unexported, and internal/repo/catalogue.go keeps its own copy
 // of ".dots" for the same reason: not worth a cross-package export for one
@@ -46,20 +45,20 @@ type Report struct {
 	Untracked []string
 }
 
-// Inspect walks nsDir once and classifies it against entries (already read
-// by the caller, since every existing caller has a manifest.Read result in
-// hand before it needs this). One directory read serves both listing's
-// per-entry markers and self-heal's repair warning, so neither has to walk
-// the namespace folder on its own.
-func Inspect(nsDir string, entries []manifest.Entry) (Report, error) {
+// Inspect walks nsDir once and classifies it against the manifest m (already
+// read by the caller). Under a default destination every item is linked, so
+// Untracked is empty. One directory read serves both listing's per-entry
+// markers and self-heal's repair warning, so neither has to walk the
+// namespace folder on its own.
+func Inspect(nsDir string, m manifest.Manifest) (Report, error) {
 	exists, err := manifest.Exists(nsDir)
 	if err != nil {
 		return Report{}, err
 	}
 
-	tracked := make(map[string]bool, len(entries))
+	tracked := make(map[string]bool, len(m.Entries))
 	var invalid, orphans []string
-	for _, e := range entries {
+	for _, e := range m.Entries {
 		tracked[e.Name] = true
 		if e.Dest == "" {
 			invalid = append(invalid, e.Name)
@@ -71,17 +70,17 @@ func Inspect(nsDir string, entries []manifest.Entry) (Report, error) {
 		}
 	}
 
-	dirEntries, err := os.ReadDir(nsDir)
-	if err != nil {
-		return Report{}, fmt.Errorf("read namespace directory %s: %w", nsDir, err)
-	}
 	var untracked []string
-	for _, de := range dirEntries {
-		name := de.Name()
-		if name == dotsManifestFile || name == gitignoreFile || name == profilesDir || tracked[name] {
-			continue
+	if m.Dest == "" {
+		items, err := Items(nsDir, m.Name != "")
+		if err != nil {
+			return Report{}, err
 		}
-		untracked = append(untracked, name)
+		for _, name := range items {
+			if !tracked[name] {
+				untracked = append(untracked, name)
+			}
+		}
 	}
 
 	return Report{

@@ -78,7 +78,10 @@ func namespaceListing(repos []manifest.Repo, opts listOptions, findings selfheal
 		localSet := make(map[string]bool, len(local))
 		for _, n := range local {
 			localSet[n] = true
-			nsDir := filepath.Join(repoDir, n)
+			nsDir, err := repo.NamespaceDir(repoDir, n)
+			if err != nil {
+				return nil, err
+			}
 			m, err := manifest.Read(nsDir)
 			if err != nil {
 				return nil, err
@@ -89,7 +92,7 @@ func namespaceListing(repos []manifest.Repo, opts listOptions, findings selfheal
 			if m.Ignore {
 				continue
 			}
-			row, err := namespaceRow(s, r.Name, n, nsDir, m.Entries, findings)
+			row, err := namespaceRow(s, r.Name, n, nsDir, m, findings)
 			if err != nil {
 				return nil, err
 			}
@@ -97,7 +100,11 @@ func namespaceListing(repos []manifest.Repo, opts listOptions, findings selfheal
 				continue
 			}
 			if opts.Counts {
-				row.Count = len(m.Entries)
+				linkable, err := namespace.Linkable(nsDir, m)
+				if err != nil {
+					return nil, err
+				}
+				row.Count = len(linkable)
 			}
 			row.Repo = r.Name
 			rows = append(rows, row)
@@ -163,14 +170,14 @@ func qualifyCollisions(rows []ui.Entry) {
 // entry, never for an occupied destination on an otherwise-ordinary
 // disabled namespace — that diagnostic belongs to entryListing (`dots
 // <ns>`), one command away, not the overview.
-func namespaceRow(s state.State, repoName, nsName, namespaceDir string, entries []manifest.Entry, findings selfheal.Findings) (ui.Entry, error) {
+func namespaceRow(s state.State, repoName, nsName, namespaceDir string, m manifest.Manifest, findings selfheal.Findings) (ui.Entry, error) {
 	stateEntry := s.Entries[state.Key{Repo: repoName, Namespace: nsName}]
 	marker := ui.MarkerMaterialized
 	if stateEntry.Enabled {
 		marker = ui.MarkerEnabled
 	}
 
-	rows, _, _, err := namespaceProblems(namespaceDir, entries, stateEntry.Enabled, stateEntry.ActiveProfile, false, nil)
+	rows, _, _, err := namespaceProblems(namespaceDir, m, stateEntry.Enabled, stateEntry.ActiveProfile, false, nil)
 	if err != nil {
 		return ui.Entry{}, err
 	}
@@ -241,7 +248,7 @@ func repoListing(repos []manifest.Repo) ([]ui.Entry, error) {
 // almost certainly a rename. Listing may suggest it — the one place a
 // listing prints more than a marker and a name." The suggestion is a plain
 // string for the caller to print as a tip; entryListing never prints.
-func entryListing(key state.Key, s state.State, namespaceDir string, entries []manifest.Entry, enabled bool, activeProfile string) (rows []ui.Entry, suggestion string, err error) {
+func entryListing(key state.Key, s state.State, namespaceDir string, m manifest.Manifest, enabled bool, activeProfile string) (rows []ui.Entry, suggestion string, err error) {
 	// diagnoseOccupancy is true here: concept.md "What enable reports",
 	// "Listing one namespace is what that pointer resolves to" — the "!"
 	// entries in this one namespace's own listing must carry the destination
@@ -249,12 +256,17 @@ func entryListing(key state.Key, s state.State, namespaceDir string, entries []m
 	// overview is a complete diagnostic path.
 	var blocked map[string]engine.Problem
 	if !enabled {
-		blocked, err = preflightProblems(key, namespaceDir, entries, s)
+		var linkable []manifest.Entry
+		linkable, err = namespace.Linkable(namespaceDir, m)
+		if err != nil {
+			return nil, "", err
+		}
+		blocked, err = preflightProblems(key, namespaceDir, linkable, s)
 		if err != nil {
 			return nil, "", err
 		}
 	}
-	rows, orphans, untracked, err := namespaceProblems(namespaceDir, entries, enabled, activeProfile, true, blocked)
+	rows, orphans, untracked, err := namespaceProblems(namespaceDir, m, enabled, activeProfile, true, blocked)
 	if err != nil {
 		return nil, "", err
 	}
@@ -289,14 +301,18 @@ func preflightProblems(key state.Key, namespaceDir string, entries []manifest.En
 // warning. orphans and untracked name the entries/payloads driving each half
 // of the rename suggestion; a caller that only needs the namespace-level "!"
 // rollup (namespaceRow) ignores them.
-func namespaceProblems(namespaceDir string, entries []manifest.Entry, enabled bool, activeProfile string, diagnoseOccupancy bool, blocked map[string]engine.Problem) (rows []ui.Entry, orphans, untracked []string, err error) {
-	report, err := namespace.Inspect(namespaceDir, entries)
+func namespaceProblems(namespaceDir string, m manifest.Manifest, enabled bool, activeProfile string, diagnoseOccupancy bool, blocked map[string]engine.Problem) (rows []ui.Entry, orphans, untracked []string, err error) {
+	report, err := namespace.Inspect(namespaceDir, m)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	invalid := toSet(report.Invalid)
 	orphaned := toSet(report.Orphans)
+	entries, err := namespace.Linkable(namespaceDir, m)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	guarded := manifestGuardDetails(entries)
 
 	rows = make([]ui.Entry, 0, len(entries)+len(report.Untracked))

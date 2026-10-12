@@ -114,7 +114,9 @@ func DiskEntries(path string) ([]RootEntry, error) {
 // Namespaces reads the namespace catalogue from a cloned repository at
 // repoPath: the root entries that hold a .dots manifest, which is what
 // makes a top-level folder a namespace rather than an arbitrary source
-// folder — see concept.md "Namespace".
+// folder — see concept.md "Namespace". The root namespace, read from the
+// working tree's root .dots (cone mode always checks out root files), is
+// included.
 func Namespaces(repoPath string) ([]string, error) {
 	entries, err := RootEntries(repoPath)
 	if err != nil {
@@ -125,6 +127,13 @@ func Namespaces(repoPath string) ([]string, error) {
 		if e.HasDots {
 			names = append(names, e.Name)
 		}
+	}
+	root, err := RootName(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	if root != "" {
+		names = append(names, root)
 	}
 	return names, nil
 }

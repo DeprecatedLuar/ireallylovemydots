@@ -111,7 +111,7 @@ func TestPrepareFinish_MergeBothSidesAndPushable(t *testing.T) {
 	pushEdit(t, first, "a/file", "remote")
 	writeReconcileFile(t, second, "b/file", "local")
 
-	p, err := Prepare(second, nil)
+	p, err := Prepare(second, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestPrepareFinish_BloblessCloneRemoteRootFileChange(t *testing.T) {
 	configureReconcileRepo(t, blobless)
 	pushEdit(t, first, "seed", "remote")
 
-	p, err := Prepare(blobless, nil)
+	p, err := Prepare(blobless, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestPrepareFinish_OverlayKeepsEditsOnTopUncommitted(t *testing.T) {
 
 	overlay := Placement{Commit: SourceRemote, Worktree: SourceMerged}
 	for round := 0; round < 2; round++ {
-		p, err := Prepare(second, nil)
+		p, err := Prepare(second, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -220,7 +220,7 @@ func TestPrepareFinish_ReadOnlyOverlayWithoutIdentity(t *testing.T) {
 		os.Unsetenv(v)
 	}
 
-	p, err := Prepare(second, nil)
+	p, err := Prepare(second, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestPrepare_ConflictReportedPerUnitAndHeldBaseKeepsItDetected(t *testing.T)
 	pushEdit(t, first, "ns/file", "remote")
 	writeReconcileFile(t, second, "ns/file", "local")
 
-	p, err := Prepare(second, nil)
+	p, err := Prepare(second, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,14 +259,14 @@ func TestPrepare_ConflictReportedPerUnitAndHeldBaseKeepsItDetected(t *testing.T)
 		t.Fatal("held namespace's file was touched")
 	}
 
-	again, err := Prepare(second, map[string]string{"ns": u.Base})
+	again, err := Prepare(second, map[string]string{"ns": u.Base}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(unitNamed(t, again, "ns").Conflicts) == 0 {
 		t.Fatal("with the held base the conflict must still be detected")
 	}
-	without, err := Prepare(second, nil)
+	without, err := Prepare(second, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestPrepare_RemoteDeletesLocallyEditedNamespaceConflicts(t *testing.T) {
 	gitRun(t, first, "push", "origin", "main")
 	writeReconcileFile(t, second, "ns/file", "local")
 
-	p, err := Prepare(second, nil)
+	p, err := Prepare(second, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestFinish_LocalPlacementReplacesRemote(t *testing.T) {
 	pushEdit(t, first, "ns/file", "remote")
 	writeReconcileFile(t, second, "ns/file", "local")
 
-	p, err := Prepare(second, nil)
+	p, err := Prepare(second, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestFinish_LocalPlacementReplacesRemote(t *testing.T) {
 func TestFinish_ReadOnlyRefusesToCommit(t *testing.T) {
 	_, _, second := newReconcileClones(t)
 	writeReconcileFile(t, second, "ns/file", "local")
-	p, err := Prepare(second, nil)
+	p, err := Prepare(second, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestFinish_NoRemoteCommitsLocally(t *testing.T) {
 	configureReconcileRepo(t, dir)
 	writeReconcileFile(t, dir, "ns/file", "content")
 
-	p, err := Prepare(dir, nil)
+	p, err := Prepare(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,4 +351,29 @@ func TestFinish_NoRemoteCommitsLocally(t *testing.T) {
 		t.Fatalf("HEAD:ns/file = %q", got)
 	}
 	assertSettledCleanly(t, dir)
+}
+
+func TestPrepare_OwnerGroupsUnitsAndSharesTheirHeldBase(t *testing.T) {
+	_, first, second := newReconcileClones(t)
+	pushEdit(t, first, "ns/.dots", "")
+	gitRun(t, second, "pull", "origin", "main")
+	base := strings.TrimSpace(gitRun(t, second, "rev-parse", "HEAD"))
+	pushEdit(t, first, "loose", "remote")
+
+	owner := func(name string, hasDots bool) string {
+		if hasDots {
+			return name
+		}
+		return "root"
+	}
+	p, err := Prepare(second, map[string]string{"root": base}, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u := unitNamed(t, p, "ns"); u.Owner != "ns" {
+		t.Fatalf("ns owner = %q", u.Owner)
+	}
+	if u := unitNamed(t, p, "seed"); u.Owner != "root" || u.Base != base {
+		t.Fatalf("seed unit = %+v, want owner root and the held base", u)
+	}
 }

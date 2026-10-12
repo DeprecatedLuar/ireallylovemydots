@@ -41,6 +41,36 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
+// planMovingAll is the default plan with every non-furniture entry moved
+// into a namespace of its own, validated as an edited buffer is.
+func planMovingAll(entries []RootEntry) ([]PlannedNamespace, error) {
+	p, err := DefaultBootstrapPlan("dotfiles", entries)
+	if err != nil {
+		return nil, err
+	}
+	for name, dest := range p.Root {
+		if dest != manifest.DestNone {
+			p.Namespaces[name] = dest
+			delete(p.Root, name)
+		}
+	}
+	p, err = DecodeBootstrapPlan(EncodeBootstrapPlan(p), entries)
+	if err != nil {
+		return nil, err
+	}
+	return p.Moves(entries), nil
+}
+
+// planMovingAllAt is planMovingAll over dir's committed root entries.
+func planMovingAllAt(t *testing.T, dir string) ([]PlannedNamespace, error) {
+	t.Helper()
+	entries, err := RootEntries(dir)
+	if err != nil {
+		t.Fatalf("RootEntries: %v", err)
+	}
+	return planMovingAll(entries)
+}
+
 // nvimKittyBashrcRepo builds the concept.md worked example: nvim/, kitty/,
 // and .bashrc at the root of a committed git repository, with no namespace
 // among them.
@@ -66,9 +96,9 @@ func TestPlan_NvimKittyBashrc_ProducesThreeNamespaces(t *testing.T) {
 
 	dir := nvimKittyBashrcRepo(t)
 
-	plan, err := Plan(dir)
+	plan, err := planMovingAllAt(t, dir)
 	if err != nil {
-		t.Fatalf("Plan: %v", err)
+		t.Fatalf("plan: %v", err)
 	}
 	if len(plan) != 3 {
 		t.Fatalf("expected 3 planned namespaces, got %+v", plan)
@@ -93,7 +123,27 @@ func TestPlan_NvimKittyBashrc_ProducesThreeNamespaces(t *testing.T) {
 	}
 }
 
-func TestPlan_SkipsGitForgeAndDocFiles(t *testing.T) {
+func TestIsFurniture(t *testing.T) {
+	for name, want := range map[string]bool{
+		"README.md":            true,
+		"LICENSE":              true,
+		"COPYING.txt":          true,
+		".github":              true,
+		".gitattributes":       true,
+		".gitmodules":          true,
+		".gitlab-ci.yml":       true,
+		"dotloadout.work.toml": true,
+		"myloadout.toml":       true,
+		"nvim":                 false,
+		".bashrc":              false,
+	} {
+		if got := isFurniture(name); got != want {
+			t.Errorf("isFurniture(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestDefaultBootstrapPlan_FurnitureStartsAsNone(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -108,16 +158,26 @@ func TestPlan_SkipsGitForgeAndDocFiles(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "dotloadout.work.toml"), "x")
 	commitAll(t, dir)
 
-	plan, err := Plan(dir)
+	entries, err := RootEntries(dir)
 	if err != nil {
-		t.Fatalf("Plan: %v", err)
+		t.Fatalf("RootEntries: %v", err)
 	}
-	if len(plan) != 0 {
-		t.Fatalf("expected no namespaces from README/LICENSE/.github/.gitignore/loadout, got %+v", plan)
+	p, err := DefaultBootstrapPlan("dotfiles", entries)
+	if err != nil {
+		t.Fatalf("DefaultBootstrapPlan: %v", err)
+	}
+	want := []string{"README.md", "LICENSE", ".github", "dotloadout.work.toml"}
+	if len(p.Root) != len(want) || len(p.Namespaces) != 0 {
+		t.Fatalf("expected only furniture listed, all at the root, got %+v", p)
+	}
+	for _, name := range want {
+		if p.Root[name] != manifest.DestNone {
+			t.Fatalf("expected %s to start as %q, got %+v", name, manifest.DestNone, p.Root)
+		}
 	}
 }
 
-func TestPlan_AlreadyNamespacedRepositoryProposesNothing(t *testing.T) {
+func TestDefaultBootstrapPlan_NeverListsGitOrNamespaceFolders(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -126,14 +186,19 @@ func TestPlan_AlreadyNamespacedRepositoryProposesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(dir, "editors", ".dots"), "")
+	writeFile(t, filepath.Join(dir, ".gitignore"), "x")
 	commitAll(t, dir)
 
-	plan, err := Plan(dir)
+	entries, err := RootEntries(dir)
 	if err != nil {
-		t.Fatalf("Plan: %v", err)
+		t.Fatalf("RootEntries: %v", err)
 	}
-	if len(plan) != 0 {
-		t.Fatalf("expected nothing to convert on an already-namespaced repository, got %+v", plan)
+	p, err := DefaultBootstrapPlan("dotfiles", entries)
+	if err != nil {
+		t.Fatalf("DefaultBootstrapPlan: %v", err)
+	}
+	if len(p.Root) != 0 || len(p.Namespaces) != 0 {
+		t.Fatalf("expected .git, .gitignore and namespace folders never listed, got %+v", p)
 	}
 }
 
@@ -149,7 +214,7 @@ func TestPlan_TwoNamesResolvingToOneNamespace_RefusedNamingBoth(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "bashrc", "extra"), "x")
 	commitAll(t, dir)
 
-	_, err := Plan(dir)
+	_, err := planMovingAllAt(t, dir)
 	if err == nil {
 		t.Fatal("expected an error for .bashrc and bashrc/ colliding")
 	}
@@ -176,9 +241,9 @@ func TestPlan_FileExtensionDroppedFromNamespaceNameOnly(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "nvim.d", "init.lua"), "-- init")
 	commitAll(t, dir)
 
-	plan, err := Plan(dir)
+	plan, err := planMovingAllAt(t, dir)
 	if err != nil {
-		t.Fatalf("Plan: %v", err)
+		t.Fatalf("plan: %v", err)
 	}
 	byNamespace := map[string]PlannedNamespace{}
 	for _, p := range plan {
@@ -212,7 +277,7 @@ func TestPlan_FileExtensionDroppedFromNamespaceNameOnly(t *testing.T) {
 	}
 }
 
-func TestPlan_ConfigHomeSplit_PreviewsOddlyButCorrectly(t *testing.T) {
+func TestDefaultBootstrapPlan_ConfigHomeSplit_PreviewsOddlyButCorrectly(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -227,22 +292,25 @@ func TestPlan_ConfigHomeSplit_PreviewsOddlyButCorrectly(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "home", "y"), "y")
 	commitAll(t, dir)
 
-	plan, err := Plan(dir)
+	entries, err := RootEntries(dir)
 	if err != nil {
-		t.Fatalf("Plan: %v", err)
+		t.Fatalf("RootEntries: %v", err)
 	}
-	if len(plan) != 2 {
-		t.Fatalf("expected 2 planned namespaces, got %+v", plan)
+	p, err := DefaultBootstrapPlan("dotfiles", entries)
+	if err != nil {
+		t.Fatalf("DefaultBootstrapPlan: %v", err)
 	}
-	byNamespace := map[string]PlannedNamespace{}
-	for _, p := range plan {
-		byNamespace[p.Namespace] = p
+	if got := p.Root["config"]; got != "~/.config/config" {
+		t.Fatalf("expected config -> ~/.config/config, got %q", got)
 	}
-	if got := byNamespace["config"].Dest; got != filepath.Join(home, ".config", "config") {
-		t.Fatalf("expected config -> ~/.config/config, got %s", got)
+	if got := p.Root["home"]; got != "~/.config/home" {
+		t.Fatalf("expected home -> ~/.config/home, got %q", got)
 	}
-	if got := byNamespace["home"].Dest; got != filepath.Join(home, ".config", "home") {
-		t.Fatalf("expected home -> ~/.config/home, got %s", got)
+
+	p.Namespaces["config"] = p.Root["config"]
+	delete(p.Root, "config")
+	if _, err := DecodeBootstrapPlan(EncodeBootstrapPlan(p), entries); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("expected moving config/ into a namespace refused as a reserved word, got %v", err)
 	}
 }
 
@@ -252,9 +320,9 @@ func TestApply_CreatesNamespacesMovesEntriesAndWritesManifests(t *testing.T) {
 
 	dir := nvimKittyBashrcRepo(t)
 
-	plan, err := Plan(dir)
+	plan, err := planMovingAllAt(t, dir)
 	if err != nil {
-		t.Fatalf("Plan: %v", err)
+		t.Fatalf("plan: %v", err)
 	}
 	if err := Apply(dir, plan); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -294,9 +362,9 @@ func TestApply_NeverCommitsAndGitCheckoutRestoresExactly(t *testing.T) {
 
 	dir := nvimKittyBashrcRepo(t)
 
-	plan, err := Plan(dir)
+	plan, err := planMovingAllAt(t, dir)
 	if err != nil {
-		t.Fatalf("Plan: %v", err)
+		t.Fatalf("plan: %v", err)
 	}
 	if err := Apply(dir, plan); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -375,9 +443,9 @@ func TestBootstrapAdd_EndsSparseWithCreatedNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RootEntries: %v", err)
 	}
-	plan, err := PlanEntries(entries)
+	plan, err := planMovingAll(entries)
 	if err != nil {
-		t.Fatalf("PlanEntries: %v", err)
+		t.Fatalf("plan: %v", err)
 	}
 
 	if err := CheckoutAll(dest); err != nil {

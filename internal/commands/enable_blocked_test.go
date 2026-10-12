@@ -95,7 +95,7 @@ func TestEntryListing_DisabledNamespaceNamesBlockingNamespace(t *testing.T) {
 	}
 
 	entries := []manifest.Entry{{Name: "f", Dest: filepath.Join(xDest, "f")}}
-	rows, _, err := entryListing(bKey, s, bDir, entries, false, "")
+	rows, _, err := entryListing(bKey, s, bDir, manifest.Manifest{Entries: entries}, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -338,3 +338,49 @@ func TestAdd_BasenameCollision(t *testing.T) {
 		t.Fatalf("expected error naming both paths, got: %v", err)
 	}
 }
+
+func TestAdd_DefaultDestinationWritesNoEntry(t *testing.T) {
+	nsDir := t.TempDir()
+	destDir := t.TempDir()
+	if err := manifest.Write(nsDir, manifest.Manifest{Dest: destDir}); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(destDir, "init.lua")
+	if err := os.WriteFile(src, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(nsDir, src); err != nil {
+		t.Fatal(err)
+	}
+	m, err := manifest.Read(nsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Entries) != 0 {
+		t.Fatalf("entries = %+v, want none: the default already covers it", m.Entries)
+	}
+	if _, err := os.Lstat(filepath.Join(nsDir, "init.lua")); err != nil {
+		t.Fatalf("payload not moved in: %v", err)
+	}
+}
+
+func TestAdd_OtherDestinationUnderDefaultWritesEntry(t *testing.T) {
+	nsDir := t.TempDir()
+	if err := manifest.Write(nsDir, manifest.Manifest{Dest: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(t.TempDir(), "x.sh")
+	if err := os.WriteFile(src, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Add(nsDir, src); err != nil {
+		t.Fatal(err)
+	}
+	m, err := manifest.Read(nsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Entries) != 1 || m.Entries[0].Dest != src {
+		t.Fatalf("entries = %+v, want one entry for %s", m.Entries, src)
+	}
+}

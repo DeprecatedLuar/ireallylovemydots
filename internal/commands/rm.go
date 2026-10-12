@@ -29,6 +29,14 @@ const (
 	choiceCancel = "c"
 )
 
+// rootNamespaceRefusal explains why a root namespace cannot be removed on
+// its own: it is the repository's root folder.
+const rootNamespaceRefusal = "%q is the root namespace of repository %q and is always installed; it goes away only with `dots repo rm %s`"
+
+func errRootNamespace(loc namespace.Located) error {
+	return fmt.Errorf(rootNamespaceRefusal, loc.Name, loc.Repo.Name, loc.Repo.Name)
+}
+
 // rmEntry implements `namespace <ns> rm <name>...`, per concept.md
 // "Removal": each entry leaves the manifest and its symlink comes down. By
 // default the payload goes to the trash and nothing is written to the home
@@ -52,9 +60,13 @@ func rmEntry(name string, names []string, flags shared.Flags) error {
 	if err != nil {
 		return err
 	}
+	linkable, err := namespace.Linkable(loc.Dir, m)
+	if err != nil {
+		return err
+	}
 	entries := make([]manifest.Entry, 0, len(names))
 	for _, n := range names {
-		entry, ok := entryByName(m, n)
+		entry, ok := entryByName(linkable, n)
 		if !ok {
 			return fmt.Errorf("%q is not tracked in namespace %q", n, name)
 		}
@@ -139,17 +151,24 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 		if err != nil {
 			return err
 		}
+		if loc.Root {
+			return errRootNamespace(loc)
+		}
 		name = loc.Name
 		m, err := manifest.Read(loc.Dir)
 		if err != nil {
 			return err
 		}
-		targets = append(targets, resolved{name: name, loc: loc, entries: m.Entries})
-		row, err := namespaceRow(s, loc.Repo.Name, name, loc.Dir, m.Entries, selfheal.Findings{})
+		linkable, err := namespace.Linkable(loc.Dir, m)
 		if err != nil {
 			return err
 		}
-		row.Count = len(m.Entries)
+		targets = append(targets, resolved{name: name, loc: loc, entries: linkable})
+		row, err := namespaceRow(s, loc.Repo.Name, name, loc.Dir, m, selfheal.Findings{})
+		if err != nil {
+			return err
+		}
+		row.Count = len(linkable)
 		rows = append(rows, row)
 		repoNamespaces[loc.Repo.Name] = append(repoNamespaces[loc.Repo.Name], name)
 	}
@@ -169,7 +188,7 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 		if checkedRepos[t.loc.Repo.Name] {
 			continue
 		}
-		if err := checkGitSafety(t.loc.Repo.Name, filepath.Dir(t.loc.Dir), repoNamespaces[t.loc.Repo.Name], false, flags); err != nil {
+		if err := checkGitSafety(t.loc.Repo.Name, t.loc.RepoDir, repoNamespaces[t.loc.Repo.Name], false, flags); err != nil {
 			return err
 		}
 		checkedRepos[t.loc.Repo.Name] = true
@@ -249,7 +268,11 @@ func rmRepo(name string, flags shared.Flags) error {
 	defer func() { fmt.Print(ui.Report(lines, "")) }()
 
 	for _, nsName := range names {
-		loc := namespace.Located{Repo: r, Dir: filepath.Join(repoDir, nsName)}
+		loc, err := namespace.Locate(r, repoDir, nsName)
+		if err != nil {
+			return err
+		}
+		loc.Installed = true
 		if err := rmNamespaceAt(loc, nsName, flags); err != nil {
 			return err
 		}
@@ -293,13 +316,22 @@ func rmNamespaceAt(loc namespace.Located, nsName string, flags shared.Flags) err
 	if err != nil {
 		return err
 	}
-	if len(m.Entries) > 0 {
-		if err := removeEntries(loc, nsName, m.Entries, flags); err != nil {
+	entries, err := namespace.Linkable(loc.Dir, m)
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		if err := removeEntries(loc, nsName, entries, flags); err != nil {
 			return err
 		}
 	}
 	if err := clearState(loc.Repo.Name, nsName); err != nil {
 		return err
+	}
+	// A root namespace's folder is the repository itself; `repo rm` trashes
+	// the clone once after every namespace is cleared.
+	if loc.Root {
+		return nil
 	}
 
 	// The namespace folder itself always goes through the trash first —
@@ -318,7 +350,7 @@ func rmNamespaceAt(loc namespace.Located, nsName string, flags shared.Flags) err
 	// not actually a git repository has no index to stage anything into —
 	// out of scope here exactly as it is for git.Status, which treats that
 	// case as nothing to report rather than an error.
-	repoDir := filepath.Dir(loc.Dir)
+	repoDir := loc.RepoDir
 	if isRepo, err := repo.IsGitRepo(repoDir); err != nil {
 		return err
 	} else if isRepo {
@@ -333,13 +365,13 @@ func rmNamespaceAt(loc namespace.Located, nsName string, flags shared.Flags) err
 	return nil
 }
 
-// dirtyNamespaces reduces a list of git-status paths (relative to a repo
-// root, so namespace/entry/...) to the sorted, deduplicated set of
-// namespaces they fall under, for checkGitSafety's error to name what's
-// dirty without dumping every path. rootFiles counts paths with no
-// namespace segment (repo-root files such as .gitignore) separately —
-// they aren't a namespace, so they're never folded into the list.
-func dirtyNamespaces(paths []string) (namespaces []string, rootFiles int) {
+// dirtyNamespaces reduces a list of git-status paths (relative to repoDir)
+// to the sorted, deduplicated set of namespaces owning them, for
+// checkGitSafety's error to name what's dirty without dumping every path.
+// Each top-level folder maps to its owner (repo.OwnerOf), so a folder of a
+// root namespace counts as that namespace. rootFiles counts paths with no
+// folder segment (repo-root files such as .gitignore) separately.
+func dirtyNamespaces(repoDir string, paths []string) (namespaces []string, rootFiles int, err error) {
 	seen := make(map[string]bool)
 	for _, p := range paths {
 		head, _, ok := strings.Cut(p, "/")
@@ -349,12 +381,20 @@ func dirtyNamespaces(paths []string) (namespaces []string, rootFiles int) {
 		}
 		seen[head] = true
 	}
-	namespaces = make([]string, 0, len(seen))
-	for ns := range seen {
+	owners := make(map[string]bool, len(seen))
+	for head := range seen {
+		owner, err := repo.OwnerOf(repoDir, head)
+		if err != nil {
+			return nil, 0, err
+		}
+		owners[owner] = true
+	}
+	namespaces = make([]string, 0, len(owners))
+	for ns := range owners {
 		namespaces = append(namespaces, ns)
 	}
 	sort.Strings(namespaces)
-	return namespaces, rootFiles
+	return namespaces, rootFiles, nil
 }
 
 // namespacesIn reduces dirty to just the entries also present in scope,
@@ -397,7 +437,10 @@ func checkGitSafety(repoName, repoDir string, namespaces []string, blockRootFile
 		return err
 	}
 	if len(st.Dirty) > 0 {
-		dirty, rootFiles := dirtyNamespaces(st.Dirty)
+		dirty, rootFiles, err := dirtyNamespaces(repoDir, st.Dirty)
+		if err != nil {
+			return err
+		}
 		scoped := namespacesIn(dirty, namespaces)
 		if !blockRootFiles {
 			rootFiles = 0
@@ -602,8 +645,8 @@ func renderRestoreProblems(problems []engine.RestoreProblem) string {
 	return strings.Join(lines, "\n")
 }
 
-func entryByName(m manifest.Manifest, name string) (manifest.Entry, bool) {
-	for _, e := range m.Entries {
+func entryByName(entries []manifest.Entry, name string) (manifest.Entry, bool) {
+	for _, e := range entries {
 		if e.Name == name {
 			return e, true
 		}

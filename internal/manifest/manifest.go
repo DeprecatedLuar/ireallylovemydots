@@ -38,11 +38,37 @@ func (e Entry) HasDestination() bool {
 
 // Manifest is a namespace's full set of tracked entries.
 type Manifest struct {
+	// Name is the root namespace's name; only the repository root's .dots
+	// carries it.
+	Name string `toml:"name,omitempty"`
+	// Dest is the namespace's default destination: an item with no entry
+	// links to Dest/<item>.
+	Dest string `toml:"dest,omitempty"`
 	// Ignore marks the namespace explicitly out of dots' scope — invisible
 	// to listing and self-healing, per concept.md "Namespace". Set and
 	// cleared by `namespace ignore`/`unignore`, never by hand-editing alone.
 	Ignore  bool    `toml:"ignore,omitempty"`
 	Entries []Entry `toml:"entries"`
+}
+
+// Expand returns every entry m links given the items its folder holds: its
+// own entries plus, under a default destination, one entry per item no
+// entry names, bound for Dest/<item>.
+func Expand(m Manifest, items []string) []Entry {
+	if m.Dest == "" {
+		return m.Entries
+	}
+	listed := make(map[string]bool, len(m.Entries))
+	for _, e := range m.Entries {
+		listed[e.Name] = true
+	}
+	out := append([]Entry{}, m.Entries...)
+	for _, name := range items {
+		if !listed[name] {
+			out = append(out, Entry{Name: name, Dest: filepath.Join(m.Dest, name)})
+		}
+	}
+	return out
 }
 
 // Path returns the manifest file path for a namespace directory.
@@ -104,8 +130,9 @@ func Decode(data []byte) (Manifest, error) {
 	if err := toml.Unmarshal(data, &m); err != nil {
 		return Manifest{}, err
 	}
+	m.Dest = ExpandHome(m.Dest)
 	for i := range m.Entries {
-		m.Entries[i].Dest = expandHome(m.Entries[i].Dest)
+		m.Entries[i].Dest = ExpandHome(m.Entries[i].Dest)
 	}
 	return m, nil
 }
@@ -121,10 +148,11 @@ func Encode(m Manifest) ([]byte, error) {
 	for i := range sorted {
 		sorted[i].Dest = ContractHome(sorted[i].Dest)
 	}
-	return toml.Marshal(Manifest{Ignore: m.Ignore, Entries: sorted})
+	return toml.Marshal(Manifest{Name: m.Name, Dest: ContractHome(m.Dest), Ignore: m.Ignore, Entries: sorted})
 }
 
-func expandHome(dest string) string {
+// ExpandHome rewrites a ~-relative destination to an absolute path under the user's home directory; anything else is returned unchanged.
+func ExpandHome(dest string) string {
 	if dest == "~" {
 		home, err := os.UserHomeDir()
 		if err != nil {

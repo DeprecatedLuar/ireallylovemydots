@@ -472,7 +472,10 @@ func Run() (Findings, error) {
 			// repository the user has not confirmed.
 			continue
 		}
-		namespaceDir := filepath.Join(repoDir, key.Namespace)
+		namespaceDir, dirErr := repo.NamespaceDir(repoDir, key.Namespace)
+		if dirErr != nil {
+			return Findings{}, dirErr
+		}
 		if _, statErr := os.Stat(namespaceDir); statErr != nil {
 			// Not materialized on this machine despite state saying
 			// enabled — nothing on disk to verify a link against.
@@ -516,7 +519,12 @@ func Run() (Findings, error) {
 			continue
 		}
 
-		profileProblems, fallback, profileErr := reconcileProfiles(key, namespaceDir, m.Entries, entry.ActiveProfile)
+		entries, linkErr := namespace.Linkable(namespaceDir, m)
+		if linkErr != nil {
+			return Findings{}, linkErr
+		}
+
+		profileProblems, fallback, profileErr := reconcileProfiles(key, namespaceDir, entries, entry.ActiveProfile)
 		if profileErr != nil {
 			return Findings{}, profileErr
 		}
@@ -533,11 +541,11 @@ func Run() (Findings, error) {
 			changed = true
 		}
 
-		report, inspectErr := namespace.Inspect(namespaceDir, m.Entries)
+		report, inspectErr := namespace.Inspect(namespaceDir, m)
 		if inspectErr != nil {
 			return Findings{}, inspectErr
 		}
-		guardProblems := manifest.Validate(m)
+		guardProblems := manifest.Validate(manifest.Manifest{Entries: entries})
 		if needsRepair(report, guardProblems) {
 			repairs = append(repairs, Repair{Repo: key.Repo, Namespace: key.Namespace, Report: report, GuardProblems: guardProblems})
 		}
@@ -547,7 +555,7 @@ func Run() (Findings, error) {
 		// stale-link removal half of reconciliation is skipped for it this
 		// one run. Everything else (creating or repointing a link for an
 		// entry the recovered manifest does name) still runs normally.
-		linkedDests, nsProblems, reconcileErr := reconcileNamespace(key, namespaceDir, m.Entries, entry.LinkedDests, entry.ActiveProfile, !exists)
+		linkedDests, nsProblems, reconcileErr := reconcileNamespace(key, namespaceDir, entries, entry.LinkedDests, entry.ActiveProfile, !exists)
 		if reconcileErr != nil {
 			return Findings{}, reconcileErr
 		}
@@ -561,7 +569,7 @@ func Run() (Findings, error) {
 		// namespace is disabled through the same path an explicit `dots
 		// disable` uses, rather than left half-true.
 		want := 0
-		for _, e := range m.Entries {
+		for _, e := range entries {
 			if e.HasDestination() {
 				want++
 			}
@@ -777,7 +785,7 @@ func recoverManifest(repoDir, namespaceDir string, key state.Key, linkedDests []
 	}
 
 	fromLinks := namespace.RebuildFromLinks(namespaceDir, linkedDests)
-	report, err := namespace.Inspect(namespaceDir, fromLinks)
+	report, err := namespace.Inspect(namespaceDir, manifest.Manifest{Entries: fromLinks})
 	if err != nil {
 		return manifest.Manifest{}, Recovery{}, err
 	}

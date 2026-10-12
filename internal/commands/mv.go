@@ -10,7 +10,9 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/fscopy"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/grammar"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/namespace"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/repo"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
@@ -62,8 +64,23 @@ func HandleMv(args []string, flags shared.Flags) error {
 		return fmt.Errorf("repository %q is read-only on this machine; mv cannot write into it", dstRepo.Name)
 	}
 
-	srcDir := filepath.Join(dataDir, srcRepo.Name, srcName)
-	dstDir := filepath.Join(dataDir, dstRepo.Name, dstName)
+	srcRepoDir := filepath.Join(dataDir, srcRepo.Name)
+	dstRepoDir := filepath.Join(dataDir, dstRepo.Name)
+	srcDir, err := repo.NamespaceDir(srcRepoDir, srcName)
+	if err != nil {
+		return err
+	}
+	if srcDir == srcRepoDir {
+		loc, err := namespace.Locate(srcRepo, srcRepoDir, srcName)
+		if err != nil {
+			return err
+		}
+		return errRootNamespace(loc)
+	}
+	dstDir, err := repo.NamespaceDir(dstRepoDir, dstName)
+	if err != nil {
+		return err
+	}
 
 	if _, err := os.Stat(dstDir); err == nil {
 		return fmt.Errorf("namespace %q already exists in repository %q; give a different destination name", dstName, dstRepo.Name)
@@ -71,7 +88,6 @@ func HandleMv(args []string, flags shared.Flags) error {
 		return fmt.Errorf("stat %s: %w", dstDir, err)
 	}
 
-	srcRepoDir := filepath.Join(dataDir, srcRepo.Name)
 	installed, err := sourceInstalled(srcRepo, srcName, srcDir, srcRepoDir)
 	if err != nil {
 		return err
@@ -102,7 +118,12 @@ func HandleMv(args []string, flags shared.Flags) error {
 	}
 
 	if srcEnabled {
-		if err := moveEnabledNamespace(srcKey, srcRepo, srcName, srcDir, dstRepo, dstName, dstDir, m.Entries, s); err != nil {
+		entries, err := namespace.Linkable(dstDir, m)
+		if err != nil {
+			os.RemoveAll(dstDir)
+			return err
+		}
+		if err := moveEnabledNamespace(srcKey, srcRepo, srcName, srcDir, dstRepo, dstName, dstRepoDir, dstDir, entries, s); err != nil {
 			os.RemoveAll(dstDir)
 			return err
 		}
@@ -127,7 +148,7 @@ func HandleMv(args []string, flags shared.Flags) error {
 // source left enabled and intact (the caller removes the partial copy); a
 // failure disabling or enabling leaves whatever it already changed in
 // place rather than guessing at a rollback.
-func moveEnabledNamespace(srcKey state.Key, srcRepo manifest.Repo, srcName, srcDir string, dstRepo manifest.Repo, dstName, dstDir string, entries []manifest.Entry, s state.State) error {
+func moveEnabledNamespace(srcKey state.Key, srcRepo manifest.Repo, srcName, srcDir string, dstRepo manifest.Repo, dstName, dstRepoDir, dstDir string, entries []manifest.Entry, s state.State) error {
 	dstKey := state.Key{Repo: dstRepo.Name, Namespace: dstName}
 
 	problems, err := engine.Preflight(dstKey, dstDir, entries, s)
@@ -147,7 +168,6 @@ func moveEnabledNamespace(srcKey state.Key, srcRepo manifest.Repo, srcName, srcD
 		return fmt.Errorf("disable source namespace %q before moving it: %w", srcName, err)
 	}
 
-	dstRepoDir := filepath.Dir(dstDir)
 	s.Entries[dstKey] = state.Entry{ActiveProfile: srcActiveProfile}
 	if _, err := engine.Enable(dstKey, dstRepoDir, dstDir, dstName, entries, s, nil); err != nil {
 		return fmt.Errorf("enable destination namespace %q: %w", dstName, err)

@@ -13,6 +13,7 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/namespace"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/profile"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/repo"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
@@ -23,6 +24,9 @@ import (
 // from a repository that was never materialized on this machine gets an
 // ordinary file mode rather than whatever the source happened to carry.
 const filePerm = 0644
+
+// dirPerm is the mode of a directory dots creates inside a repository.
+const dirPerm = 0755
 
 // HandleCp implements `dots cp <src> <dst>`, aliased `copy`: copies a whole
 // namespace directory — its manifest, its .profiles/ directory, and every
@@ -66,8 +70,15 @@ func HandleCp(args []string, flags shared.Flags) error {
 		return fmt.Errorf("repository %q is read-only on this machine; cp cannot write into it", dstRepo.Name)
 	}
 
-	srcDir := filepath.Join(dataDir, srcRepo.Name, srcName)
-	dstDir := filepath.Join(dataDir, dstRepo.Name, dstName)
+	srcRepoDir := filepath.Join(dataDir, srcRepo.Name)
+	srcDir, err := repo.NamespaceDir(srcRepoDir, srcName)
+	if err != nil {
+		return err
+	}
+	dstDir, err := repo.NamespaceDir(filepath.Join(dataDir, dstRepo.Name), dstName)
+	if err != nil {
+		return err
+	}
 
 	if _, err := os.Stat(dstDir); err == nil {
 		return fmt.Errorf("namespace %q already exists in repository %q; give a different destination name", dstName, dstRepo.Name)
@@ -75,16 +86,20 @@ func HandleCp(args []string, flags shared.Flags) error {
 		return fmt.Errorf("stat %s: %w", dstDir, err)
 	}
 
-	installed, err := sourceInstalled(srcRepo, srcName, srcDir, filepath.Join(dataDir, srcRepo.Name))
+	installed, err := sourceInstalled(srcRepo, srcName, srcDir, srcRepoDir)
 	if err != nil {
 		return err
 	}
 
-	if installed {
+	if srcDir == srcRepoDir {
+		if err := copyRootNamespace(srcDir, dstDir); err != nil {
+			return err
+		}
+	} else if installed {
 		if err := fscopy.Copy(srcDir, dstDir); err != nil {
 			return err
 		}
-	} else if err := copyNamespaceFromGit(filepath.Join(dataDir, srcRepo.Name), srcName, dstDir); err != nil {
+	} else if err := copyNamespaceFromGit(srcRepoDir, srcName, dstDir); err != nil {
 		return err
 	}
 
@@ -99,6 +114,37 @@ func HandleCp(args []string, flags shared.Flags) error {
 
 	fmt.Print(ui.Operation(ui.MarkerMaterialized, dstName, dstRepo.Name))
 	return nil
+}
+
+// copyRootNamespace copies a root namespace into dstDir as a folder
+// namespace: its linkable items and .profiles, with name dropped.
+func copyRootNamespace(srcDir, dstDir string) error {
+	m, err := manifest.Read(srcDir)
+	if err != nil {
+		return err
+	}
+	entries, err := namespace.Linkable(srcDir, m)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dstDir, dirPerm); err != nil {
+		return fmt.Errorf("create %s: %w", dstDir, err)
+	}
+	for _, e := range entries {
+		if err := fscopy.Copy(filepath.Join(srcDir, e.Name), filepath.Join(dstDir, e.Name)); err != nil {
+			return err
+		}
+	}
+	profiles := profile.Dir(srcDir)
+	if _, err := os.Stat(profiles); err == nil {
+		if err := fscopy.Copy(profiles, profile.Dir(dstDir)); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", profiles, err)
+	}
+	m.Name = ""
+	return manifest.Write(dstDir, m)
 }
 
 // parseNamespaceSpec splits "repo/ns" or "owner/repo/ns" into a resolved
@@ -176,7 +222,7 @@ func copyNamespaceFromGit(repoDir, prefix, dstDir string) error {
 		}
 
 		dst := filepath.Join(dstDir, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
 			return fmt.Errorf("create parent directory for %s: %w", dst, err)
 		}
 		if err := os.WriteFile(dst, data, filePerm); err != nil {

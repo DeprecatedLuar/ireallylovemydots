@@ -186,3 +186,53 @@ func TestDisplayPath_SlashOnlyForDirectories(t *testing.T) {
 		}
 	}
 }
+
+func TestRoundTrip_NameAndDestSurviveWithDestContracted(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := t.TempDir()
+
+	m := Manifest{Name: "nvim", Dest: filepath.Join(home, ".config", "nvim"),
+		Entries: []Entry{{Name: "README.md", Dest: DestNone}}}
+	if err := Write(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(Path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `dest = "~/.config/nvim"`) || !strings.Contains(string(raw), `name = "nvim"`) {
+		t.Fatalf("encoded manifest missing contracted dest or name:\n%s", raw)
+	}
+	got, err := Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "nvim" || got.Dest != filepath.Join(home, ".config", "nvim") {
+		t.Fatalf("round trip = %+v", got)
+	}
+}
+
+func TestEncode_WithoutNameOrDestIsUnchanged(t *testing.T) {
+	m := Manifest{Entries: []Entry{{Name: "kitty", Dest: "/etc/kitty"}}}
+	data, err := Encode(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(data), "[[entries]]") {
+		t.Fatalf("a manifest without name or dest must encode with no top-level keys:\n%s", data)
+	}
+}
+
+func TestExpand_AddsImpliedEntriesOnlyUnderDest(t *testing.T) {
+	m := Manifest{Dest: "/d", Entries: []Entry{{Name: "a", Dest: "/elsewhere/a"}}}
+	got := Expand(m, []string{"a", "b"})
+	want := []Entry{{Name: "a", Dest: "/elsewhere/a"}, {Name: "b", Dest: "/d/b"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("Expand = %+v, want %+v", got, want)
+	}
+	plain := Manifest{Entries: []Entry{{Name: "a", Dest: "/x"}}}
+	if got := Expand(plain, []string{"a", "b"}); len(got) != 1 {
+		t.Fatalf("Expand without dest = %+v, want only the listed entry", got)
+	}
+}

@@ -25,7 +25,7 @@ func TestInspect_GitignoreNotUntracked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := Inspect(nsDir, entries)
+	report, err := Inspect(nsDir, manifest.Manifest{Entries: entries})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestInspect_ManifestMissingDetected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := Inspect(nsDir, nil)
+	report, err := Inspect(nsDir, manifest.Manifest{})
 	if err != nil {
 		t.Fatal(err)
 	}

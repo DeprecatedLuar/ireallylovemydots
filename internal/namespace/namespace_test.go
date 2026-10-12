@@ -342,3 +342,53 @@ func TestResolve_InstalledAndCatalogueOnlyIsAmbiguous(t *testing.T) {
 		}
 	}
 }
+
+func writeRootManifest(t *testing.T, repoDir, name string) {
+	t.Helper()
+	if err := manifest.Write(repoDir, manifest.Manifest{Name: name}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreate_RefusesTheRootNamespaceName(t *testing.T) {
+	repoDir := t.TempDir()
+	writeRootManifest(t, repoDir, "nvim")
+	if _, err := Create(repoDir, "nvim"); err == nil {
+		t.Fatal("a folder namespace must not take the root namespace's name")
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "nvim")); !os.IsNotExist(err) {
+		t.Fatalf("no folder may be created on refusal, got err=%v", err)
+	}
+}
+
+func TestRename_FolderRefusesTheRootNamespaceName(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repoDir := t.TempDir()
+	writeRootManifest(t, repoDir, "nvim")
+	if _, err := Create(repoDir, "shell"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Rename(repoDir, "dotfiles", "shell", "nvim"); err == nil {
+		t.Fatal("a folder namespace must not be renamed to the root namespace's name")
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, "shell")); err != nil {
+		t.Fatalf("folder must stay in place on refusal: %v", err)
+	}
+}
+
+func TestRename_RootRefusesACatalogueOnlyNamespaceName(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repoDir := t.TempDir()
+	writeRootManifest(t, repoDir, "nvim")
+	initCatalogueOnlyNamespace(t, repoDir, "shell")
+	if err := Rename(repoDir, "dotfiles", "nvim", "shell"); err == nil {
+		t.Fatal("the root namespace must not be renamed to a catalogue-only namespace's name")
+	}
+	m, err := manifest.Read(repoDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Name != "nvim" {
+		t.Fatalf("root name = %q, want nvim kept on refusal", m.Name)
+	}
+}

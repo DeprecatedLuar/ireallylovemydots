@@ -10,6 +10,7 @@ import (
 
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/link"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/namespace"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/profile"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/repo"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
@@ -30,7 +31,11 @@ func ManifestEntries(repoDir, namespaceDir, name string) (entries []manifest.Ent
 		if readErr != nil {
 			return nil, true, readErr
 		}
-		return m.Entries, true, nil
+		linkable, linkErr := namespace.Linkable(namespaceDir, m)
+		if linkErr != nil {
+			return nil, true, linkErr
+		}
+		return linkable, true, nil
 	} else if !os.IsNotExist(statErr) {
 		return nil, false, fmt.Errorf("stat namespace directory %s: %w", namespaceDir, statErr)
 	}
@@ -44,7 +49,14 @@ func ManifestEntries(repoDir, namespaceDir, name string) (entries []manifest.Ent
 	if decodeErr != nil {
 		return nil, false, fmt.Errorf("parse manifest for namespace %q: %w", name, decodeErr)
 	}
-	return m.Entries, false, nil
+	if m.Dest == "" {
+		return m.Entries, false, nil
+	}
+	items, treeErr := namespace.TreeItems(repoDir, name)
+	if treeErr != nil {
+		return nil, false, treeErr
+	}
+	return manifest.Expand(m, items), false, nil
 }
 
 // Materialize brings a namespace's folder into the working tree by adding

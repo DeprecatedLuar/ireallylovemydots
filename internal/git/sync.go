@@ -20,11 +20,20 @@ var scratchIdentity = []string{
 	"GIT_COMMITTER_NAME=dots", "GIT_COMMITTER_EMAIL=dots@localhost",
 }
 
+// dotsFile marks a folder as a namespace of its own.
+const dotsFile = ".dots"
+
+// OwnerFunc names the unit that decides top-level entry name; hasDots
+// reports whether it is a folder holding its own .dots.
+type OwnerFunc func(name string, hasDots bool) string
+
 // Unit is one top-level entry of a repository as Prepare found it.
 type Unit struct {
-	Name          string
-	Dir           bool
-	Base          string
+	Name string
+	Dir  bool
+	Base string
+	// Owner is the unit this entry decides with: itself, or the root namespace that owns it.
+	Owner         string
 	ChangedLocal  bool
 	ChangedRemote bool
 	// RemovedRemote is an entry the base has and the remote deleted.
@@ -44,10 +53,10 @@ type Prepared struct {
 }
 
 // Prepare snapshots dir's working tree, fetches its branch, and merges the
-// two in memory. Every entry is merged against its own base: heldBases'
-// commit for an entry sync held earlier, else the merge base of HEAD and
+// two in memory. Every entry is merged against its owner's base: heldBases'
+// commit for an owner sync held earlier, else the merge base of HEAD and
 // the remote. Nothing in dir changes except the remote-tracking ref.
-func Prepare(dir string, heldBases map[string]string) (Prepared, error) {
+func Prepare(dir string, heldBases map[string]string, owner OwnerFunc) (Prepared, error) {
 	if isRebaseInProgress(dir) {
 		if out, err := gitCmd(dir, "rebase", "--abort"); err != nil {
 			return Prepared{}, fmt.Errorf("recover interrupted sync in %s: %s", dir, strings.TrimSpace(out))
@@ -85,7 +94,25 @@ func Prepare(dir string, heldBases map[string]string) (Prepared, error) {
 		}
 		base = strings.TrimSpace(out)
 	}
-	baseEntries, unitBase, err := assembleBase(dir, base, heldBases)
+	hasDots := map[string]bool{}
+	if owner != nil {
+		for _, tree := range []string{base, p.Onto, p.local} {
+			folders, err := dotsFolders(dir, tree)
+			if err != nil {
+				return Prepared{}, err
+			}
+			for name := range folders {
+				hasDots[name] = true
+			}
+		}
+	}
+	ownerOf := func(name string) string {
+		if owner == nil {
+			return name
+		}
+		return owner(name, hasDots[name])
+	}
+	baseEntries, unitBase, err := assembleBase(dir, base, heldBases, ownerOf)
 	if err != nil {
 		return Prepared{}, err
 	}
@@ -116,6 +143,7 @@ func Prepare(dir string, heldBases map[string]string) (Prepared, error) {
 			Name:          name,
 			Dir:           isTreeLine(baseEntries[name]) || isTreeLine(ontoEntries[name]) || isTreeLine(localEntries[name]),
 			Base:          unitBase(name),
+			Owner:         ownerOf(name),
 			ChangedLocal:  localEntries[name] != baseEntries[name],
 			ChangedRemote: ontoEntries[name] != baseEntries[name],
 			RemovedRemote: baseEntries[name] != "" && ontoEntries[name] == "",
@@ -146,31 +174,56 @@ func fetchRemoteHead(dir string) (string, error) {
 }
 
 // assembleBase returns the top-level entries of the base every entry is
-// merged against, and each entry's base commit: heldBases' commit where
-// one is recorded, base otherwise.
-func assembleBase(dir, base string, heldBases map[string]string) (map[string]string, func(string) string, error) {
+// merged against, and each entry's base commit: heldBases' commit for the
+// entry's owner where one is recorded, base otherwise.
+func assembleBase(dir, base string, heldBases map[string]string, ownerOf func(string) string) (map[string]string, func(string) string, error) {
 	entries, err := topLevel(dir, base)
 	if err != nil {
 		return nil, nil, err
 	}
-	for name, commit := range heldBases {
+	for owner, commit := range heldBases {
 		held, err := topLevel(dir, commit)
 		if err != nil {
 			return nil, nil, err
 		}
-		if line, ok := held[name]; ok {
-			entries[name] = line
-		} else {
-			delete(entries, name)
+		for _, name := range unionNames(entries, held) {
+			if ownerOf(name) != owner {
+				continue
+			}
+			if line, ok := held[name]; ok {
+				entries[name] = line
+			} else {
+				delete(entries, name)
+			}
 		}
 	}
 	unitBase := func(name string) string {
-		if commit, ok := heldBases[name]; ok {
+		if commit, ok := heldBases[ownerOf(name)]; ok {
 			return commit
 		}
 		return base
 	}
 	return entries, unitBase, nil
+}
+
+// dotsFolders returns treeish's top-level folders that hold a .dots file.
+// It reads tree objects only, so it works on a blobless clone.
+func dotsFolders(dir, treeish string) (map[string]bool, error) {
+	found := map[string]bool{}
+	if treeish == "" {
+		return found, nil
+	}
+	out, err := gitCmd(dir, "ls-tree", "-r", "--name-only", "-z", treeish)
+	if err != nil {
+		return nil, fmt.Errorf("list %s in %s: %s", treeish, dir, strings.TrimSpace(out))
+	}
+	for _, path := range strings.Split(out, "\x00") {
+		folder, rest, nested := strings.Cut(path, "/")
+		if nested && rest == dotsFile {
+			found[folder] = true
+		}
+	}
+	return found, nil
 }
 
 // mergeAgainst merges the local tree onto onto in memory, using a base

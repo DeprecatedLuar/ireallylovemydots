@@ -64,6 +64,14 @@ func Add(namespaceDir, path string) error {
 		return err
 	}
 
+	if m.Name != "" {
+		if err := checkRootEntryName(namespaceDir, name); err != nil {
+			return err
+		}
+	}
+
+	covered := m.Dest != "" && filepath.Join(m.Dest, name) == dest
+
 	if existing, ok := entryByName(m, name); ok {
 		if existing.Dest == dest {
 			fmt.Fprintf(os.Stderr, "%s is already tracked\n", dest)
@@ -78,6 +86,10 @@ func Add(namespaceDir, path string) error {
 		return err
 	}
 	if payloadExists {
+		if covered {
+			fmt.Fprintf(os.Stderr, "%s is already tracked\n", dest)
+			return nil
+		}
 		return adopt(namespaceDir, m, name, dest)
 	}
 
@@ -93,6 +105,10 @@ func Add(namespaceDir, path string) error {
 
 	if err := os.Rename(dest, payload); err != nil {
 		return fmt.Errorf("move %s into namespace: %w", dest, err)
+	}
+
+	if covered {
+		return nil
 	}
 
 	m.Entries = append(m.Entries, manifest.Entry{Name: name, Dest: dest})
@@ -171,4 +187,20 @@ func warnIfCoveredByExistingEntry(m manifest.Manifest, dest string) {
 
 func hasParentPrefix(rel string) bool {
 	return len(rel) >= 3 && rel[:3] == ".."+string(filepath.Separator)
+}
+
+// checkRootEntryName refuses an entry name a root namespace's own item
+// listing would exclude: the git directory or a namespace folder.
+func checkRootEntryName(repoDir, name string) error {
+	if name == gitDir {
+		return fmt.Errorf("%q is reserved in the root namespace", name)
+	}
+	held, err := manifest.Exists(filepath.Join(repoDir, name))
+	if err != nil {
+		return err
+	}
+	if held {
+		return fmt.Errorf("%q is a namespace folder in this repository; it cannot be an entry of the root namespace", name)
+	}
+	return nil
 }

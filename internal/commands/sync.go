@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
@@ -40,6 +41,10 @@ const (
 // removalLimit is how many upstream-deleted namespaces one sync removes
 // without confirmation.
 const removalLimit = 3
+
+// manifestFile is the namespace manifest; at the repository root it makes
+// the root namespace.
+const manifestFile = ".dots"
 
 // syncScope is one repository a run syncs, and which of its namespaces.
 type syncScope struct {
@@ -174,8 +179,9 @@ func resolveSyncArg(dataDir string, repos []manifest.Repo, arg, repoSpec string)
 }
 
 // syncRepo runs one repository: rewind removed namespaces (writable only),
-// prepare, decide each entry, trash what overwrite-local discards, apply,
-// record held bases, reapply the cone, then push.
+// prepare, decide each unit, trash what overwrite-local discards, apply,
+// reapply the cone, forget a root namespace renamed upstream, record held
+// bases, then push.
 func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly bool, flags shared.Flags) syncResult {
 	name := sc.repo.Name
 	repoDir := filepath.Join(dataDir, name)
@@ -193,31 +199,48 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 		res.err = err
 		return res
 	}
-	p, err := git.Prepare(repoDir, heldBases(s, name))
+	rootName, err := repo.RootName(repoDir)
+	if err != nil {
+		res.err = err
+		return res
+	}
+	p, err := git.Prepare(repoDir, heldBases(s, name), unitOwner(rootName))
 	if err != nil {
 		res.err = err
 		return res
 	}
 
+	decided, members := ownerUnits(p.Units, rootName)
 	placements := map[string]git.Placement{}
 	held := map[string]bool{}
 	var trashed []string
-	for _, u := range p.Units {
+	for _, u := range decided {
 		out, err := decideUnit(s, name, sc, u, flagMode, readOnly)
 		if err != nil {
 			res.err = err
 			return res
 		}
-		placements[u.Name] = out.Placement
+		for _, m := range members[u.Name] {
+			placements[m] = out.Placement
+		}
 		if u.Dir && u.RemovedRemote && out.Placement.Worktree == git.SourceRemote {
-			if installedHere(s, repoDir, name, u.Name) {
+			here, err := installedHere(s, repoDir, name, u.Name)
+			if err != nil {
+				res.err = err
+				return res
+			}
+			if here {
 				res.removed = append(res.removed, u.Name)
+			}
+			// The root namespace has no folder to trash, so its edits go alone.
+			if u.Name == rootName && out.Trash {
+				trashed = append(trashed, members[u.Name]...)
 			}
 			continue
 		}
 		switch {
 		case out.Trash:
-			trashed = append(trashed, u.Name)
+			trashed = append(trashed, members[u.Name]...)
 		case out.Held && len(u.Conflicts) > 0:
 			held[u.Name] = true
 			res.held = append(res.held, heldUnit{name: u.Name, paths: u.Conflicts})
@@ -237,7 +260,7 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 		res.err = err
 		return res
 	}
-	if err := dropRemovedNamespaces(repoDir, name, res.removed); err != nil {
+	if err := dropRemovedNamespaces(repoDir, name, res.removed, rootName); err != nil {
 		res.err = err
 		return res
 	}
@@ -250,7 +273,21 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 		res.err = err
 		return res
 	}
-	if err := recordHeldBases(name, p.Units, held); err != nil {
+	if rootName != "" && !slices.Contains(res.removed, rootName) {
+		renamed, err := repo.RootName(repoDir)
+		if err != nil {
+			res.err = err
+			return res
+		}
+		if renamed != rootName {
+			if err := dropRemovedNamespaces(repoDir, name, []string{rootName}, rootName); err != nil {
+				res.err = err
+				return res
+			}
+			res.removed = append(res.removed, rootName)
+		}
+	}
+	if err := recordHeldBases(name, decided, held); err != nil {
 		res.err = err
 		return res
 	}
@@ -266,6 +303,51 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 		recordReadOnly(name, false)
 	}
 	return res
+}
+
+// unitOwner maps a top-level entry to its deciding unit: every entry
+// decides alone, except that with a root namespace everything that is not a
+// folder namespace decides with the root.
+func unitOwner(rootName string) git.OwnerFunc {
+	if rootName == "" {
+		return nil
+	}
+	return func(name string, hasDots bool) string {
+		if hasDots {
+			return name
+		}
+		return rootName
+	}
+}
+
+// ownerUnits folds the root namespace's entries into one decision unit, per
+// concept.md "Sync modes": one mode, held as a whole, one held base. It is
+// removed upstream only when its .dots is. members maps each decided unit to
+// the top-level entries its placement applies to.
+func ownerUnits(units []git.Unit, rootName string) ([]git.Unit, map[string][]string) {
+	members := map[string][]string{}
+	var decided []git.Unit
+	rootAt := -1
+	for _, u := range units {
+		if rootName == "" || u.Owner != rootName {
+			decided = append(decided, u)
+			members[u.Name] = []string{u.Name}
+			continue
+		}
+		if rootAt < 0 {
+			rootAt = len(decided)
+			decided = append(decided, git.Unit{Name: rootName, Owner: rootName, Dir: true, Base: u.Base})
+		}
+		r := &decided[rootAt]
+		r.ChangedLocal = r.ChangedLocal || u.ChangedLocal
+		r.ChangedRemote = r.ChangedRemote || u.ChangedRemote
+		r.Conflicts = append(r.Conflicts, u.Conflicts...)
+		if u.Name == manifestFile {
+			r.RemovedRemote = u.RemovedRemote
+		}
+		members[rootName] = append(members[rootName], u.Name)
+	}
+	return decided, members
 }
 
 // decideUnit resolves one entry's mode and placement. The mode is only
@@ -320,17 +402,22 @@ func confirmUpstreamRemoval(repoName string, removed []string, flags shared.Flag
 
 // installedHere reports whether a namespace has a state entry or a folder
 // on this machine.
-func installedHere(s state.State, repoDir, repoName, ns string) bool {
+func installedHere(s state.State, repoDir, repoName, ns string) (bool, error) {
 	if _, ok := s.Entries[state.Key{Repo: repoName, Namespace: ns}]; ok {
-		return true
+		return true, nil
 	}
-	_, err := os.Lstat(filepath.Join(repoDir, ns))
-	return err == nil
+	dir, err := repo.NamespaceDir(repoDir, ns)
+	if err != nil {
+		return false, err
+	}
+	_, err = os.Lstat(dir)
+	return err == nil, nil
 }
 
 // dropRemovedNamespaces does on this machine what namespace rm did on the
 // one that deleted each namespace: unlink it, forget it, trash its folder.
-func dropRemovedNamespaces(repoDir, repoName string, names []string) error {
+// The root namespace, rootName, has no folder of its own and trashes nothing.
+func dropRemovedNamespaces(repoDir, repoName string, names []string, rootName string) error {
 	if len(names) == 0 {
 		return nil
 	}
@@ -344,7 +431,13 @@ func dropRemovedNamespaces(repoDir, repoName string, names []string) error {
 			return err
 		}
 		delete(s.Entries, key)
-		dir := filepath.Join(repoDir, n)
+		if n == rootName {
+			continue
+		}
+		dir, err := repo.NamespaceDir(repoDir, n)
+		if err != nil {
+			return err
+		}
 		if _, err := os.Lstat(dir); err == nil {
 			if _, err := trash.Move(dir); err != nil {
 				return fmt.Errorf("trash %s: %w", dir, err)
@@ -400,10 +493,10 @@ func recordHeldBases(repoName string, units []git.Unit, held map[string]bool) er
 	return state.Write(s)
 }
 
-// trashNamespaces sends every dirty path inside the named namespaces to
-// the trash.
-func trashNamespaces(repoDir string, names []string) error {
-	if len(names) == 0 {
+// trashNamespaces sends every dirty path under the named top-level entries
+// to the trash.
+func trashNamespaces(repoDir string, entries []string) error {
+	if len(entries) == 0 {
 		return nil
 	}
 	status, err := git.Status(repoDir)
@@ -412,8 +505,8 @@ func trashNamespaces(repoDir string, names []string) error {
 	}
 	var dirty []string
 	for _, path := range status.Dirty {
-		for _, ns := range names {
-			if strings.HasPrefix(path, ns+"/") {
+		for _, n := range entries {
+			if path == n || strings.HasPrefix(path, n+"/") {
 				dirty = append(dirty, path)
 				break
 			}

@@ -267,7 +267,10 @@ func discoverAllTargets(dataDir string, reg manifest.Registry, s state.State, fl
 			continue
 		}
 		repoDir := filepath.Join(dataDir, c.repo.Name)
-		nsDir := filepath.Join(repoDir, c.name)
+		nsDir, err := repo.NamespaceDir(repoDir, c.name)
+		if err != nil {
+			return nil, err
+		}
 		entries, _, err := engine.ManifestEntries(repoDir, nsDir, c.name)
 		if err != nil {
 			return nil, err
@@ -299,7 +302,7 @@ func resolveExplicitTargets(dataDir string, reg manifest.Registry, names []strin
 		if !loc.Installed && !flags.Install {
 			return nil, fmt.Errorf("namespace %q is not installed; rerun with -i to install and enable it", name)
 		}
-		repoDir := filepath.Dir(loc.Dir)
+		repoDir := loc.RepoDir
 		entries, _, err := engine.ManifestEntries(repoDir, loc.Dir, name)
 		if err != nil {
 			return nil, err

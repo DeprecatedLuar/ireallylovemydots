@@ -217,13 +217,13 @@ func refuseIfIgnored(loc namespace.Located) error {
 		ignore = m.Ignore
 	} else {
 		var err error
-		ignore, err = catalogueNamespaceIgnored(filepath.Dir(loc.Dir), filepath.Base(loc.Dir))
+		ignore, err = catalogueNamespaceIgnored(loc.RepoDir, loc.Name)
 		if err != nil {
 			return err
 		}
 	}
 	if ignore {
-		return fmt.Errorf("namespace %q is ignored (ignore = true in its .dots)", filepath.Base(loc.Dir))
+		return fmt.Errorf("namespace %q is ignored (ignore = true in its .dots)", loc.Name)
 	}
 	return nil
 }
@@ -302,7 +302,7 @@ func trackPaths(name string, args []string, flags shared.Flags) error {
 	}
 	name = loc.Name
 	if !loc.Installed {
-		if err := engine.Materialize(filepath.Dir(loc.Dir), loc.Dir, filepath.Base(loc.Dir)); err != nil {
+		if err := engine.Materialize(loc.RepoDir, loc.Dir, loc.Name); err != nil {
 			return err
 		}
 		loc.Installed = true
@@ -339,9 +339,13 @@ func renameNamespace(oldName, newName string, flags shared.Flags) error {
 		return err
 	}
 	oldName = loc.Name
-	repoDir := filepath.Dir(loc.Dir)
+	repoDir := loc.RepoDir
 	if err := namespace.Rename(repoDir, loc.Repo.Name, oldName, newName); err != nil {
 		return err
+	}
+	// A root namespace's payload paths do not change with its name.
+	if loc.Root {
+		return nil
 	}
 
 	failures, err := relinkRenamedNamespaces(repoDir, loc.Repo.Name, map[string]bool{newName: true})
@@ -375,7 +379,7 @@ func editNamespace(name string, flags shared.Flags) error {
 		return err
 	}
 
-	return editBuffer(original, manifest.Path(loc.Dir),
+	_, err = editBuffer(original, manifest.Path(loc.Dir),
 		func(edited []byte) error {
 			m, err := manifest.Decode(edited)
 			if err != nil {
@@ -384,12 +388,13 @@ func editNamespace(name string, flags shared.Flags) error {
 			if problems := manifest.Validate(m); len(problems) > 0 {
 				return formatManifestProblems(problems)
 			}
-			return nil
+			return manifest.CheckName(m, loc.Root)
 		},
 		func(seed, edited []byte) error {
 			return applyEditedBuffer(loc.Dir, seed, edited)
 		},
 	)
+	return err
 }
 
 // formatManifestProblems joins manifest.Validate's findings into the one
@@ -419,7 +424,7 @@ func prepareEditBuffer(namespaceDir string) ([]byte, error) {
 		return nil, err
 	}
 
-	report, err := namespace.Inspect(namespaceDir, m.Entries)
+	report, err := namespace.Inspect(namespaceDir, m)
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +434,8 @@ func prepareEditBuffer(namespaceDir string) ([]byte, error) {
 		augmented = append(augmented, manifest.Entry{Name: n, Dest: ""})
 	}
 
-	return manifest.Encode(manifest.Manifest{Ignore: m.Ignore, Entries: augmented})
+	m.Entries = augmented
+	return manifest.Encode(m)
 }
 
 // applyEditedBuffer persists the edited buffer as the namespace's manifest,
@@ -532,7 +538,11 @@ func renderIgnoredNamespaces() error {
 			return err
 		}
 		for _, n := range local {
-			m, err := manifest.Read(filepath.Join(repoDir, n))
+			nsDir, err := repo.NamespaceDir(repoDir, n)
+			if err != nil {
+				return err
+			}
+			m, err := manifest.Read(nsDir)
 			if err != nil {
 				return err
 			}
@@ -618,7 +628,7 @@ func renderNamespaceEntries(name string, flags shared.Flags, findings selfheal.F
 	key := state.Key{Repo: loc.Repo.Name, Namespace: name}
 	stateEntry := s.Entries[key]
 
-	rows, suggestion, err := entryListing(key, s, loc.Dir, m.Entries, stateEntry.Enabled, stateEntry.ActiveProfile)
+	rows, suggestion, err := entryListing(key, s, loc.Dir, m, stateEntry.Enabled, stateEntry.ActiveProfile)
 	if err != nil {
 		return err
 	}
@@ -688,4 +698,29 @@ func NamespaceRepoCandidates(name string) ([]string, error) {
 		names[i] = r.Name
 	}
 	return names, nil
+}
+
+// IsOwnRootNamespace reports whether name is both a registered repository
+// and that repository's root namespace — the one namespace/repository clash
+// that resolves to the namespace, per concept.md "Name resolution".
+func IsOwnRootNamespace(name string) (bool, error) {
+	reg, err := manifest.ReadRegistry()
+	if err != nil {
+		return false, err
+	}
+	dataDir, err := paths.Data()
+	if err != nil {
+		return false, err
+	}
+	for _, r := range reg.Repos {
+		if !strings.EqualFold(r.Name, name) {
+			continue
+		}
+		root, err := repo.RootName(filepath.Join(dataDir, r.Name))
+		if err != nil {
+			return false, err
+		}
+		return strings.EqualFold(root, name), nil
+	}
+	return false, nil
 }

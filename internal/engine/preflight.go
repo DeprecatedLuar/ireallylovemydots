@@ -9,6 +9,7 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/link"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/manifest"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/paths"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/repo"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 )
 
@@ -53,7 +54,8 @@ type Problem struct {
 }
 
 // dataLinkKeyComponents is how many leading components of a data-directory
-// link's target name a namespace: "<repo>/<namespace>".
+// link's target name a namespace: "<repo>/<top-level entry>", whose owner
+// names the namespace.
 const dataLinkKeyComponents = 2
 
 // Preflight collects every pre-flight problem for enabling a namespace's
@@ -154,7 +156,15 @@ func parentLinkProblems(e manifest.Entry, key state.Key, s state.State) ([]Probl
 	for _, l := range links {
 		parts := strings.Split(filepath.ToSlash(l.Rel), "/")
 		if len(parts) >= dataLinkKeyComponents {
-			other := state.Key{Repo: parts[0], Namespace: parts[1]}
+			dataDir, err := paths.Data()
+			if err != nil {
+				return nil, err
+			}
+			owner, err := repo.OwnerOf(filepath.Join(dataDir, parts[0]), parts[1])
+			if err != nil {
+				return nil, err
+			}
+			other := state.Key{Repo: parts[0], Namespace: owner}
 			if other != key && s.Entries[other].Enabled {
 				if seen[other] {
 					continue

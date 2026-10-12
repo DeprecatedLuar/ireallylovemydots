@@ -50,7 +50,7 @@ func TestGitignoreRewrite_RootEntryDirectory_LockFileStillIgnoredAfterBootstrap(
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := PlanEntries(entries)
+	plan, err := planMovingAll(entries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestGitignoreRewrite_TrailingSlashOnlyPatternStaysUnrooted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := PlanEntries(entries)
+	plan, err := planMovingAll(entries)
 	if err != nil {
 		t.Fatal(err)
 	}

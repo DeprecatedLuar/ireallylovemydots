@@ -10,8 +10,8 @@ const (
 	// StateEmpty is a fresh repository: no commits, or no top-level
 	// folders. Registers silently — the normal way to start authoring.
 	StateEmpty State = iota
-	// StateNamespaces is a dots repository: at least one root entry holds
-	// a .dots manifest.
+	// StateNamespaces is a dots repository: a root .dots, or at least one
+	// root entry holds one.
 	StateNamespaces
 	// StateIncompatible has root entries, none holding a .dots — not a
 	// dots repository. Registering it would produce a catalogue of
@@ -29,7 +29,7 @@ func Inspect(entries []RootEntry) State {
 		return StateEmpty
 	}
 	for _, e := range entries {
-		if e.HasDots {
+		if e.HasDots || (e.Name == dotsFileName && !e.IsDir) {
 			return StateNamespaces
 		}
 	}

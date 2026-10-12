@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 
@@ -31,24 +30,23 @@ const configDestPrefix = ".config"
 // name is created underneath it.
 const bootstrapStagingSuffix = ".dots-bootstrap-staging"
 
-// skipExact is the closed set of root entries bootstrap never converts,
-// per concept.md "Bootstrap": git and forge files.
-var skipExact = map[string]bool{
-	".git":           true,
-	".gitignore":     true,
+// neverPlanned are root entries a bootstrap plan never lists: git's own
+// directory and ignore file, and the root manifest.
+var neverPlanned = map[string]bool{".git": true, ".gitignore": true, dotsFileName: true}
+
+// furnitureExact, furniturePrefixes and furnitureGlobs are the closed set of
+// root entries that start a bootstrap plan as "none", per concept.md
+// "Bootstrap": git, the forge, and dots itself.
+var furnitureExact = map[string]bool{
 	".gitattributes": true,
 	".gitmodules":    true,
 	".github":        true,
 	".gitlab-ci.yml": true,
 }
 
-// skipPrefixes matches root entries by their leading segment regardless of
-// extension: README, LICENSE, and COPYING variants.
-var skipPrefixes = []string{"README", "LICENSE", "COPYING"}
+var furniturePrefixes = []string{"README", "LICENSE", "COPYING"}
 
-// skipGlobs matches loadout configuration files, which belong to dots
-// itself rather than tracked content.
-var skipGlobs = []string{"dotloadout.*.toml", "*loadout*.toml"}
+var furnitureGlobs = []string{"dotloadout.*.toml", "*loadout*.toml"}
 
 // PlannedNamespace is one proposed conversion of a root entry into a
 // namespace: the namespace it will become, the one entry it will hold
@@ -59,65 +57,18 @@ type PlannedNamespace struct {
 	Dest      string
 }
 
-// Plan builds the proposed --bootstrap conversion of repoPath's root
-// entries, per concept.md "Bootstrap". It applies the skip set and the
-// dot-prefixed -> ~/<name>, otherwise ~/.config/<name> destination rule, one
-// namespace per root entry holding exactly one entry. Two entries resolving
-// to the same namespace name is an error naming both. Plan reads only what
-// RootEntries already returns, so preview and Apply can never disagree.
-func Plan(repoPath string) ([]PlannedNamespace, error) {
-	entries, err := RootEntries(repoPath)
-	if err != nil {
-		return nil, err
-	}
-	return PlanEntries(entries)
-}
-
-// PlanEntries is Plan's pure half, taking root entries directly rather than
-// reading them from a git tree. repo init's compatibility check reads a
-// folder that may not be a git repository yet (RootEntries requires one),
-// via DiskEntries instead — this lets that same already-gathered entry list
-// feed the bootstrap plan without a redundant, git-only re-read.
-func PlanEntries(entries []RootEntry) ([]PlannedNamespace, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("resolve home directory: %w", err)
-	}
-
-	var plan []PlannedNamespace
-	sourceOf := map[string]string{}
-	for _, e := range entries {
-		if skipEntry(e) {
-			continue
-		}
-		nsName, dest := destinationFor(home, e.Name, e.IsDir)
-		if existing, dup := sourceOf[nsName]; dup {
-			return nil, fmt.Errorf("%q and %q both resolve to namespace %q", existing, e.Name, nsName)
-		}
-		sourceOf[nsName] = e.Name
-		plan = append(plan, PlannedNamespace{Namespace: nsName, EntryName: e.Name, Dest: dest})
-	}
-
-	sort.Slice(plan, func(i, j int) bool { return plan[i].Namespace < plan[j].Namespace })
-	return plan, nil
-}
-
-// skipEntry reports whether a root entry is in bootstrap's closed skip set:
-// already a namespace, or belonging to git, the forge, or dots itself.
-func skipEntry(e RootEntry) bool {
-	if e.HasDots {
+// isFurniture reports whether a root entry is in the furniture set.
+func isFurniture(name string) bool {
+	if furnitureExact[name] {
 		return true
 	}
-	if skipExact[e.Name] {
-		return true
-	}
-	for _, prefix := range skipPrefixes {
-		if strings.HasPrefix(e.Name, prefix) {
+	for _, prefix := range furniturePrefixes {
+		if strings.HasPrefix(name, prefix) {
 			return true
 		}
 	}
-	for _, pattern := range skipGlobs {
-		if matched, _ := filepath.Match(pattern, e.Name); matched {
+	for _, pattern := range furnitureGlobs {
+		if matched, _ := filepath.Match(pattern, name); matched {
 			return true
 		}
 	}
@@ -145,8 +96,8 @@ func destinationFor(home, name string, isDir bool) (nsName, dest string) {
 // are stripped — a directory's extension is part of its name (`nvim.d` is
 // not `nvim`). The dot must be dropped before the extension is read, or
 // filepath.Ext would treat the whole of `.zshrc` as one extension. Two
-// entries reduced to the same name are caught by PlanEntries, which errors
-// naming both rather than merging them.
+// entries reduced to the same name are refused by plan validation, naming
+// both rather than merging them.
 func namespaceNameFor(name string, isDir bool) string {
 	nsName := strings.TrimPrefix(name, ".")
 	if isDir {
@@ -320,13 +271,16 @@ func RewriteGitignore(repoPath string, plan []PlannedNamespace) ([]GitignoreChan
 	return changes, nil
 }
 
-// Apply performs the conversion Plan proposed: for each planned namespace,
-// creates its folder, moves the root entry into it, writes its .dots, and
-// rewrites the root .gitignore (per concept.md "Bootstrap rewrites the root
+// Apply performs planned conversions: for each planned namespace, creates
+// its folder, moves the root entry into it, writes its .dots, and rewrites
+// the root .gitignore (per concept.md "Bootstrap rewrites the root
 // .gitignore") so it still matches the paths it did before restructuring.
-// Never commits, never creates a symlink, and never writes outside
-// repoPath.
+// An empty plan touches nothing. Never commits, never creates a symlink,
+// and never writes outside repoPath.
 func Apply(repoPath string, plan []PlannedNamespace) error {
+	if len(plan) == 0 {
+		return nil
+	}
 	for _, p := range plan {
 		src := filepath.Join(repoPath, p.EntryName)
 		nsDir := filepath.Join(repoPath, p.Namespace)

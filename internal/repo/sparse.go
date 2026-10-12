@@ -178,7 +178,7 @@ func EnsureSparse(repoDir string, cone []string) error {
 //
 // Both directions are corrected the same non-destructive way EnsureSparse
 // already guarantees for the one-time repo-init/bootstrap conversion: the
-// desired cone is read from what is on disk, never invented, so adding a
+// desired cone is read from disk and, for a root namespace, from HEAD's tree, so adding a
 // name has a directory to check out against and dropping one has nothing
 // on disk to remove — EnsureSparse only ever changes the skip-worktree
 // bit, never the working tree or the index.
@@ -187,17 +187,10 @@ func EnsureSparse(repoDir string, cone []string) error {
 // (self-heal's cone-repair finding) — both nil when the cone already
 // matched disk.
 func ReconcileCone(repoDir string) (added, removed []string, err error) {
-	entries, err := DiskEntries(repoDir)
+	want, err := desiredCone(repoDir)
 	if err != nil {
 		return nil, nil, err
 	}
-	onDisk := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir && !strings.HasPrefix(e.Name, ".") {
-			onDisk = append(onDisk, e.Name)
-		}
-	}
-	sort.Strings(onDisk)
 
 	sparse, err := IsSparse(repoDir)
 	if err != nil {
@@ -211,14 +204,14 @@ func ReconcileCone(repoDir string) (added, removed []string, err error) {
 		}
 	}
 
-	onDiskSet := stringSet(onDisk)
+	wantSet := stringSet(want)
 	for _, name := range current {
-		if !onDiskSet[name] {
+		if !wantSet[name] {
 			removed = append(removed, name)
 		}
 	}
 	currentSet := stringSet(current)
-	for _, name := range onDisk {
+	for _, name := range want {
 		if !currentSet[name] {
 			added = append(added, name)
 		}
@@ -229,10 +222,56 @@ func ReconcileCone(repoDir string) (added, removed []string, err error) {
 	sort.Strings(added)
 	sort.Strings(removed)
 
-	if err := EnsureSparse(repoDir, onDisk); err != nil {
+	if err := EnsureSparse(repoDir, want); err != nil {
 		return nil, nil, err
 	}
 	return added, removed, nil
+}
+
+// gitDirName is the repository's own git directory, never in the cone.
+const gitDirName = ".git"
+
+// desiredCone is the cone ReconcileCone converges on: the installed
+// namespace folders on disk and, with a root namespace, every root folder in
+// HEAD's tree (present on a fresh clone or not) and every folder on disk.
+func desiredCone(repoDir string) ([]string, error) {
+	disk, err := DiskEntries(repoDir)
+	if err != nil {
+		return nil, err
+	}
+	root, err := RootName(repoDir)
+	if err != nil {
+		return nil, err
+	}
+
+	set := map[string]bool{}
+	for _, e := range disk {
+		if !e.IsDir || e.Name == gitDirName {
+			continue
+		}
+		if root == "" && strings.HasPrefix(e.Name, ".") {
+			continue
+		}
+		set[e.Name] = true
+	}
+	if root != "" {
+		tree, err := RootEntries(repoDir)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range tree {
+			if e.IsDir && !e.HasDots {
+				set[e.Name] = true
+			}
+		}
+	}
+
+	cone := make([]string, 0, len(set))
+	for name := range set {
+		cone = append(cone, name)
+	}
+	sort.Strings(cone)
+	return cone, nil
 }
 
 // setCone replaces the repository's entire sparse-checkout cone with
