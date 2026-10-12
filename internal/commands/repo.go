@@ -297,12 +297,9 @@ func adoptRepo(name string) error {
 // bootstrapAdd runs `repo add --bootstrap`'s conversion at an already-cloned,
 // blobless destination: plan, preview, prompt, and only on confirmation
 // apply the conversion, checking out every blob first when the plan moves
-// anything. Per concept.md "Bootstrap", every step up to the prompt is
-// name-level, so declining costs nothing beyond the blobless clone repo add
-// performs anyway. converted is false
-// only when the user declined; a plan that converts to anything other than
-// StateNamespaces is an error, since a conversion producing nothing usable
-// must never register.
+// anything. Every step up to the prompt is name-level, so declining costs
+// nothing beyond the blobless clone. converted is false only when the user
+// declined; a conversion that does not yield StateNamespaces is an error.
 func bootstrapAdd(dest, url, name string, entries []repo.RootEntry) (converted bool, state repo.State, err error) {
 	plan, proceed, err := planBootstrap(dest, name, entries)
 	if err != nil {
@@ -321,9 +318,8 @@ func bootstrapAdd(dest, url, name string, entries []repo.RootEntry) (converted b
 		return false, repo.StateIncompatible, err
 	}
 
-	// ApplyBootstrap never commits, so the post-conversion state must be read
-	// straight off disk rather than via RootEntries, which reads git's HEAD
-	// tree and would still see the pre-conversion layout.
+	// ApplyBootstrap does not commit, so read the result from disk;
+	// RootEntries reads HEAD and would see the old layout.
 	postEntries, err := repo.DiskEntries(dest)
 	if err != nil {
 		return false, repo.StateIncompatible, err
@@ -333,13 +329,9 @@ func bootstrapAdd(dest, url, name string, entries []repo.RootEntry) (converted b
 		return false, repo.StateIncompatible, fmt.Errorf("--bootstrap conversion of %s produced no usable namespaces", url)
 	}
 
-	// The cone is set from what the conversion produced: the namespace
-	// folders now present and the root namespace's directories, per concept.md "Sparse checkout":
-	// everything present is installed by definition. ReconcileCone reads
-	// the cone from disk itself rather than trusting postEntries' HasDots
-	// filter, which is what left krita-config's cone empty in the field —
-	// a directory without a manifest still needs to be in the cone for git
-	// to stage around it.
+	// Everything the conversion produced is installed, so the cone covers
+	// every top-level directory present, including directories that have no
+	// manifest of their own (root namespace content).
 	if _, _, err := repo.ReconcileCone(dest); err != nil {
 		return false, repo.StateIncompatible, err
 	}
@@ -474,10 +466,9 @@ func bootstrapPreviewEntries(plan repo.BootstrapPlan, moves []repo.PlannedNamesp
 }
 
 // initRepo implements `repo init [path]`: take a local folder and register
-// it, with no remote. Per concept.md "Initializing a local folder", the
-// order is check, take, register — inspection runs at the source path
-// before anything is written, so a refused command leaves the folder
-// exactly as it was found: not moved, and with no .git created in it.
+// it, with no remote. The order is check, take, register: inspection runs at
+// the source path before anything is written, so a refused command leaves
+// the folder untouched.
 func initRepo(pathArg string, flags shared.Flags) error {
 	srcPath, err := resolveInitPath(pathArg)
 	if err != nil {
@@ -519,8 +510,7 @@ func initRepo(pathArg string, flags shared.Flags) error {
 			return err
 		}
 		if !proceed {
-			// Declining leaves the folder at its original path, per
-			// concept.md "Bootstrap".
+			// Declining leaves the folder at its original path.
 			return nil
 		}
 		plan = p
@@ -553,9 +543,7 @@ func initRepo(pathArg string, flags shared.Flags) error {
 		if err := repo.ApplyBootstrap(dest, plan, entries); err != nil {
 			return err
 		}
-		// Nothing ApplyBootstrap writes is committed, so the post-conversion state
-		// must be read straight off disk rather than via RootEntries, which
-		// reads git's HEAD tree.
+		// ApplyBootstrap does not commit, so read the result from disk.
 		postEntries, err := repo.DiskEntries(dest)
 		if err != nil {
 			return err
@@ -566,18 +554,16 @@ func initRepo(pathArg string, flags shared.Flags) error {
 		}
 	}
 
-	// repo init takes a folder whose content is already on disk in full, so
-	// its cone is set to every top-level directory present — everything
-	// present is installed by definition, per concept.md "Sparse checkout".
+	// The folder is fully on disk, so the cone covers every top-level
+	// directory present.
 	if state == repo.StateNamespaces {
 		if _, _, err := repo.ReconcileCone(dest); err != nil {
 			return err
 		}
 	}
 
-	// repo init has no remote, so this entry is never written to the shared
-	// config registry — concept.md "Repository manifest": a local folder
-	// path means nothing on another machine.
+	// A local folder path means nothing on another machine, so the entry
+	// stays out of the shared config registry.
 	if err := registerRepo(reg, manifest.Repo{Name: name, Origin: manifest.OriginLocal}); err != nil {
 		return err
 	}
