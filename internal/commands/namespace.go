@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -262,7 +263,7 @@ func resolveTargetRepo(reg manifest.Registry, flags shared.Flags) (manifest.Repo
 	}
 	switch len(reg.Repos) {
 	case 0:
-		return manifest.Repo{}, fmt.Errorf("no repositories registered; run repo add first")
+		return manifest.Repo{}, ui.WithTip(errors.New("no repositories registered"), "run `dots repo add <url>` first")
 	case 1:
 		return reg.Repos[0], nil
 	}
@@ -272,7 +273,9 @@ func resolveTargetRepo(reg manifest.Registry, flags shared.Flags) (manifest.Repo
 		names = append(names, r.Name)
 	}
 	sort.Strings(names)
-	return manifest.Repo{}, fmt.Errorf("multiple repositories registered (%s); rerun with --repo <name>", strings.Join(names, ", "))
+	return manifest.Repo{}, ui.WithTip(
+		fmt.Errorf("multiple repositories registered (%s)", strings.Join(names, ", ")),
+		"rerun with --repo <name>")
 }
 
 // trackPaths implements `namespace <ns> add <path>...`: namespace.Add moves
@@ -334,7 +337,7 @@ func trackPaths(name string, args []string, flags shared.Flags) error {
 // about the manifest or a destination changed. relinkRenamedNamespaces
 // repoints them as the last step, mirroring renameRepo.
 func renameNamespace(oldName, newName string, flags shared.Flags) error {
-	loc, err := resolveNamespace(oldName, flags)
+	loc, err := resolveInstalled(oldName, flags)
 	if err != nil {
 		return err
 	}
@@ -369,7 +372,7 @@ func renameNamespace(oldName, newName string, flags shared.Flags) error {
 // original file is untouched until answered. Not being able to prompt is a
 // hard error, and the edit is discarded either way.
 func editNamespace(name string, flags shared.Flags) error {
-	loc, err := resolveNamespace(name, flags)
+	loc, err := resolveInstalled(name, flags)
 	if err != nil {
 		return err
 	}
@@ -475,7 +478,7 @@ func resolveNamespace(name string, flags shared.Flags) (namespace.Located, error
 // the flag. A namespace with no manifest yet gets one holding just the
 // flag, which is what stops self-heal from regenerating one on its own.
 func ignoreNamespace(name string, flags shared.Flags) error {
-	loc, err := resolveNamespace(name, flags)
+	loc, err := resolveInstalled(name, flags)
 	if err != nil {
 		return err
 	}
@@ -501,7 +504,7 @@ func ignoreNamespace(name string, flags shared.Flags) error {
 // unignoreNamespace implements `namespace unignore <name>`: clears
 // `ignore` from the namespace's manifest.
 func unignoreNamespace(name string, flags shared.Flags) error {
-	loc, err := resolveNamespace(name, flags)
+	loc, err := resolveInstalled(name, flags)
 	if err != nil {
 		return err
 	}
@@ -597,10 +600,25 @@ func hasProblem(rows []ui.Entry) bool {
 	return false
 }
 
+// resolveInstalled resolves name and refuses a namespace whose files are not
+// on disk, for verbs that read or change them.
+func resolveInstalled(name string, flags shared.Flags) (namespace.Located, error) {
+	loc, err := resolveNamespace(name, flags)
+	if err != nil {
+		return namespace.Located{}, err
+	}
+	if !loc.Installed {
+		return namespace.Located{}, errNotInstalled(loc.Name)
+	}
+	return loc, nil
+}
+
 // errNotInstalled is the error every verb that needs a namespace's files on
 // disk gives for one that is not installed.
 func errNotInstalled(name string) error {
-	return fmt.Errorf("namespace %q is not installed; run `dots install %s` first", name, name)
+	return ui.WithTip(
+		fmt.Errorf("namespace %q is not installed", name),
+		fmt.Sprintf("run `dots install %s`", name))
 }
 
 // renderNamespaceEntries implements `dots <ns>`: the namespace's entry
@@ -609,14 +627,11 @@ func errNotInstalled(name string) error {
 // narrowed to it"), with profile findings in their own block below the
 // entries rather than mixed among them.
 func renderNamespaceEntries(name string, flags shared.Flags, findings selfheal.Findings) error {
-	loc, err := resolveNamespace(name, flags)
+	loc, err := resolveInstalled(name, flags)
 	if err != nil {
 		return err
 	}
 	name = loc.Name
-	if !loc.Installed {
-		return errNotInstalled(name)
-	}
 	m, err := manifest.Read(loc.Dir)
 	if err != nil {
 		return err

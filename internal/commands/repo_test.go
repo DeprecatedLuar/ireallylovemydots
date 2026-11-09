@@ -1189,7 +1189,7 @@ func TestAdoptRepo_LocalEntryWithoutRemoteErrorsUnchanged(t *testing.T) {
 	}
 
 	err := adoptRepo("priv")
-	if err == nil || !strings.Contains(err.Error(), "git remote add origin") {
+	if err == nil || !strings.Contains(errWithTip(err), "git remote add origin") {
 		t.Fatalf("expected an error naming git remote add, got %v", err)
 	}
 	reg, err := manifest.ReadRegistry()

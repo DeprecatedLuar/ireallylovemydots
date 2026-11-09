@@ -34,6 +34,9 @@ const (
 	vcsModifiedKey = "vcs.modified"
 )
 
+// helpTip is the follow-up shown under an unrecognized command.
+const helpTip = "run `dots help` for usage"
+
 // shortRevisionLen matches git's default abbreviated commit length.
 const shortRevisionLen = 7
 
@@ -312,23 +315,9 @@ func resolveRoute(args []string, namespaces, repos []string, ambiguous func(name
 	case inRepo:
 		return route{target: targetRepo, args: args}, nil
 	default:
-		return route{}, &tipError{
-			err: fmt.Errorf("That's not a real command: %s", tok0),
-			tip: "Try 'dots help' for usage",
-		}
+		return route{}, ui.WithTip(fmt.Errorf("That's not a real command: %s", tok0), helpTip)
 	}
 }
-
-// tipError pairs a fatal error with a follow-up tip line, printed dim
-// beneath the arrow-toned error line by die. Not every error carries one —
-// only cases where a next step is obvious, such as mistyping a command.
-type tipError struct {
-	err error
-	tip string
-}
-
-func (e *tipError) Error() string { return e.err.Error() }
-func (e *tipError) Unwrap() error { return e.err }
 
 func contains(list []string, name string) bool {
 	for _, v := range list {
@@ -450,13 +439,14 @@ func buildStamp() (stamp string, dirty bool) {
 // die prints err set off by a leading blank line, so it reads as its own
 // block rather than running into whatever output preceded it. It prints as
 // an arrow-marked line, the same tone used for "!" markers elsewhere,
-// rather than an "Error:" prefix. When err is a *tipError, a dim follow-up
+// rather than an "Error:" prefix. When err carries a *ui.TipError, a dim follow-up
 // line is appended below it.
 func die(err error) {
 	msg := err.Error()
 	fmt.Fprintf(os.Stderr, "\n%s\n", ui.ErrorTone(fmt.Sprintf("%s %s", ui.Arrow, msg)))
-	if te, ok := err.(*tipError); ok {
-		fmt.Fprintf(os.Stderr, "%s\n", ui.Tip(te.tip))
+	var te *ui.TipError
+	if errors.As(err, &te) {
+		fmt.Fprintf(os.Stderr, "%s\n", ui.Tip(te.Tip))
 	}
 	os.Exit(1)
 }

@@ -450,6 +450,21 @@ func Tip(msg string) string {
 	return dimTone(msg, os.Stderr)
 }
 
+// TipError pairs a fatal error with the next step to take, printed as a
+// separate Tip line beneath the error rather than inside its message.
+type TipError struct {
+	Err error
+	Tip string
+}
+
+func (e *TipError) Error() string { return e.Err.Error() }
+func (e *TipError) Unwrap() error { return e.Err }
+
+// WithTip attaches tip to err as a *TipError.
+func WithTip(err error, tip string) error {
+	return &TipError{Err: err, Tip: tip}
+}
+
 // Prompt asks question, with options rendered inline in the conventional
 // "(y/N)" form (the capitalized one signalling the default), and returns
 // the raw response. context is optional leading material — a List or

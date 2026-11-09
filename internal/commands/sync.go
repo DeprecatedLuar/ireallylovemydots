@@ -641,8 +641,9 @@ func rewindRemovedNamespaces(repoDir, repoName string, flags shared.Flags) error
 
 	if !flags.Yes {
 		if !ui.Interactive() {
-			return fmt.Errorf("%q has %s removed but still only in unpushed commit(s); rerun with -y to rewind them out of history before they're pushed, or without to leave the deletion commit as-is",
-				repoName, strings.Join(removed, ", "))
+			return ui.WithTip(
+				fmt.Errorf("%q has %s removed but still only in unpushed commit(s)", repoName, strings.Join(removed, ", ")),
+				"rerun with -y to rewind them out of history before they're pushed")
 		}
 		block := ui.List(
 			ui.WarningTone(fmt.Sprintf("%q: %s only exists in %d unpushed commit(s), which will be rewound out of history so its content never reaches the remote:", repoName, strings.Join(removed, ", "), len(unpushed))),

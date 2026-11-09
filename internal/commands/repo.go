@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -128,7 +129,9 @@ func promoteLocalRepo(reg manifest.Registry, name string) error {
 			return err
 		}
 		if url == "" {
-			return fmt.Errorf("%q is registered locally and its clone has no remote; run `git remote add origin <url>` in it first", r.Name)
+			return ui.WithTip(
+				fmt.Errorf("%q is registered locally and its clone has no remote", r.Name),
+				"run `git remote add origin <url>` in it first")
 		}
 		_, owner := repo.DeriveNameOwner(url)
 		reg.Repos[i].URL = url
@@ -608,7 +611,9 @@ func resolveNewRepoName(reg manifest.Registry, name string) (string, error) {
 		}
 
 		if !ui.Interactive() {
-			return "", fmt.Errorf("%s rerun with an explicit distinct name (non-interactive session)", reason)
+			return "", ui.WithTip(
+				errors.New(strings.TrimSuffix(reason, ".")),
+				"rerun with an explicit distinct name")
 		}
 		resp, err := ui.Prompt("", reason+" Choose a different local name:", nil)
 		if err != nil {

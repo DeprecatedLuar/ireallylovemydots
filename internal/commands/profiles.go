@@ -143,7 +143,7 @@ type profileScope struct {
 // instead of calling this, since it is the one path allowed to proceed
 // without the file.
 func scopeFor(namespaceName string, flags shared.Flags) (profileScope, error) {
-	loc, err := resolveNamespace(namespaceName, flags)
+	loc, err := resolveInstalled(namespaceName, flags)
 	if err != nil {
 		return profileScope{}, err
 	}
@@ -153,7 +153,9 @@ func scopeFor(namespaceName string, flags shared.Flags) (profileScope, error) {
 		return profileScope{}, err
 	}
 	if !exists {
-		return profileScope{}, fmt.Errorf("namespace %q has no profile layer yet; run `dots namespace %s profiles edit` to create one", namespaceName, namespaceName)
+		return profileScope{}, ui.WithTip(
+			fmt.Errorf("namespace %q has no profile layer yet", namespaceName),
+			fmt.Sprintf("run `dots namespace %s profiles edit` to create one", namespaceName))
 	}
 	m, err := manifest.Read(loc.Dir)
 	if err != nil {
@@ -225,7 +227,7 @@ func reportProfile(marker, name string) {
 // scopeFor, since scopeFor refuses when the file is absent and this is the
 // one verb that must proceed anyway.
 func editProfiles(namespaceName string, flags shared.Flags) error {
-	loc, err := resolveNamespace(namespaceName, flags)
+	loc, err := resolveInstalled(namespaceName, flags)
 	if err != nil {
 		return err
 	}
@@ -513,7 +515,9 @@ func confirmDeclare(namespaceName, name string, flags shared.Flags) error {
 		return nil
 	}
 	if !ui.Interactive() {
-		return fmt.Errorf("%q is not profiled; run `dots namespace %s profiles main add %s` first, or --force to declare it", name, namespaceName, name)
+		return ui.WithTip(
+			fmt.Errorf("%q is not profiled", name),
+			fmt.Sprintf("run `dots namespace %s profiles main add %s` first, or --force to declare it", namespaceName, name))
 	}
 	choice, err := ui.Prompt("", fmt.Sprintf("%q is not profiled yet. Declare it?", name), []string{"y", "N"})
 	if err != nil {

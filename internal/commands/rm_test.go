@@ -337,7 +337,7 @@ func TestRestoreEntries_NonInteractiveOccupiedDestination_ErrorsNamingForce(t *t
 	if err == nil {
 		t.Fatal("expected a non-interactive occupied-destination restore to fail")
 	}
-	if !strings.Contains(err.Error(), "--force") {
+	if !strings.Contains(errWithTip(err), "--force") {
 		t.Fatalf("expected the error to name --force, got: %v", err)
 	}
 

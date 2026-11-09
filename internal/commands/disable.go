@@ -19,7 +19,7 @@ const alreadyDisabledDetail = "already disabled"
 // enable reports", disable prints "-" — the namespace's resulting state —
 // through the same shared renderer every other mutation uses.
 func disableNamespace(name string, flags shared.Flags) error {
-	loc, err := resolveNamespace(name, flags)
+	loc, err := resolveInstalled(name, flags)
 	if err != nil {
 		return err
 	}

@@ -332,8 +332,8 @@ func TestResolveTargetRepo_SeveralReposErrorsNamingThemAndRepoFlag(t *testing.T)
 	if err == nil {
 		t.Fatal("expected an error with several repositories and no --repo")
 	}
-	want := "multiple repositories registered (dots, krita-config); rerun with --repo <name>"
-	if err.Error() != want {
-		t.Fatalf("got %q, want %q", err.Error(), want)
+	want := "multiple repositories registered (dots, krita-config)\nrerun with --repo <name>"
+	if got := errWithTip(err); got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }

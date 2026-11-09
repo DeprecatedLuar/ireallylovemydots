@@ -32,14 +32,11 @@ type restoreTarget struct {
 func HandleRestore(names []string, flags shared.Flags) error {
 	targets := make([]restoreTarget, 0, len(names))
 	for _, name := range names {
-		loc, err := resolveNamespace(name, flags)
+		loc, err := resolveInstalled(name, flags)
 		if err != nil {
 			return err
 		}
 		name = loc.Name
-		if !loc.Installed {
-			return errNotInstalled(name)
-		}
 		m, err := manifest.Read(loc.Dir)
 		if err != nil {
 			return err
@@ -110,8 +107,9 @@ func resolveRestoreOccupancy(targets []restoreTarget, flags shared.Flags) (skip 
 		return false, nil
 	}
 	if !ui.Interactive() {
-		return false, fmt.Errorf("cannot restore non-interactively: %d occupied destination(s):\n%s\nrerun with --force to trash the occupant(s) and restore, or answer interactively",
-			total, renderRestoreProblems(problems))
+		return false, ui.WithTip(
+			fmt.Errorf("cannot restore non-interactively: %d occupied destination(s):\n%s", total, renderRestoreProblems(problems)),
+			occupiedTip)
 	}
 	choice, err := ui.Prompt(
 		fmt.Sprintf("restoring has %d occupied destination(s):\n%s\n", total, renderRestoreProblems(problems)),

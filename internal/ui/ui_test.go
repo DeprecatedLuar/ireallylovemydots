@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"os"
 	"testing"
 )
@@ -152,5 +153,20 @@ func TestRender_StarredNameGetsAsterisk(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	if got := Render([]Entry{{Marker: MarkerEnabled, Name: "noctalia", Starred: true}}); got != "+ noctalia*\n" {
 		t.Fatalf("Render = %q, want %q", got, "+ noctalia*\n")
+	}
+}
+
+func TestTipError_MessageExcludesTipAndUnwraps(t *testing.T) {
+	base := errors.New("boom")
+	err := WithTip(base, "do this")
+	if err.Error() != "boom" {
+		t.Fatalf("got %q, want the bare message", err.Error())
+	}
+	var te *TipError
+	if !errors.As(err, &te) || te.Tip != "do this" {
+		t.Fatalf("expected a *TipError carrying the tip, got %v", err)
+	}
+	if !errors.Is(err, base) {
+		t.Fatal("expected the wrapped error to be reachable")
 	}
 }

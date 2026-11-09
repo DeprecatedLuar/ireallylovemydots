@@ -92,7 +92,7 @@ func TestEnableNamespace_NotInstalled_ErrorsNamingInstallFlag(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected enabling an uninstalled namespace to fail")
 	}
-	if !strings.Contains(err.Error(), "-i") {
+	if !strings.Contains(errWithTip(err), "-i") {
 		t.Fatalf("expected the error to name -i, got: %v", err)
 	}
 }
@@ -317,7 +317,7 @@ func TestRmRepo_NoRemote_RefusesNamingRemoteAdd(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected repo rm to refuse a repository with no remote")
 	}
-	if !strings.Contains(err.Error(), "git remote add") {
+	if !strings.Contains(errWithTip(err), "git remote add") {
 		t.Fatalf("expected the error to name `git remote add`, got: %v", err)
 	}
 	if _, statErr := os.Stat(repoDir); statErr != nil {
@@ -338,7 +338,7 @@ func TestRenderNamespaceEntries_NotInstalled_ErrorsAndInstallsNothing(t *testing
 	registerClonedCatalogue(t, source)
 
 	err := renderNamespaceEntries("editors", shared.Flags{}, selfheal.Findings{})
-	if err == nil || !strings.Contains(err.Error(), "dots install editors") {
+	if err == nil || !strings.Contains(errWithTip(err), "dots install editors") {
 		t.Fatalf("expected the not-installed error naming `dots install editors`, got %v", err)
 	}
 	dataDir, err := paths.Data()

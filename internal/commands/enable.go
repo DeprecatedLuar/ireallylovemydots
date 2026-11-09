@@ -300,7 +300,9 @@ func resolveExplicitTargets(dataDir string, reg manifest.Registry, names []strin
 		}
 		name = loc.Name
 		if !loc.Installed && !flags.Install {
-			return nil, fmt.Errorf("namespace %q is not installed; rerun with -i to install and enable it", name)
+			return nil, ui.WithTip(
+				fmt.Errorf("namespace %q is not installed", name),
+				"rerun with -i to install and enable it")
 		}
 		repoDir := loc.RepoDir
 		entries, _, err := engine.ManifestEntries(repoDir, loc.Dir, name)

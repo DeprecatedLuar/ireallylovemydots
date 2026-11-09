@@ -18,14 +18,11 @@ func handleSyncMode(name string, args []string, flags shared.Flags) error {
 	if len(args) > 1 {
 		return fmt.Errorf("usage: namespace %s syncmode [<mode>]", name)
 	}
-	loc, err := resolveNamespace(name, flags)
+	loc, err := resolveInstalled(name, flags)
 	if err != nil {
 		return err
 	}
 	name = loc.Name
-	if !loc.Installed {
-		return errNotInstalled(name)
-	}
 	access, err := state.ReadAccess()
 	if err != nil {
 		return err

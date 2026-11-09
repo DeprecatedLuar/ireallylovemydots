@@ -72,7 +72,7 @@ func TestProfilesAddOverride_UndeclaredEntry_NonInteractiveNamesMainAdd(t *testi
 	if err == nil {
 		t.Fatal("expected an error for an undeclared entry")
 	}
-	if !strings.Contains(err.Error(), "profiles main add gitconfig") {
+	if !strings.Contains(errWithTip(err), "profiles main add gitconfig") {
 		t.Fatalf("error does not name the declaring command: %v", err)
 	}
 	if _, statErr := os.Lstat(filepath.Join(profile.ProfileDir(nsDir, "dark"), "gitconfig")); !os.IsNotExist(statErr) {
@@ -251,7 +251,7 @@ func TestRmEntry_ProfiledEntry_NamesMainRm(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error for a profiled entry")
 	}
-	if !strings.Contains(err.Error(), "profiles main rm gitconfig") {
+	if !strings.Contains(errWithTip(err), "profiles main rm gitconfig") {
 		t.Fatalf("error does not name the undeclaring command: %v", err)
 	}
 	if _, statErr := os.Lstat(filepath.Join(nsDir, "gitconfig")); statErr != nil {

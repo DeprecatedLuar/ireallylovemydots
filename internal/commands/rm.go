@@ -29,6 +29,12 @@ const (
 	choiceCancel = "c"
 )
 
+// Follow-up tips shared by the removal and restore refusals.
+const (
+	unpushedTip = "run `dots sync` first, or --force to override"
+	occupiedTip = "rerun with --force to trash the occupant(s) and restore, or answer interactively"
+)
+
 // rootNamespaceRefusal explains why a root namespace cannot be removed on
 // its own: it is the repository's root folder.
 const rootNamespaceRefusal = "%q is the root namespace of repository %q and is always installed; it goes away only with `dots repo rm %s`"
@@ -50,7 +56,7 @@ func errRootNamespace(loc namespace.Located) error {
 // anywhere), which has no filesystem path at all, so name is the only
 // identifier that works for every entry, not just linked ones.
 func rmEntry(name string, names []string, flags shared.Flags) error {
-	loc, err := resolveNamespace(name, flags)
+	loc, err := resolveInstalled(name, flags)
 	if err != nil {
 		return err
 	}
@@ -113,8 +119,9 @@ func clearProfileMembership(namespaceDir, namespaceName, entryName string, flags
 		return nil
 	}
 	if !flags.Force {
-		return fmt.Errorf("%q is profiled; run `dots namespace %s profiles main rm %s` first, or --force to collapse it",
-			entryName, namespaceName, entryName)
+		return ui.WithTip(
+			fmt.Errorf("%q is profiled", entryName),
+			fmt.Sprintf("run `dots namespace %s profiles main rm %s` first, or --force to collapse it", namespaceName, entryName))
 	}
 
 	holding, err := profile.OverridingProfiles(namespaceDir, entryName)
@@ -147,7 +154,7 @@ func rmNamespaces(names []string, flags shared.Flags) error {
 	rows := make([]ui.Entry, 0, len(names))
 	repoNamespaces := map[string][]string{}
 	for _, name := range names {
-		loc, err := resolveNamespace(name, flags)
+		loc, err := resolveInstalled(name, flags)
 		if err != nil {
 			return err
 		}
@@ -450,17 +457,19 @@ func checkGitSafety(repoName, repoDir string, namespaces []string, blockRootFile
 			if rootFiles > 0 {
 				header = fmt.Sprintf("%s, plus %d repo-root file(s)", strings.TrimSuffix(header, ":"), rootFiles) + ":"
 			}
-			msg := ui.List(header, scoped, "run `dots sync` first, or --force to override")
+			msg := ui.List(header, scoped, unpushedTip)
 			return fmt.Errorf("%s", msg)
 		}
 	}
 	if st.Unpushed > 0 {
-		return fmt.Errorf("%q has %d commit(s) not pushed to its remote; run `dots sync` first, or --force to override",
-			repoName, st.Unpushed)
+		return ui.WithTip(
+			fmt.Errorf("%q has %d commit(s) not pushed to its remote", repoName, st.Unpushed),
+			unpushedTip)
 	}
 	if !st.HasRemote {
-		return fmt.Errorf("%q has no remote; this clone is the only copy of its content, add one with `git remote add origin <url>`, or --force to override",
-			repoName)
+		return ui.WithTip(
+			fmt.Errorf("%q has no remote; this clone is the only copy of its content", repoName),
+			"add one with `git remote add origin <url>`, or --force to override")
 	}
 	return nil
 }
@@ -596,8 +605,9 @@ func restoreEntries(loc namespace.Located, nsName string, entries []manifest.Ent
 			// --force resolves every occupied destination as [t]: trash the
 			// occupant and restore ours.
 		} else if !ui.Interactive() {
-			return nil, fmt.Errorf("cannot restore %q non-interactively:\n%s\nrerun with --force to trash the occupant(s) and restore, or answer interactively",
-				nsName, renderRestoreProblems(problems))
+			return nil, ui.WithTip(
+				fmt.Errorf("cannot restore %q non-interactively:\n%s", nsName, renderRestoreProblems(problems)),
+				occupiedTip)
 		} else {
 			choice, err := ui.Prompt(
 				fmt.Sprintf("restoring %q has %d occupied destination(s):\n%s\n", nsName, len(problems), renderRestoreProblems(problems)),
