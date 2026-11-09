@@ -36,7 +36,7 @@ const (
 	removalDeclinedMsg = "removal declined; nothing applied"
 	discardNeedsScope  = "--discard needs namespaces or --repo: dots sync <namespace> --discard"
 	modeFlagNeedsScope = "a sync mode flag needs namespaces or --repo: dots sync <namespace> --%s"
-	repoArgHint        = "%q is a repository; sync takes namespaces, so use: dots sync --repo %s"
+	bothReadingsMsg    = "%q names both a namespace and a repository; use <repo>/%[1]s for the namespace, or --repo %[1]s for the repository"
 )
 
 // removalLimit is how many upstream-deleted namespaces one sync removes
@@ -136,7 +136,7 @@ func HandleSync(args []string, flags shared.Flags) error {
 
 // syncScopes resolves sync's arguments: no arguments is every repository
 // (or --repo's one) whole; otherwise each argument is a namespace, bare or
-// repo-qualified, grouped by its repository.
+// repo-qualified, or a repository synced whole, grouped by repository.
 func syncScopes(dataDir string, repos []manifest.Repo, args []string, repoSpec string) ([]syncScope, error) {
 	if len(args) == 0 {
 		if repoSpec == "" {
@@ -155,8 +155,9 @@ func syncScopes(dataDir string, repos []manifest.Repo, args []string, repoSpec s
 
 	var scopes []syncScope
 	index := map[string]int{}
+	whole := map[string]bool{}
 	for _, arg := range args {
-		r, ns, err := resolveSyncArg(dataDir, repos, arg, repoSpec)
+		r, ns, isWhole, err := resolveSyncArg(dataDir, repos, arg, repoSpec)
 		if err != nil {
 			return nil, err
 		}
@@ -166,22 +167,43 @@ func syncScopes(dataDir string, repos []manifest.Repo, args []string, repoSpec s
 			index[r.Name] = i
 			scopes = append(scopes, syncScope{repo: r, named: map[string]bool{}})
 		}
-		scopes[i].named[ns] = true
+		if isWhole {
+			whole[r.Name] = true
+			scopes[i].named = nil
+		}
+		if !whole[r.Name] {
+			scopes[i].named[ns] = true
+		}
 	}
 	return scopes, nil
 }
 
 // resolveSyncArg resolves one sync argument to its repository and
-// namespace. A bare repository name is refused, pointing at --repo.
-func resolveSyncArg(dataDir string, repos []manifest.Repo, arg, repoSpec string) (manifest.Repo, string, error) {
-	loc, err := namespace.Resolve(dataDir, repos, arg, repoSpec)
-	if err == nil {
-		return loc.Repo, loc.Name, nil
+// namespace, or to a whole repository (whole true), per concept.md "Sync":
+// namespace first, a repository only when no namespace matches, both an
+// error unless the namespace is that repository's own root namespace. With
+// --repo every argument is a namespace.
+func resolveSyncArg(dataDir string, repos []manifest.Repo, arg, repoSpec string) (manifest.Repo, string, bool, error) {
+	asRepo, repoErr := repo.Resolve(repos, arg)
+	if repoSpec != "" || repoErr != nil {
+		loc, err := namespace.Resolve(dataDir, repos, arg, repoSpec)
+		return loc.Repo, loc.Name, false, err
 	}
-	if r, repoErr := repo.Resolve(repos, arg); repoErr == nil {
-		return manifest.Repo{}, "", fmt.Errorf(repoArgHint, arg, r.Name)
+	holders, err := namespace.Candidates(dataDir, repos, arg)
+	if err != nil {
+		return manifest.Repo{}, "", false, err
 	}
-	return manifest.Repo{}, "", err
+	if len(holders) == 0 {
+		return asRepo, "", true, nil
+	}
+	root, err := repo.RootName(filepath.Join(dataDir, asRepo.Name))
+	if err != nil {
+		return manifest.Repo{}, "", false, err
+	}
+	if len(holders) == 1 && holders[0].Name == asRepo.Name && root == arg {
+		return asRepo, arg, false, nil
+	}
+	return manifest.Repo{}, "", false, fmt.Errorf(bothReadingsMsg, arg)
 }
 
 // syncRepo runs one repository: rewind removed namespaces (writable only),

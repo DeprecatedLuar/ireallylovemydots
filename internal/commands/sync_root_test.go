@@ -217,3 +217,30 @@ func TestSync_RootDotsDeletedUpstreamTrashesLocalEdits(t *testing.T) {
 		t.Fatalf("expected the local README.md edit in the trash, found %v", trashed)
 	}
 }
+
+// A root namespace named after its own repository resolves to the
+// namespace, not the whole repository.
+func TestHandleSync_RootNamespaceNamedLikeItsRepositoryIsTheNamespace(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRootSyncRepo(t, dataDir, scratchRoot)
+	if err := manifest.Write(repoDir, manifest.Manifest{Name: "dotfiles"}); err != nil {
+		t.Fatal(err)
+	}
+	syncGitRun(t, repoDir, "add", "-A")
+	syncGitRun(t, repoDir, "commit", "-m", "rename root")
+	syncGitRun(t, repoDir, "push", "origin", "main")
+	writeTestFile(t, filepath.Join(repoDir, "init.lua"), "local")
+	writeTestFile(t, filepath.Join(repoDir, "shell", "file"), "local shell")
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync([]string{"dotfiles"}, shared.Flags{}) })
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if got := remoteFile(t, remote, "init.lua"); got != "local" {
+		t.Fatalf("remote init.lua = %q, want the root namespace synced", got)
+	}
+	if got := remoteFile(t, remote, "shell/file"); got == "local shell" {
+		t.Fatal("shell was pushed; the argument named the root namespace, not the repository")
+	}
+}

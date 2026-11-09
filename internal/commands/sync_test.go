@@ -788,12 +788,55 @@ func TestHandleSync_ModeFlagWithoutTargetErrors(t *testing.T) {
 	}
 }
 
-func TestHandleSync_RepoNameAsArgumentPointsAtRepoFlag(t *testing.T) {
+func TestHandleSync_RepoNameAsArgumentSyncsWholeRepo(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a", "b"})
+	writeTestFile(t, filepath.Join(repoDir, "a", "file"), "local a")
+	writeTestFile(t, filepath.Join(repoDir, "b", "file"), "local b")
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync([]string{"repo"}, shared.Flags{}) })
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	for _, ns := range []string{"a", "b"} {
+		if got := remoteFile(t, remote, ns+"/file"); got != "local "+ns {
+			t.Fatalf("remote %s/file = %q, want it pushed", ns, got)
+		}
+	}
+}
+
+func TestHandleSync_RepoArgumentWidensOverItsNamedNamespace(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a", "b"})
+	writeTestFile(t, filepath.Join(repoDir, "b", "file"), "local b")
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync([]string{"repo/a", "repo"}, shared.Flags{}) })
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if got := remoteFile(t, remote, "b/file"); got != "local b" {
+		t.Fatalf("remote b/file = %q, want b synced: naming the repository widens the scope", got)
+	}
+}
+
+func TestHandleSync_NameMatchingNamespaceAndRepositoryErrors(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	newRegisteredRepo(t, dataDir, scratchRoot, "dots", []string{"a"})
+	newRegisteredRepo(t, dataDir, scratchRoot, "other", []string{"dots"})
+	err := HandleSync([]string{"dots"}, shared.Flags{})
+	if err == nil || !strings.Contains(err.Error(), "both") {
+		t.Fatalf("err = %v, want an error naming both readings", err)
+	}
+}
+
+func TestHandleSync_RepoFlagNeverFallsBackToARepository(t *testing.T) {
 	dataDir, scratchRoot := setupSyncEnv(t)
 	newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a"})
-	err := HandleSync([]string{"repo"}, shared.Flags{})
-	if err == nil || !strings.Contains(err.Error(), "--repo") {
-		t.Fatalf("err = %v, want a hint naming --repo", err)
+	newRegisteredRepo(t, dataDir, scratchRoot, "other", []string{"b"})
+	if err := HandleSync([]string{"other"}, shared.Flags{Repo: "repo"}); err == nil {
+		t.Fatal("expected an error: with --repo every argument is a namespace in it")
 	}
 }
 
