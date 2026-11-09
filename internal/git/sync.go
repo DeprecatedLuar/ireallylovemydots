@@ -1,7 +1,9 @@
 package git
 
 import (
+	"errors"
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 )
@@ -47,18 +49,20 @@ type Prepared struct {
 	Head             string
 	Remote           string
 	Onto             string
-	Units            []Unit
-	local            string
-	merged           string
-	mergedLocal      string
-	mergedRemote     string
+	// Notes are the server's messages from the fetch.
+	Notes        []string
+	Units        []Unit
+	local        string
+	merged       string
+	mergedLocal  string
+	mergedRemote string
 }
 
-// Prepare snapshots dir's working tree, fetches its branch, and merges the
-// two in memory. Every entry is merged against its owner's base: heldBases'
+// Prepare snapshots dir's working tree, fetches its branch (live streams
+// git's output), and merges the two in memory. Every entry is merged against its owner's base: heldBases'
 // commit for an owner sync held earlier, else the merge base of HEAD and
 // the remote. Nothing in dir changes except the remote-tracking ref.
-func Prepare(dir string, heldBases map[string]string, owner OwnerFunc) (Prepared, error) {
+func Prepare(dir string, heldBases map[string]string, owner OwnerFunc, live bool) (Prepared, error) {
 	if isRebaseInProgress(dir) {
 		if out, err := gitCmd(dir, "rebase", "--abort"); err != nil {
 			return Prepared{}, fmt.Errorf("recover interrupted sync in %s: %s", dir, strings.TrimSpace(out))
@@ -75,7 +79,7 @@ func Prepare(dir string, heldBases map[string]string, owner OwnerFunc) (Prepared
 	}
 	p := Prepared{RemoteConfigured: remoteConfigured, Head: head}
 	if remoteConfigured {
-		if p.Remote, err = fetchRemoteHead(dir); err != nil {
+		if p.Remote, p.Notes, err = fetchRemoteHead(dir, live); err != nil {
 			return Prepared{}, err
 		}
 	}
@@ -161,24 +165,27 @@ func Prepare(dir string, heldBases map[string]string, owner OwnerFunc) (Prepared
 	return p, nil
 }
 
-// fetchRemoteHead fetches dir's current branch and returns the remote
-// head, or "" when the remote has no such branch yet.
-func fetchRemoteHead(dir string) (string, error) {
+// fetchRemoteHead fetches origin and returns dir's branch's remote head, or
+// "" when the remote has no such branch yet, with the server's notes.
+func fetchRemoteHead(dir string, live bool) (string, []string, error) {
 	branch, err := getCurrentBranch(dir)
 	if err != nil || branch == "" {
-		return "", fmt.Errorf("sync requires an attached branch in %s", dir)
+		return "", nil, fmt.Errorf("sync requires an attached branch in %s", dir)
 	}
-	heads, err := gitCmd(dir, "ls-remote", "--heads", remoteName, "refs/heads/"+branch)
+	notes, err := fetch(dir, live)
 	if err != nil {
-		return "", fmt.Errorf("inspect remote for %s: %s", dir, strings.TrimSpace(heads))
+		return "", nil, err
 	}
-	if strings.TrimSpace(heads) == "" {
-		return "", nil
+	ref := "refs/remotes/" + remoteName + "/" + branch
+	out, err := gitCmd(dir, "rev-parse", "--verify", "-q", ref)
+	if err == nil {
+		return strings.TrimSpace(out), notes, nil
 	}
-	if err := fetch(dir, branch); err != nil {
-		return "", err
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && strings.TrimSpace(out) == "" {
+		return "", notes, nil
 	}
-	return resolveRef(dir, "refs/remotes/"+remoteName+"/"+branch)
+	return "", nil, fmt.Errorf("resolve %s in %s: %s", ref, dir, strings.TrimSpace(out))
 }
 
 // assembleBase returns the top-level entries of the base every entry is

@@ -70,6 +70,8 @@ type syncResult struct {
 	held     []heldUnit
 	leftAsIs []string
 	removed  []string
+	// notes are the server's messages and sync's notices, shown dim.
+	notes []string
 }
 
 // HandleSync implements `dots sync [<ns>...] [--repo <repo>] [--<mode>]`:
@@ -204,11 +206,12 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 		res.err = err
 		return res
 	}
-	p, err := git.Prepare(repoDir, heldBases(s, name), unitOwner(rootName))
+	p, err := git.Prepare(repoDir, heldBases(s, name), unitOwner(rootName), flags.Debug)
 	if err != nil {
 		res.err = err
 		return res
 	}
+	res.notes = append(res.notes, p.Notes...)
 
 	decided, members := ownerUnits(p.Units, rootName)
 	placements := map[string]git.Placement{}
@@ -293,7 +296,8 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 	}
 
 	if pushable && !readOnly {
-		if err := git.Push(repoDir); err != nil {
+		notes, err := git.Push(repoDir, flags.Debug)
+		if err != nil {
 			if errors.Is(err, git.ErrPushAuthFailed) {
 				recordReadOnly(name, true)
 			}
@@ -301,6 +305,7 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 			return res
 		}
 		recordReadOnly(name, false)
+		res.notes = append(res.notes, notes...)
 	}
 	return res
 }

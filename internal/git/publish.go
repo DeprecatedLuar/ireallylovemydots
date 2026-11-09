@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 
@@ -15,6 +16,43 @@ import (
 // remoteName is the only remote sync ever talks to — the one repo.Clone
 // and repo init's `git remote add` both name origin.
 const remoteName = "origin"
+
+// Steps a network failure is reported under, per concept.md "Sync output".
+const (
+	StepFetch = "fetch failed"
+	StepPush  = "push failed"
+)
+
+// remotePrefix starts a line the server sent, as git relays it.
+const remotePrefix = "remote:"
+
+// stockLines are git's lines that only restate a failure.
+var stockLines = []string{
+	"fatal: Could not read from remote repository.",
+	"Please make sure you have the correct access rights",
+	"and the repository exists.",
+}
+
+// promptEnv keeps git from prompting where nobody can see the question.
+var promptEnv = []string{"GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=never"}
+
+// NetError is a fetch or push that failed: the step, and git's output with
+// its stock lines dropped.
+type NetError struct {
+	Step   string
+	Output string
+	auth   bool
+}
+
+func (e *NetError) Error() string { return e.Step + ": " + e.Output }
+
+// Unwrap exposes ErrPushAuthFailed for a push rejected for credentials.
+func (e *NetError) Unwrap() error {
+	if e.auth {
+		return ErrPushAuthFailed
+	}
+	return nil
+}
 
 // pushAuthFailureMarkers are substrings git's push stderr is known to carry
 // when a push is rejected for lack of credentials, matched case-sensitively
@@ -41,28 +79,18 @@ var pushAuthFailureMarkers = []string{
 // changes nothing."
 var ErrPushAuthFailed = errors.New("push rejected for authentication")
 
-// Push pushes dir's current branch to origin, streaming output live
-// through gitutil.CappedWriter so a slow push is never silent. A failure
-// rejected for authentication is wrapped in ErrPushAuthFailed so callers can
-// tell it apart from every other kind of push failure.
-func Push(dir string) error {
+// Push pushes dir's current branch to origin and returns the server's
+// notes. A rejection for credentials unwraps to ErrPushAuthFailed.
+func Push(dir string, live bool) ([]string, error) {
 	branch, err := getCurrentBranch(dir)
 	if err != nil || branch == "" {
-		return fmt.Errorf("push requires an attached branch in %s", dir)
+		return nil, fmt.Errorf("push requires an attached branch in %s", dir)
 	}
-	cmd := exec.Command("git", "push", "-u", remoteName, branch)
-	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	var tail gitutil.CappedWriter
-	cmd.Stderr = io.MultiWriter(os.Stderr, &tail)
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(tail.String())
-		if isPushAuthFailure(msg) {
-			return fmt.Errorf("push %s: %s: %w", dir, msg, ErrPushAuthFailed)
-		}
-		return fmt.Errorf("push %s: %s", dir, msg)
+	stderr, err := runNet(dir, live, "push", "-u", remoteName, branch)
+	if err != nil {
+		return nil, &NetError{Step: StepPush, Output: failureOutput(stderr, err), auth: isPushAuthFailure(stderr)}
 	}
-	return nil
+	return remoteNotes(stderr), nil
 }
 
 // isPushAuthFailure reports whether a push's stderr names an authentication
@@ -76,18 +104,84 @@ func isPushAuthFailure(stderr string) bool {
 	return false
 }
 
-// fetch fetches branch from origin, streaming output live through
-// gitutil.CappedWriter so a slow fetch is never silent.
-func fetch(dir, branch string) error {
-	cmd := exec.Command("git", "fetch", "--prune", remoteName, branch)
-	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	var tail gitutil.CappedWriter
-	cmd.Stderr = io.MultiWriter(os.Stderr, &tail)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("fetch %s: %s", dir, strings.TrimSpace(tail.String()))
+// fetch fetches origin's branches and returns the server's notes.
+func fetch(dir string, live bool) ([]string, error) {
+	stderr, err := runNet(dir, live, "fetch", "--prune", remoteName)
+	if err != nil {
+		return nil, &NetError{Step: StepFetch, Output: failureOutput(stderr, err)}
 	}
-	return nil
+	return remoteNotes(stderr), nil
+}
+
+// runNet runs a network git command in dir and returns its stderr. live
+// streams it to the terminal and leaves git free to prompt; otherwise it is
+// captured and prompting is off.
+func runNet(dir string, live bool, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	var tail gitutil.CappedWriter
+	if live {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = io.MultiWriter(os.Stderr, &tail)
+	} else {
+		cmd.Stderr = &tail
+		cmd.Env = withPromptsOff(os.Environ())
+	}
+	err := cmd.Run()
+	return tail.String(), err
+}
+
+// withPromptsOff appends each promptEnv entry env does not already set.
+func withPromptsOff(env []string) []string {
+	out := env
+	for _, kv := range promptEnv {
+		key, _, _ := strings.Cut(kv, "=")
+		set := slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, key+"=") })
+		if !set {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// failureOutput is what a failed network command shows: its cleaned
+// stderr, or the run error when git wrote nothing.
+func failureOutput(stderr string, err error) string {
+	if out := cleanOutput(stderr); out != "" {
+		return out
+	}
+	return err.Error()
+}
+
+// cleanOutput drops blank and stock lines from git's stderr and writes
+// $HOME as ~.
+func cleanOutput(stderr string) string {
+	home := os.Getenv("HOME")
+	var kept []string
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimRight(line, " \r")
+		if line == "" || slices.Contains(stockLines, strings.TrimSpace(line)) {
+			continue
+		}
+		if home != "" {
+			line = strings.ReplaceAll(line, home, "~")
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// remoteNotes returns the server's non-empty lines from git's stderr,
+// trailing padding trimmed.
+func remoteNotes(stderr string) []string {
+	var notes []string
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimRight(line, " \r")
+		if strings.HasPrefix(line, remotePrefix) && strings.TrimSpace(strings.TrimPrefix(line, remotePrefix)) != "" {
+			notes = append(notes, line)
+		}
+	}
+	return notes
 }
 
 // commitStaged commits whatever is currently staged in dir, deriving the

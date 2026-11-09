@@ -111,7 +111,7 @@ func TestPrepareFinish_MergeBothSidesAndPushable(t *testing.T) {
 	pushEdit(t, first, "a/file", "remote")
 	writeReconcileFile(t, second, "b/file", "local")
 
-	p, err := Prepare(second, nil, nil)
+	p, err := Prepare(second, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestPrepareFinish_BloblessCloneRemoteRootFileChange(t *testing.T) {
 	configureReconcileRepo(t, blobless)
 	pushEdit(t, first, "seed", "remote")
 
-	p, err := Prepare(blobless, nil, nil)
+	p, err := Prepare(blobless, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestPrepareFinish_OverlayKeepsEditsOnTopUncommitted(t *testing.T) {
 
 	overlay := Placement{Commit: SourceRemote, Worktree: SourceMerged}
 	for round := 0; round < 2; round++ {
-		p, err := Prepare(second, nil, nil)
+		p, err := Prepare(second, nil, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -220,7 +220,7 @@ func TestPrepareFinish_ReadOnlyOverlayWithoutIdentity(t *testing.T) {
 		os.Unsetenv(v)
 	}
 
-	p, err := Prepare(second, nil, nil)
+	p, err := Prepare(second, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestPrepare_ConflictReportedPerUnitAndHeldBaseKeepsItDetected(t *testing.T)
 	pushEdit(t, first, "ns/file", "remote")
 	writeReconcileFile(t, second, "ns/file", "local")
 
-	p, err := Prepare(second, nil, nil)
+	p, err := Prepare(second, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,14 +259,14 @@ func TestPrepare_ConflictReportedPerUnitAndHeldBaseKeepsItDetected(t *testing.T)
 		t.Fatal("held namespace's file was touched")
 	}
 
-	again, err := Prepare(second, map[string]string{"ns": u.Base}, nil)
+	again, err := Prepare(second, map[string]string{"ns": u.Base}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(unitNamed(t, again, "ns").Conflicts) == 0 {
 		t.Fatal("with the held base the conflict must still be detected")
 	}
-	without, err := Prepare(second, nil, nil)
+	without, err := Prepare(second, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestPrepare_RemoteDeletesLocallyEditedNamespaceConflicts(t *testing.T) {
 	gitRun(t, first, "push", "origin", "main")
 	writeReconcileFile(t, second, "ns/file", "local")
 
-	p, err := Prepare(second, nil, nil)
+	p, err := Prepare(second, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestFinish_LocalPlacementReplacesRemote(t *testing.T) {
 	pushEdit(t, first, "ns/file", "remote")
 	writeReconcileFile(t, second, "ns/file", "local")
 
-	p, err := Prepare(second, nil, nil)
+	p, err := Prepare(second, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestFinish_LocalPlacementReplacesRemote(t *testing.T) {
 func TestFinish_ReadOnlyRefusesToCommit(t *testing.T) {
 	_, _, second := newReconcileClones(t)
 	writeReconcileFile(t, second, "ns/file", "local")
-	p, err := Prepare(second, nil, nil)
+	p, err := Prepare(second, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestFinish_NoRemoteCommitsLocally(t *testing.T) {
 	configureReconcileRepo(t, dir)
 	writeReconcileFile(t, dir, "ns/file", "content")
 
-	p, err := Prepare(dir, nil, nil)
+	p, err := Prepare(dir, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +366,7 @@ func TestPrepare_OwnerGroupsUnitsAndSharesTheirHeldBase(t *testing.T) {
 		}
 		return "root"
 	}
-	p, err := Prepare(second, map[string]string{"root": base}, owner)
+	p, err := Prepare(second, map[string]string{"root": base}, owner, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +404,7 @@ func TestPrepareFinish_SettleKeepsCleanChangesFromBothSides(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, second := conflictFixture(t)
-			p, err := Prepare(second, nil, nil)
+			p, err := Prepare(second, nil, nil, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -445,7 +445,7 @@ func fileDirFixture(t *testing.T) string {
 
 func TestPrepare_FileDirectoryConflictReportsRealPath(t *testing.T) {
 	second := fileDirFixture(t)
-	p, err := Prepare(second, nil, nil)
+	p, err := Prepare(second, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +457,7 @@ func TestPrepare_FileDirectoryConflictReportsRealPath(t *testing.T) {
 func TestPrepareFinish_FileDirectoryConflictSettlesEitherWay(t *testing.T) {
 	t.Run("local file wins", func(t *testing.T) {
 		second := fileDirFixture(t)
-		p, err := Prepare(second, nil, nil)
+		p, err := Prepare(second, nil, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -475,7 +475,7 @@ func TestPrepareFinish_FileDirectoryConflictSettlesEitherWay(t *testing.T) {
 	})
 	t.Run("remote folder wins", func(t *testing.T) {
 		second := fileDirFixture(t)
-		p, err := Prepare(second, nil, nil)
+		p, err := Prepare(second, nil, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -501,7 +501,7 @@ func TestPrepareFinish_BloblessCloneSettlesConflict(t *testing.T) {
 	pushEdit(t, first, "ns/a", "remote")
 	writeReconcileFile(t, blobless, "ns/a", "local")
 
-	p, err := Prepare(blobless, nil, nil)
+	p, err := Prepare(blobless, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

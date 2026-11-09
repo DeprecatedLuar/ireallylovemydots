@@ -1,10 +1,8 @@
 // git.go holds the small, low-level git primitives sync is built
 // from: running a command in a repository, reading its current branch,
 // detecting an interrupted rebase, and resolving a ref to its commit hash.
-// Adapted from dredge's internal/git/git.go, not ported — dots' version
-// drops runGitCommand in favor of streaming commands (fetch, push) through
-// gitutil.CappedWriter so a slow network call is never silent; see
-// reconcile.go.
+// Adapted from dredge's internal/git/git.go, not ported; network
+// commands (fetch, push) run through publish.go's runNet.
 package git
 
 import (
@@ -17,8 +15,7 @@ import (
 
 // gitCmd runs a git command in dir and returns its combined output. Used
 // for local, fast commands whose output is either discarded or parsed —
-// never for a command that can block on the network, which streams
-// through reconcile.go's fetch/Push instead.
+// Never used for a command that can block on the network; those run through runNet.
 func gitCmd(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
