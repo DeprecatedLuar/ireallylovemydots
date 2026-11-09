@@ -126,8 +126,8 @@ func conflictTip(results []syncResult) string {
 
 // HandleSync implements `dots sync [<ns>...] [--repo <repo>] [--<mode>]`:
 // every registered repository, one (--repo), or only the named namespaces.
-// Every repository is attempted; a failure or a conflict-held namespace
-// XX
+// Every repository is attempted and reported as it finishes; a failure or a
+// conflict-held namespace makes the run exit non-zero via ErrSomeSkipped.
 func HandleSync(args []string, flags shared.Flags) error {
 	var flagMode syncmode.Mode
 	if flags.SyncMode != "" {
