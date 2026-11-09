@@ -21,16 +21,13 @@ import (
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
-// Summary guidance under a repository that held a namespace on a conflict.
-// %[1]s is the namespace, or a placeholder when several were held.
+// Sync result messages. conflictTipMsg takes the namespace, or tipPlaceholder
+// when several were held.
 const (
-	heldLabel          = "held"
-	heldRunLine        = "  run: dots sync %[1]s --overlay | --overwrite-local | --overwrite-remote (pushes)"
-	heldManualLine     = "       or edit %[1]s by hand, then: dots sync %[1]s --overwrite-remote"
-	heldPlaceholder    = "<namespace>"
-	heldPathIndent     = "    "
-	leftAsIsLabel      = "left as-is: "
-	removedLabel       = "removed upstream: "
+	stepConflict       = "conflict"
+	conflictTipMsg     = "tip: dots sync %s --overwrite-remote | --overwrite-local"
+	tipPlaceholder     = "<namespace>"
+	alreadyPushedMsg   = "%s already pushed; removing it locally cannot unpublish it — rotate any credential it held"
 	removalNeedsYesMsg = "would remove %d namespaces deleted upstream (%s); rerun with -y to confirm"
 	removalPromptMsg   = "%q: %d namespaces were deleted upstream and will be removed here (unlinked, folders trashed):"
 	removalDeclinedMsg = "removal declined; nothing applied"
@@ -58,27 +55,79 @@ func (s syncScope) inScope(u git.Unit) bool {
 	return !u.Dir || s.named == nil || s.named[u.Name]
 }
 
-// heldUnit is a namespace held on a conflict, with its conflicted paths.
-type heldUnit struct {
-	name  string
-	paths []string
-}
-
-// syncResult is one repository's outcome, held for the end-of-run summary.
+// syncResult is one repository's outcome, per concept.md "Sync output".
 type syncResult struct {
-	name     string
-	err      error
-	held     []heldUnit
-	leftAsIs []string
-	removed  []string
+	name string
+	// step is the step that failed: stepConflict, a git.NetError's step,
+	// or "" for none.
+	step string
+	err  error
+	// nodes are the tree under the result line.
+	nodes []ui.TreeNode
+	// held are the namespaces held on a conflict.
+	held []string
+	// removed are the namespaces removed upstream and applied here.
+	removed []string
 	// notes are the server's messages and sync's notices, shown dim.
 	notes []string
+}
+
+func (r syncResult) failed() bool { return r.step != "" || r.err != nil }
+
+// fail records err, naming its step when it is a network failure.
+func (r *syncResult) fail(err error) {
+	r.err = err
+	var ne *git.NetError
+	if errors.As(err, &ne) {
+		r.step = ne.Step
+	}
+}
+
+// renderSyncResult renders a repository's line, its tree, its error, and
+// its notes.
+func renderSyncResult(res syncResult) string {
+	var b strings.Builder
+	b.WriteString(ui.SyncLine(!res.failed(), res.name, res.step))
+	b.WriteString(ui.Tree(res.nodes))
+	if res.err != nil {
+		b.WriteString(ui.Note(errDetail(res.err)))
+	}
+	for _, n := range res.notes {
+		b.WriteString(ui.Note(n))
+	}
+	return b.String()
+}
+
+// errDetail is what prints under a failed line: git's cleaned output for a
+// network failure, the error otherwise.
+func errDetail(err error) string {
+	var ne *git.NetError
+	if errors.As(err, &ne) {
+		return ne.Output
+	}
+	return err.Error()
+}
+
+// conflictTip names the flags that settle the run's held conflicts, or ""
+// when nothing was held.
+func conflictTip(results []syncResult) string {
+	var held []string
+	for _, r := range results {
+		held = append(held, r.held...)
+	}
+	switch len(held) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf(conflictTipMsg, held[0])
+	}
+	return fmt.Sprintf(conflictTipMsg, tipPlaceholder)
 }
 
 // HandleSync implements `dots sync [<ns>...] [--repo <repo>] [--<mode>]`:
 // every registered repository, one (--repo), or only the named namespaces.
 // Every repository is attempted; a failure or a conflict-held namespace
-// makes the run exit non-zero via ErrSomeSkipped after the summary prints.
+// XX
 func HandleSync(args []string, flags shared.Flags) error {
 	var flagMode syncmode.Mode
 	if flags.SyncMode != "" {
@@ -121,13 +170,16 @@ func HandleSync(args []string, flags shared.Flags) error {
 
 	results := make([]syncResult, 0, len(scopes))
 	for _, sc := range scopes {
-		fmt.Printf("\n%s\n", sc.repo.Name)
-		results = append(results, syncRepo(dataDir, sc, flagMode, access.IsReadOnly(sc.repo.Name), flags))
+		res := syncRepo(dataDir, sc, flagMode, access.IsReadOnly(sc.repo.Name), flags)
+		fmt.Print(renderSyncResult(res))
+		results = append(results, res)
 	}
-	printSyncSummary(results)
+	if tip := conflictTip(results); tip != "" {
+		fmt.Fprintf(os.Stderr, "\n%s\n", ui.Tip(tip))
+	}
 
 	for _, res := range results {
-		if res.err != nil || len(res.held) > 0 {
+		if res.failed() {
 			return ErrSomeSkipped
 		}
 	}
@@ -207,34 +259,42 @@ func resolveSyncArg(dataDir string, repos []manifest.Repo, arg, repoSpec string)
 }
 
 // syncRepo runs one repository: rewind removed namespaces (writable only),
-// prepare, decide each unit, trash what overwrite-local discards, apply,
-// reapply the cone, forget a root namespace renamed upstream, record held
-// bases, then push.
+// then, under the spinner, prepare, decide each unit, trash what is
+// dropped, apply, reapply the cone, forget a root namespace renamed
+// upstream, record held bases, and push. The spinner pauses for the
+// upstream-removal confirmation.
 func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly bool, flags shared.Flags) syncResult {
 	name := sc.repo.Name
 	repoDir := filepath.Join(dataDir, name)
 	res := syncResult{name: name}
 
 	if !readOnly {
-		if err := rewindRemovedNamespaces(repoDir, name, flags); err != nil {
-			res.err = err
+		notice, err := rewindRemovedNamespaces(repoDir, name, flags)
+		if err != nil {
+			res.fail(err)
 			return res
+		}
+		if notice != "" {
+			res.notes = append(res.notes, notice)
 		}
 	}
 
+	sp := startSyncSpinner(name, flags.Debug)
+	defer func() { sp.Stop() }()
+
 	s, err := state.Read()
 	if err != nil {
-		res.err = err
+		res.fail(err)
 		return res
 	}
 	rootName, err := repo.RootName(repoDir)
 	if err != nil {
-		res.err = err
+		res.fail(err)
 		return res
 	}
 	p, err := git.Prepare(repoDir, heldBases(s, name), unitOwner(rootName), flags.Debug)
 	if err != nil {
-		res.err = err
+		res.fail(err)
 		return res
 	}
 	res.notes = append(res.notes, p.Notes...)
@@ -245,8 +305,15 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 	var trashed, conflicted []string
 	for _, u := range decided {
 		out, err := decideUnit(s, name, sc, u, flagMode, flags.Discard, readOnly)
+		if errors.Is(err, syncmode.ErrRootConflict) {
+			res.step = stepConflict
+			for _, path := range u.Conflicts {
+				res.nodes = append(res.nodes, ui.TreeNode{Name: path, Marker: ui.MarkerProblem})
+			}
+			return res
+		}
 		if err != nil {
-			res.err = err
+			res.fail(err)
 			return res
 		}
 		for _, m := range members[u.Name] {
@@ -255,7 +322,7 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 		if u.Dir && u.RemovedRemote && out.Placement.Worktree == git.SourceRemote {
 			here, err := installedHere(s, repoDir, name, u.Name)
 			if err != nil {
-				res.err = err
+				res.fail(err)
 				return res
 			}
 			if here {
@@ -274,56 +341,67 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 			conflicted = append(conflicted, u.Conflicts...)
 		case out.Held && len(u.Conflicts) > 0:
 			held[u.Name] = true
-			res.held = append(res.held, heldUnit{name: u.Name, paths: u.Conflicts})
+			res.step = stepConflict
+			res.held = append(res.held, u.Name)
+			res.nodes = append(res.nodes, ui.TreeNode{Name: u.Name, LeafMarker: ui.MarkerProblem, Paths: belowNamespace(u.Name, u.Conflicts)})
 		case out.Held:
 			held[u.Name] = true
-			res.leftAsIs = append(res.leftAsIs, u.Name)
+			res.nodes = append(res.nodes, ui.TreeNode{Name: u.Name, Dim: true})
 		}
 	}
 
-	if err := confirmUpstreamRemoval(name, res.removed, flags); err != nil {
-		res.err = err
-		res.removed = nil
-		return res
+	if needsRemovalConfirmation(res.removed, flags) {
+		sp.Stop()
+		err := confirmUpstreamRemoval(name, res.removed, flags)
+		sp = startSyncSpinner(name, flags.Debug)
+		if err != nil {
+			res.fail(err)
+			res.removed = nil
+			return res
+		}
 	}
 
 	if err := trashNamespaces(repoDir, trashed); err != nil {
-		res.err = err
+		res.fail(err)
 		return res
 	}
 	if err := discardDirtyPaths(repoDir, conflicted); err != nil {
-		res.err = err
+		res.fail(err)
 		return res
 	}
 	if err := dropRemovedNamespaces(repoDir, name, res.removed, rootName); err != nil {
-		res.err = err
+		res.fail(err)
 		return res
 	}
 	pushable, err := git.Finish(repoDir, p, placements, !readOnly)
 	if err != nil {
-		res.err = err
+		res.fail(err)
 		return res
 	}
 	if err := repo.Reapply(repoDir); err != nil {
-		res.err = err
+		res.fail(err)
 		return res
 	}
 	if rootName != "" && !slices.Contains(res.removed, rootName) {
 		renamed, err := repo.RootName(repoDir)
 		if err != nil {
-			res.err = err
+			res.fail(err)
 			return res
 		}
 		if renamed != rootName {
 			if err := dropRemovedNamespaces(repoDir, name, []string{rootName}, rootName); err != nil {
-				res.err = err
+				res.fail(err)
 				return res
 			}
 			res.removed = append(res.removed, rootName)
 		}
 	}
+	for _, n := range res.removed {
+		res.nodes = append(res.nodes, ui.TreeNode{Name: n, Marker: ui.MarkerRemovedUpstream})
+	}
+	slices.SortFunc(res.nodes, func(a, b ui.TreeNode) int { return strings.Compare(a.Name, b.Name) })
 	if err := recordHeldBases(name, decided, held); err != nil {
-		res.err = err
+		res.fail(err)
 		return res
 	}
 
@@ -333,7 +411,7 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 			if errors.Is(err, git.ErrPushAuthFailed) {
 				recordReadOnly(name, true)
 			}
-			res.err = err
+			res.fail(err)
 			return res
 		}
 		recordReadOnly(name, false)
@@ -420,10 +498,34 @@ func decideUnit(s state.State, repoName string, sc syncScope, u git.Unit, flagMo
 	return out, err
 }
 
+// startSyncSpinner starts the spinner on name's line, except under --debug,
+// where git streams its own output.
+func startSyncSpinner(name string, debug bool) *ui.Spinner {
+	if debug {
+		return nil
+	}
+	return ui.StartSpinner(name)
+}
+
+// needsRemovalConfirmation reports whether removing removed asks first.
+func needsRemovalConfirmation(removed []string, flags shared.Flags) bool {
+	return len(removed) > removalLimit && !flags.Yes
+}
+
+// belowNamespace returns paths relative to namespace ns; a root
+// namespace's paths carry no prefix and pass through unchanged.
+func belowNamespace(ns string, paths []string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = strings.TrimPrefix(p, ns+"/")
+	}
+	return out
+}
+
 // confirmUpstreamRemoval asks before one sync removes more than removalLimit
 // namespaces another machine deleted; -y skips the prompt.
 func confirmUpstreamRemoval(repoName string, removed []string, flags shared.Flags) error {
-	if len(removed) <= removalLimit || flags.Yes {
+	if !needsRemovalConfirmation(removed, flags) {
 		return nil
 	}
 	if !ui.Interactive() {
@@ -555,56 +657,6 @@ func trashNamespaces(repoDir string, entries []string) error {
 	return discardDirtyPaths(repoDir, dirty)
 }
 
-// printSyncSummary renders one line per repository: "!" for a failure or
-// a conflict-held namespace, "+" otherwise, noting namespaces removed
-// upstream and left as-is.
-func printSyncSummary(results []syncResult) {
-	lines := make([]string, 0, len(results))
-	for _, res := range results {
-		if res.err != nil {
-			lines = append(lines, ui.Operation(ui.MarkerProblem, res.name, res.err.Error()))
-			continue
-		}
-		var parts []string
-		if len(res.removed) > 0 {
-			parts = append(parts, removedLabel+strings.Join(res.removed, ", "))
-		}
-		if len(res.leftAsIs) > 0 {
-			parts = append(parts, leftAsIsLabel+strings.Join(res.leftAsIs, ", "))
-		}
-		detail := strings.Join(parts, "; ")
-		if len(res.held) > 0 {
-			if detail != "" {
-				detail += "; "
-			}
-			lines = append(lines, ui.Operation(ui.MarkerProblem, res.name, detail+heldDetail(res.held)))
-			continue
-		}
-		lines = append(lines, ui.Operation(ui.MarkerEnabled, res.name, detail))
-	}
-	fmt.Print(ui.Report(lines, ""))
-}
-
-// heldDetail lists each conflict-held namespace with its paths, then the
-// commands that settle it.
-func heldDetail(held []heldUnit) string {
-	var b strings.Builder
-	b.WriteString(heldLabel)
-	for _, h := range held {
-		paths := make([]string, len(h.paths))
-		for i, p := range h.paths {
-			paths[i] = strings.TrimPrefix(p, h.name+"/")
-		}
-		fmt.Fprintf(&b, "\n%s%s: %s", heldPathIndent, h.name, strings.Join(paths, ", "))
-	}
-	target := heldPlaceholder
-	if len(held) == 1 {
-		target = held[0].name
-	}
-	fmt.Fprintf(&b, "\n"+heldRunLine+"\n"+heldManualLine, target)
-	return b.String()
-}
-
 // discardDirtyPaths moves every dirty path in repoDir into the trash, per
 // concept.md "Read-only repositories": "Discard routes through the trash
 // like every other destructive path in dots, never through `git checkout`
@@ -650,38 +702,36 @@ func recordReadOnly(repoName string, readOnly bool) {
 // commit touching a removed namespace is still unpushed, this rewinds
 // past them and recommits the current tree instead, so that content never
 // reaches the remote at all. Content already pushed cannot be
-// unpublished this way — that's reported, not rewound, and sync proceeds
+// unpublished this way — that is returned as a notice, not rewound, and sync proceeds
 // with the ordinary deletion commit.
-func rewindRemovedNamespaces(repoDir, repoName string, flags shared.Flags) error {
+func rewindRemovedNamespaces(repoDir, repoName string, flags shared.Flags) (string, error) {
 	removed, err := git.StagedRemovals(repoDir)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if len(removed) == 0 {
-		return nil
+		return "", nil
 	}
 
 	pushed, err := git.PushedCommitsTouching(repoDir, removed)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if pushed > 0 {
-		fmt.Fprintf(os.Stderr, "%q: %s already pushed; removing it locally cannot unpublish it — rotate any credential it held\n",
-			repoName, strings.Join(removed, ", "))
-		return nil
+		return fmt.Sprintf(alreadyPushedMsg, strings.Join(removed, ", ")), nil
 	}
 
 	unpushed, err := git.UnpushedCommitsTouching(repoDir, removed)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if len(unpushed) == 0 {
-		return nil
+		return "", nil
 	}
 
 	if !flags.Yes {
 		if !ui.Interactive() {
-			return ui.WithTip(
+			return "", ui.WithTip(
 				fmt.Errorf("%q has %s removed but still only in unpushed commit(s)", repoName, strings.Join(removed, ", ")),
 				"rerun with -y to rewind them out of history before they're pushed")
 		}
@@ -692,17 +742,17 @@ func rewindRemovedNamespaces(repoDir, repoName string, flags shared.Flags) error
 		)
 		choice, err := ui.Prompt(block, "Do you want to proceed?", []string{"y", "N"})
 		if err != nil {
-			return err
+			return "", err
 		}
 		if !ui.IsYes(choice) {
 			fmt.Fprintln(os.Stderr, "\nrewind skipped; the deletion will commit normally")
-			return nil
+			return "", nil
 		}
 	}
 
 	target, err := git.RewindTarget(repoDir, removed)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return git.RewindAndRecommit(repoDir, target)
+	return "", git.RewindAndRecommit(repoDir, target)
 }

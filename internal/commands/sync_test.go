@@ -618,14 +618,15 @@ func TestHandleSync_ConflictHoldsOnlyThatNamespaceAndRecordsItsBase(t *testing.T
 	writeTestFile(t, filepath.Join(repoDir, "b", "file"), "local b")
 
 	var err error
-	stdout, _ := captureStdoutStderr(t, func() { err = HandleSync(nil, shared.Flags{}) })
+	stdout, stderr := captureStdoutStderr(t, func() { err = HandleSync(nil, shared.Flags{}) })
 	if !errors.Is(err, ErrSomeSkipped) {
 		t.Fatalf("err = %v, want ErrSomeSkipped for a held conflict", err)
 	}
-	for _, want := range []string{"held", "a: file", "dots sync a --overlay"} {
-		if !strings.Contains(stdout, want) {
-			t.Fatalf("summary missing %q:\n%s", want, stdout)
-		}
+	if want := "✗ repo (conflict)\n  └── a\n      └── ! file\n"; !strings.Contains(stdout, want) {
+		t.Fatalf("stdout missing %q:\n%s", want, stdout)
+	}
+	if !strings.Contains(stderr, "tip: dots sync a --overwrite-remote | --overwrite-local") {
+		t.Fatalf("stderr missing the conflict tip:\n%s", stderr)
 	}
 	if got := remoteFile(t, remote, "b/file"); got != "local b" {
 		t.Fatalf("remote b/file = %q, want b pushed despite a's conflict", got)
@@ -917,7 +918,7 @@ func TestHandleSync_UnchangedNamespaceDeletedUpstreamIsRemovedHere(t *testing.T)
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)
 	}
-	if !strings.Contains(stdout, "removed upstream: a") {
+	if !strings.Contains(stdout, "⊘ a") {
 		t.Fatalf("summary missing removal:\n%s", stdout)
 	}
 	assertRemovedHere(t, repoDir, "repo", "a", dest)
