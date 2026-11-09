@@ -243,3 +243,13 @@ func TestResolveRoute_SpecTokenRoutesToNamespace(t *testing.T) {
 		t.Fatalf("route = %+v, want namespace target with the spec as first arg", r)
 	}
 }
+
+func TestExtractGlobalFlags_Discard(t *testing.T) {
+	_, flags, err := extractGlobalFlags([]string{"sync", "a", "--discard"})
+	if err != nil || !flags.Discard {
+		t.Fatalf("flags = %+v, err = %v; want Discard set", flags, err)
+	}
+	if _, _, err := extractGlobalFlags([]string{"sync", "a", "--discard", "--overwrite-local"}); err == nil {
+		t.Fatal("expected --discard beside a mode flag to be refused")
+	}
+}

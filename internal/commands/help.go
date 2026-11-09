@@ -47,8 +47,9 @@ func HandleHelp(args []string) error {
 			gohelp.Item("--yes", "Skip confirmation prompts"),
 			gohelp.Item("--merge", "Sync: merge both sides (default)"),
 			gohelp.Item("--overlay", "Sync: take remote, keep this machine's edits on top, never push"),
-			gohelp.Item("--overwrite-local", "Sync: take remote, trash this machine's edits"),
-			gohelp.Item("--overwrite-remote", "Sync: push this machine's version over the remote"),
+			gohelp.Item("--overwrite-local", "Sync: on conflict take remote, trash this machine's version"),
+			gohelp.Item("--overwrite-remote", "Sync: on conflict push this machine's version"),
+			gohelp.Item("--discard", "Sync: trash every local edit, take remote"),
 			gohelp.Item("--debug", "Verbose diagnostic output"),
 		)
 

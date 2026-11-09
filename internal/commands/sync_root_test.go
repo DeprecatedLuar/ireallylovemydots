@@ -109,8 +109,9 @@ func TestSync_RootNamespaceConflictIsHeld(t *testing.T) {
 	}
 }
 
-// Every root unit takes the root namespace's mode.
-func TestSync_RootNamespaceOverwriteLocalTakesRemoteForAllRootUnits(t *testing.T) {
+// The root namespace settles its conflicts as one unit and keeps its clean
+// edits.
+func TestSync_RootNamespaceOverwriteLocalKeepsCleanRootEdits(t *testing.T) {
 	dataDir, scratchRoot := setupSyncEnv(t)
 	repoDir, remote := newRootSyncRepo(t, dataDir, scratchRoot)
 	pushPeerEdit(t, scratchRoot, remote, "init.lua", "peer")
@@ -125,8 +126,11 @@ func TestSync_RootNamespaceOverwriteLocalTakesRemoteForAllRootUnits(t *testing.T
 	if got := readFile(t, filepath.Join(repoDir, "init.lua")); got != "peer" {
 		t.Fatalf("init.lua = %q, want the remote's", got)
 	}
-	if got := readFile(t, filepath.Join(repoDir, "README.md")); got != "seed" {
-		t.Fatalf("README.md = %q, want the remote's: the root namespace syncs as one unit", got)
+	if got := readFile(t, filepath.Join(repoDir, "README.md")); got != "local readme" {
+		t.Fatalf("README.md = %q, want the clean edit kept", got)
+	}
+	if got := remoteFile(t, remote, "README.md"); got != "local readme" {
+		t.Fatalf("remote README.md = %q, want the clean edit pushed", got)
 	}
 }
 

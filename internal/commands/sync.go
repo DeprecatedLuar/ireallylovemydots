@@ -34,6 +34,7 @@ const (
 	removalNeedsYesMsg = "would remove %d namespaces deleted upstream (%s); rerun with -y to confirm"
 	removalPromptMsg   = "%q: %d namespaces were deleted upstream and will be removed here (unlinked, folders trashed):"
 	removalDeclinedMsg = "removal declined; nothing applied"
+	discardNeedsScope  = "--discard needs namespaces or --repo: dots sync <namespace> --discard"
 	modeFlagNeedsScope = "a sync mode flag needs namespaces or --repo: dots sync <namespace> --%s"
 	repoArgHint        = "%q is a repository; sync takes namespaces, so use: dots sync --repo %s"
 )
@@ -89,6 +90,9 @@ func HandleSync(args []string, flags shared.Flags) error {
 			return fmt.Errorf(modeFlagNeedsScope, m)
 		}
 		flagMode = m
+	}
+	if flags.Discard && len(args) == 0 && flags.Repo == "" {
+		return errors.New(discardNeedsScope)
 	}
 
 	reg, err := manifest.ReadRegistry()
@@ -216,9 +220,9 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 	decided, members := ownerUnits(p.Units, rootName)
 	placements := map[string]git.Placement{}
 	held := map[string]bool{}
-	var trashed []string
+	var trashed, conflicted []string
 	for _, u := range decided {
-		out, err := decideUnit(s, name, sc, u, flagMode, readOnly)
+		out, err := decideUnit(s, name, sc, u, flagMode, flags.Discard, readOnly)
 		if err != nil {
 			res.err = err
 			return res
@@ -244,6 +248,8 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 		switch {
 		case out.Trash:
 			trashed = append(trashed, members[u.Name]...)
+		case out.TrashConflicts:
+			conflicted = append(conflicted, u.Conflicts...)
 		case out.Held && len(u.Conflicts) > 0:
 			held[u.Name] = true
 			res.held = append(res.held, heldUnit{name: u.Name, paths: u.Conflicts})
@@ -260,6 +266,10 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 	}
 
 	if err := trashNamespaces(repoDir, trashed); err != nil {
+		res.err = err
+		return res
+	}
+	if err := discardDirtyPaths(repoDir, conflicted); err != nil {
 		res.err = err
 		return res
 	}
@@ -356,17 +366,20 @@ func ownerUnits(units []git.Unit, rootName string) ([]git.Unit, map[string][]str
 }
 
 // decideUnit resolves one entry's mode and placement. The mode is only
-// resolved for an in-scope entry with local changes, so a saved mode a
-// read-only repository refuses errors only when it would act.
-func decideUnit(s state.State, repoName string, sc syncScope, u git.Unit, flagMode syncmode.Mode, readOnly bool) (syncmode.Outcome, error) {
+// resolved for an in-scope entry with local changes that is not being
+// discarded, so a saved mode a read-only repository refuses errors only
+// when it would act.
+func decideUnit(s state.State, repoName string, sc syncScope, u git.Unit, flagMode syncmode.Mode, discard, readOnly bool) (syncmode.Outcome, error) {
 	unit := syncmode.Unit{
 		Dir:           u.Dir,
 		InScope:       sc.inScope(u),
 		ChangedLocal:  u.ChangedLocal,
 		Conflicted:    len(u.Conflicts) > 0,
 		RemovedRemote: u.RemovedRemote,
+		ReadOnly:      readOnly,
+		Discard:       discard && u.Dir,
 	}
-	if unit.ChangedLocal && unit.InScope {
+	if unit.ChangedLocal && unit.InScope && !unit.Discard {
 		var flag, saved syncmode.Mode
 		if u.Dir {
 			flag = flagMode

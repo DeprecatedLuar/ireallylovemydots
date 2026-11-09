@@ -13,7 +13,9 @@ type Flags struct {
 	// SyncMode is a sync mode flag's name (--merge, --overlay,
 	// --overwrite-local, --overwrite-remote) for one sync run; empty when
 	// none was given.
-	SyncMode  string
+	SyncMode string
+	// Discard drops every local edit of the namespaces a sync run names.
+	Discard   bool
 	Debug     bool
 	Bootstrap bool
 	Install   bool

@@ -949,3 +949,121 @@ func TestHandleSync_ManyUpstreamRemovalsNeedConfirmation(t *testing.T) {
 		}
 	}
 }
+
+func trashed(t *testing.T, name string) bool {
+	t.Helper()
+	_, err := os.Lstat(filepath.Join(os.Getenv("XDG_DATA_HOME"), "Trash", "files", name))
+	return err == nil
+}
+
+func TestHandleSync_OverwriteLocalSettlesHeldConflictAndKeepsCleanEdits(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a"})
+	pushPeerEdit(t, scratchRoot, remote, "a/file", "peer a")
+	pushPeerEdit(t, scratchRoot, remote, "a/peer", "peer new")
+	writeTestFile(t, filepath.Join(repoDir, "a", "file"), "local a")
+	writeTestFile(t, filepath.Join(repoDir, "a", "other"), "local other")
+	captureStdoutStderr(t, func() { _ = HandleSync(nil, shared.Flags{}) })
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync([]string{"a"}, shared.Flags{SyncMode: "overwrite-local"}) })
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	for rel, want := range map[string]string{"a/file": "peer a", "a/other": "local other", "a/peer": "peer new"} {
+		if got := readFile(t, filepath.Join(repoDir, rel)); got != want {
+			t.Fatalf("%s = %q, want %q", rel, got, want)
+		}
+	}
+	if got := remoteFile(t, remote, "a/other"); got != "local other" {
+		t.Fatalf("remote a/other = %q, want the clean local edit pushed", got)
+	}
+	if !trashed(t, "file") {
+		t.Fatal("expected the local version of the conflicted file in the trash")
+	}
+	s, _ := state.Read()
+	if s.Entries[state.Key{Repo: "repo", Namespace: "a"}].HeldBase != "" {
+		t.Fatal("held base not cleared")
+	}
+}
+
+func TestHandleSync_OverwriteRemoteKeepsPeerCleanChanges(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a"})
+	pushPeerEdit(t, scratchRoot, remote, "a/file", "peer a")
+	pushPeerEdit(t, scratchRoot, remote, "a/peer", "peer new")
+	writeTestFile(t, filepath.Join(repoDir, "a", "file"), "local a")
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync([]string{"a"}, shared.Flags{SyncMode: "overwrite-remote"}) })
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if got := remoteFile(t, remote, "a/file"); got != "local a" {
+		t.Fatalf("remote a/file = %q, want local", got)
+	}
+	if got := remoteFile(t, remote, "a/peer"); got != "peer new" {
+		t.Fatalf("remote a/peer = %q, want the peer's clean addition kept", got)
+	}
+	if got := readFile(t, filepath.Join(repoDir, "a", "peer")); got != "peer new" {
+		t.Fatalf("a/peer = %q, want it in the working tree", got)
+	}
+}
+
+func TestHandleSync_ReadOnlyOverwriteLocalKeepsCleanEditsUncommitted(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a"})
+	markReadOnly(t, "repo")
+	pushPeerEdit(t, scratchRoot, remote, "a/file", "peer a")
+	writeTestFile(t, filepath.Join(repoDir, "a", "file"), "local a")
+	writeTestFile(t, filepath.Join(repoDir, "a", "other"), "local other")
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync([]string{"a"}, shared.Flags{SyncMode: "overwrite-local"}) })
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if got := readFile(t, filepath.Join(repoDir, "a", "file")); got != "peer a" {
+		t.Fatalf("a/file = %q, want the remote's", got)
+	}
+	if got := readFile(t, filepath.Join(repoDir, "a", "other")); got != "local other" {
+		t.Fatalf("a/other = %q, want the clean edit kept", got)
+	}
+	head := strings.TrimSpace(syncGitRun(t, repoDir, "rev-parse", "HEAD"))
+	remoteHead := strings.TrimSpace(syncGitRun(t, remote, "rev-parse", "main"))
+	if head != remoteHead {
+		t.Fatalf("HEAD = %s, want the remote's %s: read-only never commits", head, remoteHead)
+	}
+}
+
+func TestHandleSync_DiscardTrashesEveryEditAndTakesRemote(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a"})
+	pushPeerEdit(t, scratchRoot, remote, "a/file", "peer a")
+	writeTestFile(t, filepath.Join(repoDir, "a", "other"), "mine")
+
+	var err error
+	captureStdoutStderr(t, func() { err = HandleSync([]string{"a"}, shared.Flags{Discard: true}) })
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(repoDir, "a", "other")); !os.IsNotExist(err) {
+		t.Fatal("a/other still present; discard must trash every local edit")
+	}
+	if !trashed(t, "other") {
+		t.Fatal("expected a/other in the trash")
+	}
+	if got := readFile(t, filepath.Join(repoDir, "a", "file")); got != "peer a" {
+		t.Fatalf("a/file = %q, want the remote's", got)
+	}
+	if out := syncGitRun(t, remote, "ls-tree", "-r", "--name-only", "main"); strings.Contains(out, "a/other") {
+		t.Fatal("discarded edit reached the remote")
+	}
+}
+
+func TestHandleSync_DiscardWithoutTargetErrors(t *testing.T) {
+	setupSyncEnv(t)
+	if err := HandleSync(nil, shared.Flags{Discard: true}); err == nil {
+		t.Fatal("expected a bare --discard to be refused")
+	}
+}

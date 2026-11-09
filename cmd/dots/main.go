@@ -175,6 +175,8 @@ func extractGlobalFlags(args []string) ([]string, shared.Flags, error) {
 				return nil, shared.Flags{}, fmt.Errorf("--%s and %s are contradictory; pick one", flags.SyncMode, arg)
 			}
 			flags.SyncMode = mode
+		case arg == "--discard":
+			flags.Discard = true
 		case arg == "--debug":
 			flags.Debug = true
 		case arg == "--bootstrap":
@@ -206,6 +208,10 @@ func extractGlobalFlags(args []string) ([]string, shared.Flags, error) {
 		default:
 			remaining = append(remaining, arg)
 		}
+	}
+
+	if flags.Discard && flags.SyncMode != "" {
+		return nil, shared.Flags{}, fmt.Errorf("--discard and --%s are contradictory; pick one", flags.SyncMode)
 	}
 
 	// "--force" implies "--yes"; "--yes" never implies "--force" (concept.md
