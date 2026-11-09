@@ -38,6 +38,7 @@ const (
 	green       = "\033[32m"
 	purple      = "\033[35m"
 	blue        = "\033[34m"
+	bold        = "\033[1m"
 	errorTone   = "\033[31m"
 	warningTone = "\033[33m"
 	reset       = "\033[0m"
