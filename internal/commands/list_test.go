@@ -250,27 +250,31 @@ func TestHandleList_IgnoredNamespaceProducesNoRow(t *testing.T) {
 	}
 }
 
-func TestSortNamespaceRows_GroupsByState(t *testing.T) {
+func TestSortRows_ByNameOnly(t *testing.T) {
 	entries := []ui.Entry{
 		{Marker: ui.MarkerMaterialized, Name: "z-disabled"},
 		{Marker: ui.MarkerEnabled, Name: "z-enabled"},
 		{Marker: ui.MarkerAbsent, Name: "available"},
 		{Marker: ui.MarkerProblem, Name: "broken"},
 		{Marker: ui.MarkerProblem, Name: "another-broken"},
+		{Marker: ui.MarkerAbsent, Name: "krita", Repo: "neodots"},
+		{Marker: ui.MarkerAbsent, Name: "krita", Repo: "krita-config"},
 	}
 
-	sortNamespaceRows(entries)
+	sortRows(entries)
 
 	got := make([]string, len(entries))
 	for i, entry := range entries {
-		got[i] = entry.Marker + " " + entry.Name
+		got[i] = entry.Marker + " " + entry.Name + " " + entry.Repo
 	}
 	want := []string{
-		"! another-broken",
-		"! broken",
-		"+ z-enabled",
-		"- z-disabled",
-		"= available",
+		"! another-broken ",
+		"= available ",
+		"! broken ",
+		"= krita krita-config",
+		"= krita neodots",
+		"- z-disabled ",
+		"+ z-enabled ",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sorted entries = %v, want %v", got, want)

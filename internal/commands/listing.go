@@ -135,7 +135,7 @@ func namespaceListing(repos []manifest.Repo, opts listOptions, findings selfheal
 		}
 	}
 	qualifyCollisions(rows)
-	sortNamespaceRows(rows)
+	sortRows(rows)
 	return rows, nil
 }
 
@@ -270,7 +270,7 @@ func entryListing(key state.Key, s state.State, namespaceDir string, m manifest.
 	if err != nil {
 		return nil, "", err
 	}
-	sortEntryRows(rows)
+	sortRows(rows)
 	if len(orphans) == 1 && len(untracked) == 1 {
 		suggestion = fmt.Sprintf("%s looks renamed to %s, track it under its new name, then remove the old entry", orphans[0], untracked[0])
 	}
@@ -461,45 +461,13 @@ func renderListing(rows []ui.Entry) {
 	fmt.Print(ui.Render(rows))
 }
 
-// sortNamespaceRows groups namespaces by listing state, then sorts names
-// within each state. Problems lead, followed by enabled and disabled
-// materialized namespaces, with unavailable namespaces last.
-func sortNamespaceRows(rows []ui.Entry) {
+// sortRows orders listing rows by name, then repository, per concept.md
+// "Listing output": rows are sorted by name, never grouped by state.
+func sortRows(rows []ui.Entry) {
 	sort.SliceStable(rows, func(i, j int) bool {
-		iRank := markerRank(rows[i].Marker)
-		jRank := markerRank(rows[j].Marker)
-		if iRank != jRank {
-			return iRank < jRank
+		if rows[i].Name != rows[j].Name {
+			return rows[i].Name < rows[j].Name
 		}
-		return rows[i].Name < rows[j].Name
+		return rows[i].Repo < rows[j].Repo
 	})
-}
-
-// sortEntryRows applies the same state-then-name grouping to one
-// namespace's entry rows, so a "!" entry leads a per-namespace listing the
-// same way a "!" namespace leads the top-level one.
-func sortEntryRows(rows []ui.Entry) {
-	sort.SliceStable(rows, func(i, j int) bool {
-		iRank := markerRank(rows[i].Marker)
-		jRank := markerRank(rows[j].Marker)
-		if iRank != jRank {
-			return iRank < jRank
-		}
-		return rows[i].Name < rows[j].Name
-	})
-}
-
-func markerRank(marker string) int {
-	switch marker {
-	case ui.MarkerProblem:
-		return 0
-	case ui.MarkerEnabled:
-		return 1
-	case ui.MarkerMaterialized:
-		return 2
-	case ui.MarkerAbsent:
-		return 3
-	default:
-		return 4
-	}
 }
