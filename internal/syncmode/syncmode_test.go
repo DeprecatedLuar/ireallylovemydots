@@ -60,10 +60,17 @@ func TestDecide(t *testing.T) {
 		{"overlay clean", Unit{Dir: true, InScope: true, ChangedLocal: true, Mode: Overlay},
 			Outcome{Placement: git.Placement{Commit: git.SourceRemote, Worktree: git.SourceMerged}}},
 		{"overlay conflict is held", Unit{Dir: true, InScope: true, ChangedLocal: true, Conflicted: true, Mode: Overlay}, held},
-		{"overwrite-remote ignores conflict", Unit{Dir: true, InScope: true, ChangedLocal: true, Conflicted: true, Mode: OverwriteRemote},
-			Outcome{Placement: git.Placement{Commit: git.SourceLocal, Worktree: git.SourceUntouched}}},
-		{"overwrite-local trashes", Unit{Dir: true, InScope: true, ChangedLocal: true, Conflicted: true, Mode: OverwriteLocal},
+		{"overwrite-remote settles toward local", Unit{Dir: true, InScope: true, ChangedLocal: true, Conflicted: true, Mode: OverwriteRemote},
+			Outcome{Placement: git.Placement{Commit: git.SourceMergedLocal, Worktree: git.SourceMergedLocal}}},
+		{"overwrite-local settles toward remote", Unit{Dir: true, InScope: true, ChangedLocal: true, Conflicted: true, Mode: OverwriteLocal},
+			Outcome{Placement: git.Placement{Commit: git.SourceMergedRemote, Worktree: git.SourceMergedRemote}, TrashConflicts: true}},
+		{"overwrite-local clean edit merges", Unit{Dir: true, InScope: true, ChangedLocal: true, Mode: OverwriteLocal},
+			Outcome{Placement: git.Placement{Commit: git.SourceMergedRemote, Worktree: git.SourceMergedRemote}}},
+		{"overwrite-local read-only commits remote", Unit{Dir: true, InScope: true, ChangedLocal: true, Conflicted: true, ReadOnly: true, Mode: OverwriteLocal},
+			Outcome{Placement: git.Placement{Commit: git.SourceRemote, Worktree: git.SourceMergedRemote}, TrashConflicts: true}},
+		{"discard trashes and takes remote", Unit{Dir: true, InScope: true, ChangedLocal: true, Conflicted: true, Discard: true, Mode: Merge},
 			Outcome{Placement: remote, Trash: true}},
+		{"discard out of scope stays held", Unit{Dir: true, ChangedLocal: true, Discard: true, Mode: Merge}, held},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,6 +101,8 @@ func TestDecide_RemovedRemote(t *testing.T) {
 		{"overlay edits are trashed too", Unit{Dir: true, InScope: true, ChangedLocal: true, RemovedRemote: true, Mode: Overlay}, Outcome{Placement: takeRemote, Trash: true}},
 		{"out of scope edited stays held", Unit{Dir: true, ChangedLocal: true, RemovedRemote: true, Conflicted: true, Mode: Merge}, Outcome{Placement: git.Placement{Commit: git.SourceRemote, Worktree: git.SourceUntouched}, Held: true}},
 		{"overwrite-remote commits it back", Unit{Dir: true, InScope: true, ChangedLocal: true, RemovedRemote: true, Mode: OverwriteRemote}, Outcome{Placement: git.Placement{Commit: git.SourceLocal, Worktree: git.SourceUntouched}}},
+		{"overwrite-local accepts the deletion", Unit{Dir: true, InScope: true, ChangedLocal: true, RemovedRemote: true, Mode: OverwriteLocal}, Outcome{Placement: takeRemote, Trash: true}},
+		{"discard accepts the deletion", Unit{Dir: true, InScope: true, ChangedLocal: true, RemovedRemote: true, Discard: true, Mode: OverwriteRemote}, Outcome{Placement: takeRemote, Trash: true}},
 	}
 	for _, c := range cases {
 		got, err := Decide(c.u)

@@ -85,7 +85,11 @@ type Unit struct {
 	// RemovedRemote is an entry another machine deleted.
 	RemovedRemote bool
 	Conflicted    bool
-	Mode          Mode
+	// ReadOnly is a repository this machine never commits to.
+	ReadOnly bool
+	// Discard drops every local edit for this run.
+	Discard bool
+	Mode    Mode
 }
 
 // Outcome is Decide's answer for one entry.
@@ -95,18 +99,24 @@ type Outcome struct {
 	Held bool
 	// Trash means the entry's local edits go to trash before applying.
 	Trash bool
+	// TrashConflicts means the local version of each conflicted path goes
+	// to trash before applying.
+	TrashConflicts bool
 }
 
 var (
-	takeRemote = git.Placement{Commit: git.SourceRemote, Worktree: git.SourceRemote}
-	holdLocal  = git.Placement{Commit: git.SourceRemote, Worktree: git.SourceUntouched}
+	takeRemote  = git.Placement{Commit: git.SourceRemote, Worktree: git.SourceRemote}
+	holdLocal   = git.Placement{Commit: git.SourceRemote, Worktree: git.SourceUntouched}
+	settleLocal = git.Placement{Commit: git.SourceMergedLocal, Worktree: git.SourceMergedLocal}
+	commitLocal = git.Placement{Commit: git.SourceLocal, Worktree: git.SourceUntouched}
 )
 
 // Decide places one entry. An entry with no local changes always takes the
-// remote; one with local changes follows its mode, and is held when it is
-// out of scope or conflicts in merge or overlay. An entry another machine
-// deleted takes the remote and has its local edits trashed, unless the mode
-// is overwrite-remote or the entry is out of scope.
+// remote, and one out of scope is held. Discard takes the remote and trashes
+// every local edit. An entry another machine deleted takes the remote with
+// its edits trashed, unless overwrite-remote commits it back whole. The
+// overwrite modes merge and settle each conflicted path toward one side;
+// merge and overlay hold a conflicted namespace.
 func Decide(u Unit) (Outcome, error) {
 	if !u.ChangedLocal {
 		return Outcome{Placement: takeRemote}, nil
@@ -114,14 +124,24 @@ func Decide(u Unit) (Outcome, error) {
 	if !u.InScope {
 		return Outcome{Placement: holdLocal, Held: true}, nil
 	}
-	switch u.Mode {
-	case OverwriteRemote:
-		return Outcome{Placement: git.Placement{Commit: git.SourceLocal, Worktree: git.SourceUntouched}}, nil
-	case OverwriteLocal:
+	if u.Discard {
 		return Outcome{Placement: takeRemote, Trash: true}, nil
 	}
 	if u.RemovedRemote {
+		if u.Mode == OverwriteRemote {
+			return Outcome{Placement: commitLocal}, nil
+		}
 		return Outcome{Placement: takeRemote, Trash: true}, nil
+	}
+	switch u.Mode {
+	case OverwriteRemote:
+		return Outcome{Placement: settleLocal}, nil
+	case OverwriteLocal:
+		commit := git.SourceMergedRemote
+		if u.ReadOnly {
+			commit = git.SourceRemote
+		}
+		return Outcome{Placement: git.Placement{Commit: commit, Worktree: git.SourceMergedRemote}, TrashConflicts: u.Conflicted}, nil
 	}
 	if u.Conflicted {
 		if !u.Dir {
