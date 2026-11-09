@@ -50,6 +50,8 @@ type Prepared struct {
 	Units            []Unit
 	local            string
 	merged           string
+	mergedLocal      string
+	mergedRemote     string
 }
 
 // Prepare snapshots dir's working tree, fetches its branch, and merges the
@@ -126,7 +128,7 @@ func Prepare(dir string, heldBases map[string]string, owner OwnerFunc) (Prepared
 	}
 
 	conflicts := map[string][]string{}
-	p.merged = p.local
+	p.merged, p.mergedLocal, p.mergedRemote = p.local, p.local, p.local
 	if p.Onto != "" {
 		var paths []string
 		if p.merged, paths, err = mergeAgainst(dir, baseEntries, p.Onto, p.local); err != nil {
@@ -135,6 +137,12 @@ func Prepare(dir string, heldBases map[string]string, owner OwnerFunc) (Prepared
 		for _, path := range paths {
 			name, _, _ := strings.Cut(path, "/")
 			conflicts[name] = append(conflicts[name], path)
+		}
+		if p.mergedLocal, err = settleTree(dir, p.merged, p.local, paths); err != nil {
+			return Prepared{}, err
+		}
+		if p.mergedRemote, err = settleTree(dir, p.merged, p.Onto, paths); err != nil {
+			return Prepared{}, err
 		}
 	}
 
@@ -261,7 +269,10 @@ func Finish(dir string, p Prepared, placements map[string]Placement, commit bool
 	}
 	from := strings.TrimSpace(out)
 
-	sources := map[Source]string{SourceRemote: p.Onto, SourceLocal: p.local, SourceMerged: p.merged, SourceUntouched: from}
+	sources := map[Source]string{
+		SourceRemote: p.Onto, SourceLocal: p.local, SourceMerged: p.merged, SourceUntouched: from,
+		SourceMergedLocal: p.mergedLocal, SourceMergedRemote: p.mergedRemote,
+	}
 	entries := map[Source]map[string]string{}
 	for s, treeish := range sources {
 		if entries[s], err = topLevel(dir, treeish); err != nil {

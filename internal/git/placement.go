@@ -14,6 +14,12 @@ const (
 	// SourceUntouched leaves the working tree as it is; never valid for a
 	// commit.
 	SourceUntouched
+	// SourceMergedLocal is the merge with each conflicted path taken from
+	// this machine's version.
+	SourceMergedLocal
+	// SourceMergedRemote is the merge with each conflicted path taken from
+	// the remote's version.
+	SourceMergedRemote
 )
 
 // Placement is where one top-level entry's versions go: into the commit

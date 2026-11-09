@@ -377,3 +377,139 @@ func TestPrepare_OwnerGroupsUnitsAndSharesTheirHeldBase(t *testing.T) {
 		t.Fatalf("seed unit = %+v, want owner root and the held base", u)
 	}
 }
+
+// conflictFixture leaves second with ns/a conflicting against the remote,
+// a clean local edit to ns/b, and a clean remote addition ns/c.
+func conflictFixture(t *testing.T) (first, second string) {
+	t.Helper()
+	_, first, second = newReconcileClones(t)
+	pushEdit(t, first, "ns/a", "base a")
+	pushEdit(t, first, "ns/b", "base b")
+	gitRun(t, second, "pull", "origin", "main")
+	pushEdit(t, first, "ns/a", "remote a")
+	pushEdit(t, first, "ns/c", "remote c")
+	writeReconcileFile(t, second, "ns/a", "local a")
+	writeReconcileFile(t, second, "ns/b", "local b")
+	return first, second
+}
+
+func TestPrepareFinish_SettleKeepsCleanChangesFromBothSides(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		src   Source
+		wantA string
+	}{
+		{"local wins", SourceMergedLocal, "local a"},
+		{"remote wins", SourceMergedRemote, "remote a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, second := conflictFixture(t)
+			p, err := Prepare(second, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := unitNamed(t, p, "ns").Conflicts; len(got) != 1 || got[0] != "ns/a" {
+				t.Fatalf("conflicts = %v, want [ns/a]", got)
+			}
+			if _, err := Finish(second, p, placeAll(p, Placement{Commit: tc.src, Worktree: tc.src}), true); err != nil {
+				t.Fatal(err)
+			}
+			for rel, want := range map[string]string{"ns/a": tc.wantA, "ns/b": "local b", "ns/c": "remote c"} {
+				if got := readFileString(t, second, rel); got != want {
+					t.Fatalf("%s = %q, want %q", rel, got, want)
+				}
+				if got := gitRun(t, second, "show", "HEAD:"+rel); got != want {
+					t.Fatalf("committed %s = %q, want %q", rel, got, want)
+				}
+			}
+			assertSettledCleanly(t, second)
+		})
+	}
+}
+
+// fileDirFixture leaves second with a local file ns/a where the remote
+// replaced it with a folder ns/a/inner.
+func fileDirFixture(t *testing.T) string {
+	t.Helper()
+	_, first, second := newReconcileClones(t)
+	pushEdit(t, first, "ns/a", "base")
+	gitRun(t, second, "pull", "origin", "main")
+	gitRun(t, first, "rm", "-q", "ns/a")
+	writeReconcileFile(t, first, "ns/a/inner", "remote dir")
+	gitRun(t, first, "add", "-A")
+	gitRun(t, first, "commit", "-m", "file to folder")
+	gitRun(t, first, "push", "origin", "main")
+	writeReconcileFile(t, second, "ns/a", "local file")
+	return second
+}
+
+func TestPrepare_FileDirectoryConflictReportsRealPath(t *testing.T) {
+	second := fileDirFixture(t)
+	p, err := Prepare(second, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := unitNamed(t, p, "ns").Conflicts; len(got) != 1 || got[0] != "ns/a" {
+		t.Fatalf("conflicts = %v, want [ns/a]", got)
+	}
+}
+
+func TestPrepareFinish_FileDirectoryConflictSettlesEitherWay(t *testing.T) {
+	t.Run("local file wins", func(t *testing.T) {
+		second := fileDirFixture(t)
+		p, err := Prepare(second, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pl := Placement{Commit: SourceMergedLocal, Worktree: SourceMergedLocal}
+		if _, err := Finish(second, p, placeAll(p, pl), true); err != nil {
+			t.Fatal(err)
+		}
+		if got := gitRun(t, second, "ls-tree", "-r", "--name-only", "HEAD", "ns"); got != "ns/a\n" {
+			t.Fatalf("committed ns = %q, want only the file ns/a", got)
+		}
+		if got := readFileString(t, second, "ns/a"); got != "local file" {
+			t.Fatalf("ns/a = %q, want the local file", got)
+		}
+		assertSettledCleanly(t, second)
+	})
+	t.Run("remote folder wins", func(t *testing.T) {
+		second := fileDirFixture(t)
+		p, err := Prepare(second, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pl := Placement{Commit: SourceMergedRemote, Worktree: SourceMergedRemote}
+		if _, err := Finish(second, p, placeAll(p, pl), true); err != nil {
+			t.Fatal(err)
+		}
+		if got := gitRun(t, second, "ls-tree", "-r", "--name-only", "HEAD", "ns"); got != "ns/a/inner\n" {
+			t.Fatalf("committed ns = %q, want only ns/a/inner", got)
+		}
+		assertSettledCleanly(t, second)
+	})
+}
+
+func TestPrepareFinish_BloblessCloneSettlesConflict(t *testing.T) {
+	remote, first, _ := newReconcileClones(t)
+	gitRun(t, remote, "config", "uploadpack.allowFilter", "true")
+	pushEdit(t, first, "ns/a", "base")
+	pushEdit(t, first, "ns/untouched", "never fetched")
+	blobless := filepath.Join(t.TempDir(), "blobless")
+	gitRun(t, "", "clone", "--filter=blob:none", "file://"+remote, blobless)
+	configureReconcileRepo(t, blobless)
+	pushEdit(t, first, "ns/a", "remote")
+	writeReconcileFile(t, blobless, "ns/a", "local")
+
+	p, err := Prepare(blobless, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pl := Placement{Commit: SourceMergedLocal, Worktree: SourceMergedLocal}
+	if _, err := Finish(blobless, p, placeAll(p, pl), true); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitRun(t, blobless, "show", "HEAD:ns/a"); got != "local" {
+		t.Fatalf("committed ns/a = %q, want local", got)
+	}
+}

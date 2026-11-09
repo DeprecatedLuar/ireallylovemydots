@@ -113,11 +113,8 @@ func treeOf(dir, commit string) (string, error) {
 	return resolveRef(dir, commit+"^{tree}")
 }
 
-// snapshotTree stages the whole working tree into a copy of dir's index and
-// writes it as a tree. Copying the real index keeps uninstalled namespaces'
-// skip-worktree entries, so they are carried, not deleted; the real index
-// is never touched.
-func snapshotTree(dir string) (string, error) {
+// indexPath returns dir's index file as an absolute path.
+func indexPath(dir string) (string, error) {
 	out, err := gitCmd(dir, "rev-parse", "--git-path", "index")
 	if err != nil {
 		return "", fmt.Errorf("locate index in %s: %s", dir, strings.TrimSpace(out))
@@ -125,6 +122,18 @@ func snapshotTree(dir string) (string, error) {
 	index := strings.TrimSpace(out)
 	if !filepath.IsAbs(index) {
 		index = filepath.Join(dir, index)
+	}
+	return index, nil
+}
+
+// snapshotTree stages the whole working tree into a copy of dir's index and
+// writes it as a tree. Copying the real index keeps uninstalled namespaces'
+// skip-worktree entries, so they are carried, not deleted; the real index
+// is never touched.
+func snapshotTree(dir string) (string, error) {
+	index, err := indexPath(dir)
+	if err != nil {
+		return "", err
 	}
 	tmp := index + snapshotIndexSuffix
 	defer os.Remove(tmp)
@@ -136,7 +145,7 @@ func snapshotTree(dir string) (string, error) {
 	if out, err := gitCmdEnv(dir, env, "add", "-A"); err != nil {
 		return "", fmt.Errorf("snapshot changes in %s: %s", dir, strings.TrimSpace(out))
 	}
-	out, err = gitCmdEnv(dir, env, "write-tree")
+	out, err := gitCmdEnv(dir, env, "write-tree")
 	if err != nil {
 		return "", fmt.Errorf("snapshot tree in %s: %s", dir, strings.TrimSpace(out))
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -11,6 +12,16 @@ import (
 // mergeTreeConflictExit is the exit status `git merge-tree` uses to report
 // that the merge has conflicts, as opposed to failing outright.
 const mergeTreeConflictExit = 1
+
+// movedAside matches the "~<commit>" merge-tree appends to a file it moves
+// aside in a file/directory conflict; dots merges commit ids only, so the
+// label is always a full hash.
+var movedAside = regexp.MustCompile(`~[0-9a-f]{40,64}$`)
+
+// realPath strips a moved-aside suffix, returning the path both sides name.
+func realPath(path string) string {
+	return movedAside.ReplaceAllString(path, "")
+}
 
 // mergeTree runs `git merge-tree --write-tree extra... remoteHead localHead`
 // and returns the merged tree with the conflicted paths, sorted. The tree is
@@ -63,6 +74,7 @@ func parseUnmerged(lines []string) ([]string, error) {
 		if len(strings.Fields(meta)) != 3 {
 			return nil, fmt.Errorf("unexpected conflict line %q", line)
 		}
+		path = realPath(path)
 		if !seen[path] {
 			seen[path] = true
 			paths = append(paths, path)
