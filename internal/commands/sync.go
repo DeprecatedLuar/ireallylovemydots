@@ -31,6 +31,7 @@ const (
 	removalNeedsYesMsg = "would remove %d namespaces deleted upstream (%s); rerun with -y to confirm"
 	removalPromptMsg   = "%q: %d namespaces were deleted upstream and will be removed here (unlinked, folders trashed):"
 	removalDeclinedMsg = "removal declined; nothing applied"
+	rootConflictNote   = "resolve it by hand in the clone: %s"
 	discardNeedsScope  = "--discard needs namespaces or --repo: dots sync <namespace> --discard"
 	modeFlagNeedsScope = "a sync mode flag needs namespaces or --repo: dots sync <namespace> --%s"
 	bothReadingsMsg    = "%q names both a namespace and a repository; use <repo>/%[1]s for the namespace, or --repo %[1]s for the repository"
@@ -303,14 +304,14 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 	placements := map[string]git.Placement{}
 	held := map[string]bool{}
 	var trashed, conflicted []string
+	var rootConflicts []ui.TreeNode
 	for _, u := range decided {
 		out, err := decideUnit(s, name, sc, u, flagMode, flags.Discard, readOnly)
 		if errors.Is(err, syncmode.ErrRootConflict) {
-			res.step = stepConflict
 			for _, path := range u.Conflicts {
-				res.nodes = append(res.nodes, ui.TreeNode{Name: path, Marker: ui.MarkerProblem})
+				rootConflicts = append(rootConflicts, ui.TreeNode{Name: path, Marker: ui.MarkerProblem})
 			}
-			return res
+			continue
 		}
 		if err != nil {
 			res.fail(err)
@@ -348,6 +349,15 @@ func syncRepo(dataDir string, sc syncScope, flagMode syncmode.Mode, readOnly boo
 			held[u.Name] = true
 			res.nodes = append(res.nodes, ui.TreeNode{Name: u.Name, Dim: true})
 		}
+	}
+
+	if len(rootConflicts) > 0 {
+		slices.SortFunc(rootConflicts, func(a, b ui.TreeNode) int { return strings.Compare(a.Name, b.Name) })
+		res.step = stepConflict
+		res.nodes = rootConflicts
+		res.held, res.removed = nil, nil
+		res.notes = append(res.notes, fmt.Sprintf(rootConflictNote, repoDir))
+		return res
 	}
 
 	if needsRemovalConfirmation(res.removed, flags) {

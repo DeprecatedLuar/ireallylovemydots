@@ -9,6 +9,7 @@ import (
 
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/commands/shared"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/git"
+	"github.com/DeprecatedLuar/ireallylovemydots/internal/state"
 	"github.com/DeprecatedLuar/ireallylovemydots/internal/ui"
 )
 
@@ -115,5 +116,48 @@ func TestHandleSync_ShowsServerNotesAfterPush(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "remote: This repository moved") {
 		t.Fatalf("stdout:\n%s\nwant the server's note", stdout)
+	}
+}
+
+func TestHandleSync_LooseRootConflictsFailTheRepositoryUntouched(t *testing.T) {
+	dataDir, scratchRoot := setupSyncEnv(t)
+	repoDir, remote := newRegisteredRepo(t, dataDir, scratchRoot, "repo", []string{"a"})
+	writeTestFile(t, filepath.Join(repoDir, "Makefile"), "seed")
+	writeTestFile(t, filepath.Join(repoDir, "README"), "seed")
+	syncGitRun(t, repoDir, "add", "-A")
+	syncGitRun(t, repoDir, "commit", "-m", "loose files")
+	syncGitRun(t, repoDir, "push", "origin", "main")
+	pushPeerEdit(t, scratchRoot, remote, "a/file", "peer a")
+	pushPeerEdit(t, scratchRoot, remote, "Makefile", "peer make")
+	pushPeerEdit(t, scratchRoot, remote, "README", "peer readme")
+	writeTestFile(t, filepath.Join(repoDir, "a", "file"), "local a")
+	writeTestFile(t, filepath.Join(repoDir, "Makefile"), "local make")
+	writeTestFile(t, filepath.Join(repoDir, "README"), "local readme")
+
+	var err error
+	stdout, stderr := captureStdoutStderr(t, func() { err = HandleSync(nil, shared.Flags{}) })
+	if err == nil {
+		t.Fatal("HandleSync: want the repository to fail")
+	}
+	if want := "✗ repo (conflict)\n  ├── ! Makefile\n  └── ! README\n"; !strings.Contains(stdout, want) {
+		t.Fatalf("stdout missing %q:\n%s", want, stdout)
+	}
+	if strings.Contains(stdout, "a\n") {
+		t.Fatalf("stdout lists the namespace as held:\n%s", stdout)
+	}
+	if strings.Contains(stderr, "tip:") {
+		t.Fatalf("stderr has a tip:\n%s", stderr)
+	}
+	if want := "resolve it by hand in the clone: " + repoDir; !strings.Contains(stdout, want) {
+		t.Fatalf("stdout missing %q:\n%s", want, stdout)
+	}
+	for rel, want := range map[string]string{"a/file": "local a", "Makefile": "local make", "README": "local readme"} {
+		if got := readFile(t, filepath.Join(repoDir, rel)); got != want {
+			t.Fatalf("%s = %q, want untouched %q", rel, got, want)
+		}
+	}
+	s, _ := state.Read()
+	if s.Entries[state.Key{Repo: "repo", Namespace: "a"}].HeldBase != "" {
+		t.Fatal("no held base should be recorded")
 	}
 }
