@@ -22,6 +22,12 @@ const (
 	guideBlank  = "    "
 )
 
+// treeMarkerColor is the tone of each marker in a tree label; a marker
+// without an entry stays plain.
+var treeMarkerColor = map[string]string{
+	MarkerProblem: errorTone,
+}
+
 // TreeNode is one top-level node of a tree; it never collapses. Paths are
 // slash paths below it, each rendered as a leaf carrying LeafMarker.
 type TreeNode struct {
@@ -149,14 +155,14 @@ func nextPrefix(prefix string, last bool) string {
 	return prefix + guidePipe
 }
 
-// markedLabel joins marker and name, in the marker's tone from markerColor.
+// markedLabel joins marker and name, in the marker's tone from treeMarkerColor.
 // A marker without a tone stays plain.
 func markedLabel(marker, name string, f *os.File) string {
 	if marker == "" {
 		return name
 	}
 	label := marker + " " + name
-	if tone, ok := markerColor[marker]; ok && colorEnabled(f) {
+	if tone, ok := treeMarkerColor[marker]; ok && colorEnabled(f) {
 		return tone + label + reset
 	}
 	return label
